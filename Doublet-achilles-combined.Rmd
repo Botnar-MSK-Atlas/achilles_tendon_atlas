@@ -1,0 +1,671 @@
+---
+title: "Doublet detection"
+author: "Carla Cohen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Doublet detection workflow  
+
+This script detects and visualises doublets in single-nuc data. 
+It follows the SoupX script.  
+This specific script analyses the Achilles dataset. 
+The working directory is  
+/project/tendonhca/ccohen/chromium/analysis/20231006_achilles/  
+
+The inputs of the workflow are:  
+* Single Cell experiment objects with ambient RNA detected by SoupX and decontX  
+* doublet.yml supplies parameters including date that the SoupX script was run  
+
+The steps in the workflow are:  
+
+1. Set up and read in sce objects  
+* load packages, read in yml file, create output directory  
+* read in the and sce
+
+3.  Doublet detection
+
+* Detect doublets using scDblFinder, using Seurat clustering or no clustering  
+* Perform dim reduction & clustering on the RNA, decontX or soupX assay  
+* Plot the library size of singlets vs doublets; plot doublets on UMAP  
+* Save the sce with ambient RNA and doublets calculated  
+* Optionally filter out the doublets and re-plot QC metrics  
+* Save the filtered sce objects if appropriate  
+
+4. QC summary plot
+* Generate a plot of all QC metrics for each sample  
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, fig.width = 10, fig.height = 10)
+```
+
+## 1. Set up and read in sce objects 
+
+#### Load packages, read in yml file, create output directory 
+
+```{r, include=FALSE}
+
+library(yaml)
+library(tidyverse)
+library(cowplot)
+library(scater)
+library(viridis)
+library(Seurat)
+library(celda)
+library(scater)
+library(scDblFinder)
+
+# Read in the yml file
+ini <- read_yaml("doublet.yml")
+
+# make a new output folder for each run, with the date & time in the directory name
+date <- Sys.Date() %>% str_replace_all("-", "")
+time <- format(Sys.time(), "%X") %>% str_replace_all(":", "-") %>%
+    str_sub(1, 5)
+directory <- paste0(date,"_", time, "_Doublet.dir")
+dir.create(directory, showWarnings = FALSE)
+
+
+```
+
+```{r}
+# Print the parameters used
+ini
+```
+
+
+#### Read in the sce from the SoupX workflow  
+
+```{r}
+
+# make a named vector of filtered sample files
+
+file_list_sce <- list.files(paste0(ini$soupX_files, "_SoupX.dir/RDS_objects.dir/SingleCellExp/"), 
+                                 pattern="_SingleCellExp.rds")
+
+names(file_list_sce) <- str_replace(file_list_sce, "_filtered_soupX_SingleCellExp.rds", "")
+
+file_list_so <- list.files(paste0(ini$soupX_files, "_SoupX.dir/RDS_objects.dir/Seurat/"), 
+                                 pattern="SeuratObject.rds")
+
+names(file_list_so) <- str_replace(file_list_so, "_filtered_soupX_SeuratObject.rds", "")
+
+```
+
+
+Read in the sce objects & so 
+
+```{r, echo=FALSE}
+
+sce <- list()
+so <- list()
+for (i in 1:length(file_list_sce)){
+    
+    sce[[i]] <- readRDS(paste0(ini$soupX_files, 
+                               "_SoupX.dir/RDS_objects.dir/SingleCellExp/",
+                                                file_list_sce[i]))
+    so[[i]] <- readRDS(paste0(ini$soupX_files, 
+                               "_SoupX.dir/RDS_objects.dir/Seurat/",
+                                                file_list_so[i]))
+}
+
+```
+
+## Doublet detection  
+
+Doublets are detected withe scDblFinder which performs well in benchmarking studies. 
+
+https://www.cell.com/cell-systems/fulltext/S2405-4712(20)30459-2  
+
+scDblFinder can be implemented in different ways: 
+ - without clustering  
+ - with its own clustering  
+ - with previously defined clusters 
+ 
+ Here we will perform scDblFinder using clusters defined by Seurat  
+ If no ambient filtering was performed, the same clusering can be used as above. 
+ If ambient RNA has been filtered, the clustering needs to be re-calculated.  
+
+ 
+#### Perform log normalisation, dim reduction and clustering  
+
+This can be done using the RNA, decontX, or SoupX assay  
+
+```{r, message = FALSE, warning=FALSE}
+
+for (i in 1:length(so)) {
+  print (paste0("Analysing sample ", i, ": ",  so[[i]]@project.name))
+
+    # Perform normalisation, dim reduction and clustering using the specified assay
+    DefaultAssay(so[[i]]) <- ini$default_assay
+    print(DefaultAssay(so[[i]]))
+    so[[i]] <- so[[i]] %>% 
+         NormalizeData() %>%
+         FindVariableFeatures() %>% 
+         ScaleData() %>%
+         RunPCA()%>%
+         FindNeighbors(dims = 1:20) %>%
+         RunUMAP(dims = 1:20)  
+    so[[i]] <- FindClusters(so[[i]], resolution = ini$resolution)
+    
+}
+```
+
+#### Plot the Seurat clustering on the UMAP
+
+```{r, fig.width=14, fig.height=24}
+
+plot_list <- list()
+
+for (i in 1:length(sce)){
+    plot_list[[i]] <- DimPlot(so[[i]], group.by = "seurat_clusters", label = TRUE)+
+        ggtitle(mainExpName(sce[[i]]))
+    
+}
+
+title <- ggdraw() + draw_label(paste0("Seurat clustering using ", ini$default_assay, " assay"), fontface='bold', size = 24)
+p <- plot_grid(plotlist = plot_list, label_size = 12, ncol = 3)
+p <- plot_grid(title, p, ncol=1, rel_heights=c(0.1, 1))
+
+p
+
+```
+
+```{r}
+ggsave(paste0(directory, "/Doublet_figures/Seurat_clusters.", ini$file_type), 
+    device = ini$file_type, width = 10, height = 16, bg = "white")
+```
+
+#### Update the sce object with clustering information
+
+```{r}
+
+for (i in 1:length(sce)){
+    # put the cluster info in the sce colData
+    colData(sce[[i]])$seurat_clusters <- so[[i]]$seurat_clusters
+    # Add the PCA & UMAP dim reductions to the sce object
+    reducedDim(sce[[i]], type = "pca") <- Embeddings(so[[i]], reduction = "pca")
+    reducedDim(sce[[i]], type = "umap") <- Embeddings(so[[i]], reduction = "umap")
+}
+
+```
+
+#### Run scDblFinder using the seurat clusters
+
+This algorithm adds several columns to the colData of the sce that can be used for filtering  
+NB If there is a warning: "Some cells in `sce` have an extremely low read counts; note that these could trigger errors and might best be filtered out" it might be best to go back and increase the UMI filter
+
+
+```{r, message = FALSE}
+
+for (i in 1:length(sce)){
+    print(paste0("Analyzing sample ", i, ": ", mainExpName(sce[[i]])))
+    #run scDblFinder  
+    if (ini$scdblfinder_clusters == "seurat_clusters"){
+        sce[[i]] <- scDblFinder(sce[[i]], clusters = colData(sce[[i]])$seurat_clusters)
+        } else if (ini$scdblfinder_clusters == "no_clusters"){
+            sce[[i]] <- scDblFinder(sce[[i]])
+        }
+       
+    print(table(colData(sce[[i]])$scDblFinder.class))
+    
+}
+```
+
+Plot the library size of singlets vs doublets.  
+This demonstrates that we cannot identify doublets on the basis of number of counts alone.
+
+```{r, fig.width=10, fig.height=16}
+plot_list <- list()
+
+for (i in 1:length(sce)){
+    
+     plot_data <- tibble(
+         library_size = colSums(assay(sce[[i]], "counts")),
+         doublet_class = sce[[i]]$scDblFinder.class
+         )
+     
+     plot_list[[i]] <- ggplot(plot_data, aes(doublet_class, library_size)) +
+            geom_jitter(width = 0.1, height = 0, size = 0.1) +
+            scale_y_continuous(trans = "log10") +
+            cowplot::theme_cowplot()+
+            ggtitle(mainExpName(sce[[i]]))+
+            theme(axis.title.x = element_blank())
+}
+
+
+#add an overall title and arrange the graphs on one page
+title <- ggdraw() + draw_label("Library size of singles vs doublets", fontface='bold', size = 24)
+p <- plot_grid(plotlist = plot_list, label_size = 24, ncol = 3)
+p <- plot_grid(title, p, ncol=1, rel_heights=c(0.1, 1))
+
+p
+```
+
+```{r}
+ggsave(paste0(directory, "/Doublet_figures/Doublet_library_size.", ini$file_type), 
+    device = ini$file_type, width = 10, height = 16, bg = "white")
+```
+
+### Plot the position of doublets on the UMAP
+
+```{r, fig.width=14, fig.height = 24, message = FALSE, warning=FALSE}
+plot_list <- list()
+for (i in 1:length(sce)){
+    plot_list[[i]] <- plotReducedDim(sce[[i]], dimred = "umap", 
+               colour_by = "scDblFinder.class")+
+        scale_colour_viridis_d(begin = 0, end = 0.75)+
+        ggtitle(mainExpName(sce[[i]]))
+}
+
+title <- ggdraw() + draw_label("Doublet detection", fontface='bold', size = 24)
+p <- plot_grid(plotlist = plot_list, label_size = 12, ncol = 3)
+p <- plot_grid(title, p, ncol=1, rel_heights=c(0.1, 1))
+p
+```
+
+```{r}
+ggsave(paste0(directory, "/Doublet_figures/Doublet_detection.", ini$file_type), 
+    device = ini$file_type, width = 10, height = 16, bg = "white")
+```
+
+#### Save sce object with ambient RNA and doublets calculated
+Update the name of the objects if ambient RNA was removed  
+
+```{r, warning=FALSE}
+
+dir.create(paste0(directory, "/RDS_objects.dir/"))
+dir.create(paste0(directory, "/RDS_objects.dir/doublets_calc/"))
+dir.create(paste0(directory, "/RDS_objects.dir/doublets_calc/SingleCellExp"))
+dir.create(paste0(directory, "/RDS_objects.dir/doublets_calc/Seurat"))
+
+for (i in 1:length(sce)){
+    
+    saveRDS(sce[[i]], 
+            paste0(directory, "/RDS_objects.dir/doublets_calc/SingleCellExp/",
+                   mainExpName(sce[[i]]),
+                   "_doublets_calc_SingleCellExp.rds"))
+    
+    # add the doublet info to the so
+    so[[i]]$scDblFinder.class <- sce[[i]]$scDblFinder.class
+    
+    # save the so
+    saveRDS(so[[i]], 
+            paste0(directory, "/RDS_objects.dir/doublets_calc/Seurat/",
+                   so[[i]]@project.name,
+                   "_doublets_calc_SeuratObject.rds"))
+    
+}
+
+```
+
+
+#### Filter out doublets  
+
+If required, the doublets can be filtered out of the sce (use doublet_filter = TRUE in the yml file). 
+However it is recommended to leave them in here, and remove them after the more thorough clustering analysis 
+
+Create a new sce with doublets (and possibly ambient RNA) removed  
+
+```{r, echo=FALSE}
+
+if (ini$doublet_filter == TRUE){
+sce_filter_doublet <- list()
+so_filter_doublet <- list()
+
+    for (i in 1:length(sce)){
+        
+        sce_filter_doublet[[i]] <- sce[[i]][, 
+                                    sce[[i]]$scDblFinder.class == "singlet"]
+        so_filter_doublet[[i]] <- subset(so[[i]], subset = scDblFinder.class == "singlet")
+        
+    }
+}
+```
+
+#### Plot number of cells following doublet removal
+
+```{r, fig.width=10, fig.height=6}
+plot_cell_number <- function(sce_list, cell_drop, filter_method){
+    #create a df of number of cells or droplets per sample
+    df <- data.frame()
+    
+    for (i in 1:length(sce_list)) {
+        sample <- mainExpName(sce_list[[i]])
+        droplets <- ncol(sce_list[[i]])
+        df[i,1] <- sample
+        df[i, 2] <- droplets
+     }
+    
+    colnames(df) <- c("sample", "droplets")
+    
+    #plot the number of cells per sample as a bar chart
+    p <- ggplot(df, aes(x = sample, y = droplets, fill = sample))+
+        geom_col()+
+        ggtitle(paste0("Number of ", cell_drop, " per sample after ", filter_method, " filtering"))+
+        geom_text(aes(label=droplets), position=position_dodge(width=0.9), vjust=-0.25)+
+        theme_cowplot()+
+        theme(plot.title = element_text(size = 20))+
+        theme(axis.text.x = element_text(size = 12, angle = 45, hjust=1))+
+        theme(legend.position="none")+
+        scale_fill_viridis_d()
+    
+    p
+}
+if (ini$doublet_filter == TRUE){
+plot_cell_number(sce_filter_doublet, "cells", "doublet")
+}
+```
+
+```{r}
+if (ini$doublet_filter == TRUE){
+ggsave(paste0(directory, "/Doublet_figures/Doublet_cell_number.", ini$file_type), 
+    device = ini$file_type, width = 10, height = 6, bg = "white")
+}
+```
+
+#### Plot QC metrics following doublet removal
+
+```{r, fig.width=12, fig.height=14}
+plot_filtered_qc <- function(sce_list, filter_method){
+    df <- list()
+    
+    for (i in 1:length(sce_list)){
+            
+        df[[i]] <- data.frame(
+            sce_list[[i]]$sample,
+            colnames(sce_list[[i]]),
+            sce_list[[i]]$sum,
+            sce_list[[i]]$detected,
+            sce_list[[i]]$subsets_mito_percent
+        )
+            
+            colnames(df[[i]]) <- c("sample", "barcode", "nCount_RNA", "nFeature_RNA", "percent_mt")
+    }
+        
+        # make concatenated df
+        
+        df_all <- plyr::ldply(df)
+        
+        #plot low library size
+        p1 <- ggplot(df_all, aes(x = sample, y = nCount_RNA))+
+            geom_violin(trim = FALSE, fill = "#440154", width = 1, position = position_dodge(0))+
+            scale_y_log10() + 
+            theme_cowplot()+
+            theme(axis.text.x = element_text(angle = 45, hjust=1))+
+            ggtitle("Library size")
+            
+        # plot low number of features
+        p2 <- ggplot(df_all, aes(x = sample, y = nFeature_RNA))+
+            geom_violin(trim = FALSE, fill = "#440154", width = 1, position = position_dodge(0))+
+            scale_y_log10() + 
+            theme_cowplot()+
+            theme(axis.text.x = element_text(angle = 45, hjust=1))+
+            ggtitle("Number of features")
+        
+        # plot mitochondrial content
+        
+        p3 <- ggplot(df_all, aes(x = sample, y = percent_mt))+
+            geom_violin(trim = FALSE, fill = "#440154", width = 1, position = position_dodge(0))+
+            theme_cowplot()+
+            theme(axis.text.x = element_text(angle = 45, hjust=1))+
+            ggtitle("Mitochondrial reads")
+        
+        
+        #add an overall title and arrange the graphs on one page
+        title <- ggdraw() + draw_label(paste0("QC after ", filter_method, " filtering"), fontface='bold', size = 16)
+        p <- plot_grid(p1, p2, p3, ncol = 1)
+        p <- plot_grid(title, p, ncol=1, rel_heights=c(0.1, 1))
+        
+        p
+        
+}
+
+if (ini$doublet_filter == TRUE){
+plot_filtered_qc(sce_filter_doublet, filter_method = "doublet")
+}
+```
+
+```{r}
+if (ini$doublet_filter == TRUE){
+ggsave(paste0(directory, "/Doublet_figures/Doublet_QC_Vlnplots.", ini$file_type), device = ini$file_type, width = 12, height = 14, bg = "white")
+}
+```
+
+#### Plot the UMI vs features coloured by % MT after doublet filtering 
+
+```{r, fig.width=14, fig.height=24}
+plot_qc <- function (sce_list, filter_method){
+    plot_list <- list()
+    for (i in 1:length(sce_list)) {
+      
+        plot_list[[i]] <- colData(sce_list[[i]]) %>% 
+            as_tibble() %>%
+            ggplot(aes(x=sum, y=detected)) + 
+            geom_point(aes(colour = subsets_mito_percent)) + 
+            scale_colour_viridis()+
+            #stat_smooth(method=lm) +
+            scale_x_log10() + 
+            scale_y_log10() + 
+            geom_vline(xintercept = 800) +
+            ggtitle(mainExpName(sce_list[[i]])) +
+            theme(plot.title = element_text(size = 12))
+    }
+    
+    
+    title <- ggdraw() + draw_label(paste0("UMIs vs genes after ", filter_method, " filtering"), fontface='bold', size = 24)
+    p <- plot_grid(plotlist = plot_list, label_size = 12, ncol = 3)
+    p <- plot_grid(title, p, ncol=1, rel_heights=c(0.1, 2))
+    
+    p
+}
+
+if (ini$doublet_filter == TRUE){
+    plot_qc(sce_filter_doublet, "doublet")
+    }
+
+```
+
+```{r}
+if (ini$doublet_filter == TRUE){
+ggsave(paste0(directory, "/Doublet_figures/Doublet_filter_UMIvsgenes.", ini$file_type), 
+    device = ini$file_type, width = 14, height = 24, bg = "white")
+}
+```
+
+#### Plot Novelty after doublet removal
+
+```{r, fig.width = 10, fig.height=16, warning=FALSE}
+if (ini$doublet_filter == TRUE){
+plot_novelty <- function (sce_list, filter_method){
+    plot_list <- list()
+    for (i in 1:length(sce_list)) {
+      
+        plot_list[[i]] <- colData(sce_list[[i]]) %>%
+            as_tibble()%>%
+            ggplot(aes(x=log10GenesPerUMI, fill = sample)) +
+            geom_density() +
+            scale_fill_viridis_d()+
+            ggtitle(mainExpName(sce_list[[i]]))+
+            theme(plot.title = element_text(size = 12))+
+            xlim(0.5, 1)+
+            theme_cowplot()+
+            theme(legend.position="none")
+            
+    }
+    
+    title <- ggdraw() + draw_label(paste0("Novelty after ", filter_method, " filtering"), fontface='bold', size = 24)
+    p <- plot_grid(plotlist = plot_list, label_size = 12, ncol = 3)
+    p <- plot_grid(title, p, ncol=1, rel_heights=c(0.1, 1))
+    
+    p
+}
+
+plot_novelty(sce_filter_doublet, "doublet")
+}
+```
+```{r}
+if (ini$doublet_filter == TRUE){
+ggsave(paste0(directory, "/Doublet_figures/Doublet_filter_Novelty.", ini$file_type), 
+    device = ini$file_type, width = 10, height = 16, bg = "white")
+}
+```
+
+### QC summary plots 
+
+Plot side by side for each sample
+- Vln plots for nCounts, nFeatures, % mt
+- Seurat clustering
+- % mt on UMAP
+- decontX on UMAP
+- decontX Vln
+- doublet on UMAP
+
+```{r, fig.width=14, fig.height=16, message = FALSE}
+if (ini$doublet_filter == TRUE){
+
+plot_list <- list()
+for (i in 1:length (sce_filter_doublet)){
+    p_list <- list()
+
+    # violin plot of nUMI
+    p_list[[1]] <- plotColData(sce_filter_doublet[[i]], x = "sample", y = "sum", colour = "sample")+
+        #add a title
+        ggtitle("Number of counts") +
+        theme(plot.title = element_text(size = 12),
+              axis.title.x = element_blank(),
+              legend.position = "none")+
+        scale_colour_viridis_d()
+
+    # violin plot of nFeatures
+    p_list[[2]] <- plotColData(sce_filter_doublet[[i]], x = "sample", y = "detected", colour = "sample")+
+        #add a title
+        ggtitle("Number of features") +
+        theme(plot.title = element_text(size = 12),
+              axis.title.x = element_blank(),
+              legend.position = "none")+
+        scale_colour_viridis_d()
+     
+
+    # violin plot of % mitochondrial reads
+    p_list[[3]] <- plotColData(sce_filter_doublet[[i]], x = "sample", y = "subsets_mito_percent", colour = "sample")+
+        #add a title
+        ggtitle("% mitochondrial reads") +
+        theme(plot.title = element_text(size = 12),
+              axis.title.x = element_blank(),
+              legend.position = "none")+
+        scale_colour_viridis_d()
+    
+    # UMI vs features coloured by % MT
+    p_list[[4]] <- colData(sce_filter_doublet[[i]]) %>% 
+            as_tibble() %>%
+            ggplot(aes(x=sum, y=detected)) + 
+            geom_point(aes(colour = subsets_mito_percent)) + 
+            scale_colour_viridis()+
+            #stat_smooth(method=lm) +
+            scale_x_log10() + 
+            scale_y_log10() + 
+            geom_vline(xintercept = 800) +
+            ggtitle("UMI vs features") +
+            theme(plot.title = element_text(size = 12))
+    
+    # Novelty
+    p_list[[5]] <- colData(sce_filter_doublet[[i]]) %>%
+            as_tibble()%>%
+            ggplot(aes(x=log10GenesPerUMI, fill = sample)) +
+            geom_density() +
+            scale_fill_viridis_d()+
+            ggtitle("Novelty")+
+            theme(plot.title = element_text(size = 12))+
+            xlim(0.5, 1)+
+            theme_cowplot()+
+            theme(legend.position="none")
+    
+    # Seurat clustering 
+    p_list[[6]] <- DimPlot(so_filter_doublet[[i]], group.by = "seurat_clusters", label = TRUE)+
+        ggtitle("Seurat clustering")
+    
+    # % mt on UMAP
+    p_list[[7]]  <- FeaturePlot(so_filter_doublet[[i]], features = "subsets_mito_percent", reduction = "umap")+
+        scale_colour_gradientn(colours = viridis(256, option = "D"), name = "subsets_mito_percent")+
+        ggtitle("% mitochondrial content")
+    
+    # DecontX score
+    p_list[[8]] <- plotReducedDim(sce_filter_doublet[[i]], dimred = "decontX_UMAP", 
+               colour_by = "decontX_contamination")+
+        ggtitle("DeontX contamination")
+    
+
+    # decontX distribution
+    p_list[[9]] <- plotColData(sce_filter_doublet[[i]], x = "sample", y = "decontX_contamination", 
+                               colour = "sample")+
+        scale_colour_viridis_d()+
+        theme(legend.position = "none")+
+        ggtitle("DecontX distribution")
+    
+        # Doublet detection
+    p_list[[10]] <- plotReducedDim(sce_filter_doublet[[i]], dimred = "umap", 
+               colour_by = "scDblFinder.class")+
+        scale_colour_viridis_d(begin = 0, end = 0.75)+
+        ggtitle("Doublet detection")
+    
+    
+    title <- ggdraw() + 
+        draw_label(paste0(mainExpName(sce_filter_doublet[[i]]), ": ", ncol(sce_filter_doublet[[i]]), " cells"), 
+                          fontface='bold', size = 24)
+    p1 <-  plot_grid(plotlist = p_list[1:3], ncol =3)
+    p2 <-  plot_grid(plotlist = p_list[4:5], ncol = 2)
+    p3 <-  plot_grid(plotlist = p_list[6:7], ncol = 2)
+    p4 <-  plot_grid(plotlist = p_list[8:10], ncol = 3)
+    plot_list[[i]] <- plot_grid(title, p1, p2, p3, p4, ncol=1, rel_heights=c(0.1, 1, 1, 1, 1))
+    
+}
+}
+```
+
+```{r, warning=FALSE}
+if (ini$doublet_filter == TRUE){
+
+dir.create(paste0(directory, "/Doublet_figures/QC_summary_per_sample/"))
+for (i in 1:length(plot_list)){
+        ggsave(paste0(directory, "/Doublet_figures/QC_summary_per_sample/",
+                      mainExpName(sce_filter_doublet[[i]]), 
+                      "_qc_summary.", ini$file_type), 
+               plot = plot_list[[i]],
+            device = ini$file_type, width = 14, height = 16, bg = "white")
+    }
+
+}
+```
+
+
+
+
+#### Save the filtered objects
+
+```{r, warning=FALSE}
+
+if (ini$doublet_filter == TRUE){
+    dir.create(paste0(directory, "/RDS_objects.dir/doublet_filtered/"))
+    dir.create(paste0(directory, "/RDS_objects.dir/doublet_filtered/SingleCellExp/"))
+    dir.create(paste0(directory, "/RDS_objects.dir/doublet_filtered/Seurat/"))
+
+    
+    for (i in 1:length(sce_filter_doublet)){
+        
+        saveRDS(sce_filter_doublet[[i]], 
+                paste0(directory, "/RDS_objects.dir/doublet_filtered/SingleCellExp/", 
+                       mainExpName(sce_filter_doublet[[i]]),
+                       "_doublet_filtered_SingleCellExp.rds"))
+        saveRDS(so_filter_doublet[[i]], 
+                paste0(directory, "/RDS_objects.dir/doublet_filtered/Seurat/", 
+                       mainExpName(sce_filter_doublet[[i]]),
+                       "_doublet_filtered_SeuratObject.rds"))
+        
+    }
+}
+
+```
+

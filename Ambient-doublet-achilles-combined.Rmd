@@ -1,0 +1,1394 @@
+---
+title: "Ambient RNA & doublet detection"
+author: "Carla Cohen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Ambient RNA and doublet detection workflow  
+
+This script detects and visualises Ambient RNA and doublets in single-nuc data. 
+It follows the QC-Filter script.  
+This specific script analyses the Achilles dataset. 
+The working directory is  
+/project/tendonhca/ccohen/chromium/analysis/20230118_achilles/  
+
+The inputs of the workflow are:  
+* Single Cell experiment objects with filtering performed  
+* Single cell experiment objects with no filtering (raw)  
+* ambient-doublet.yml supplies parameters including date that the QC-Filter script was run  
+
+The steps in the workflow are:  
+
+1. Set up and read in sce objects  
+* load packages, read in yml file, create output directory  
+* read in the filtered and raw sce from the QC-Filter workflow  
+
+2. Ambient RNA detection  
+* Create a Seurat Object from the filtered sce object, perform log normalisation, dim reduction and clustering
+* If required, find markers that define each cluster (used later to assess decontX performance, can be skipped if biological markers are already known) 
+* Plot the Seurat clustering on the UMAP 
+* Update the sce object with clustering information
+* Perform decontX using the Seurat clustering, or decontX clustering
+* Plot the detected contamination & assess the effect on marker gene expression  
+* Optionally filter out ambient RNA and re-plot QC metrics
+
+3.  Doublet detection
+
+* Detect doublets using scDblFinder, using Seurat clustering or no clustering  
+* Repeat dim reduction & clustering if ambient RNA was filtered out  
+* Plot the library size of singlets vs doublets; plot doublets on UMAP  
+* Save the sce with ambient RNA and doublets calculated  
+* Optionally filter out the doublets and re-plot QC metrics  
+* Save the filtered sce objects if appropriate  
+
+4. QC summary plot
+* Generate a plot of all QC metrics for each sample  
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, fig.width = 10, fig.height = 10)
+```
+
+## 1. Set up and read in sce objects 
+
+#### Load packages, read in yml file, create output directory 
+
+```{r, include=FALSE}
+
+library(yaml)
+library(tidyverse)
+library(cowplot)
+library(scater)
+library(viridis)
+library(Seurat)
+library(celda)
+library(scater)
+library(scDblFinder)
+
+# Read in the yml file
+ini <- read_yaml("ambient_doublet.yml")
+
+# make a new output folder for each run, with the date & time in the directory name
+date <- Sys.Date() %>% str_replace_all("-", "")
+time <- format(Sys.time(), "%X") %>% str_replace_all(":", "-") %>%
+    str_sub(1, 5)
+directory <- paste0(date,"_", time, "_Ambient-doublet.dir")
+dir.create(directory, showWarnings = FALSE)
+
+
+```
+
+```{r}
+# Print the parameters used
+ini
+```
+
+
+#### Read in the filtered and raw sce from the QC-Filter workflow  
+
+Raw objects are sce objects with the raw kallisto output (no filtering). 
+
+Filtered objects are from the end of the QC-filter pipeline which have had MAD and threshold filtering done.
+
+```{r}
+
+# make a named vector of filtered sample files
+
+file_list_filtered <- list.files(paste0(ini$qc_filter, "_QC-Filter.dir/RDS_objects.dir/filtered/"), 
+                                 pattern="_SingleCellExp.rds")
+
+names(file_list_filtered) <- str_replace(file_list_filtered, "_filtered_SingleCellExp.rds", "")
+
+# make a named vector of raw sample files
+
+file_list_raw <- list.files(paste0(ini$qc_filter, "_QC-Filter.dir/RDS_objects.dir/raw/"), 
+                                 pattern="_SingleCellExp.rds")
+names(file_list_raw) <- str_replace(file_list_raw, "_raw_SingleCellExp.rds", "")
+
+```
+
+
+Read in the sce objects  
+
+```{r, echo=FALSE}
+
+#Make a new list for the sce objects
+sce_filter_manual <- list()
+sce_raw <- list()
+
+# generate a list of sce objects
+for (i in 1:length(file_list_filtered)){
+    
+    sce_filter_manual[[i]] <- readRDS(paste0(ini$qc_filter, 
+                                                "_QC-Filter.dir/RDS_objects.dir/filtered/",
+                                                file_list_filtered[i]))
+    sce_raw[[i]] <- readRDS(paste0(ini$qc_filter, "_QC-Filter.dir/RDS_objects.dir/raw/",
+                                 file_list_raw[i]))
+    
+    
+}
+
+```
+
+
+## 2. Ambient RNA detection 
+
+Here the package decontX is used to detect contaminating ambient RNA.  
+The ouputs of decontX are:  
+* a contamination score per cell between 0 and 1  
+* an adjusted count matrix that has a better signal-to-noise ratio for marker gene expression  
+
+Decont X has an internal clustering algorithm but sometimes performs better when clusters are performed independently.  
+Here clustering is performed in Seurat prior to decontX implementation.  
+We have found that on synovium samples, clustering performs best on samples that have undergone several filtering steps (particularly the mito 5% filter).    
+If required, users can test implementing the decontX algorithm at earlier or later stages in the QC-filter workflow.  
+A sample-specific background (empty counts matrix) is also passed to the algorithm which increases performance.  
+
+#### Create a Seurat Object from the filtered sce object, perform log normalisation, dim reduction and clustering  
+
+Clustering resolution can be amended in the yml file. 
+Alternatively, multiple resolutions could be tested here.  
+
+```{r, message = FALSE, warning=FALSE}
+
+so_filter_manual <- list()
+
+for (i in 1:length(sce_filter_manual)) {
+    print (paste0("Analysing sample ", i, ": ",  mainExpName(sce_filter_manual[[i]])))
+    # create seurat object
+    so_filter_manual[[i]] <- CreateSeuratObject(counts = counts(sce_filter_manual[[i]]),
+                                     assay = "RNA",
+                                     project = mainExpName(sce_filter_manual[[i]]),
+                                     meta.data = as.data.frame(colData(sce_filter_manual[[i]])))
+    # Perform normalisation, dim reduction 
+    so_filter_manual[[i]] <- so_filter_manual[[i]] %>% 
+           NormalizeData() %>%
+           FindVariableFeatures() %>% 
+           ScaleData() %>%
+           RunPCA()%>%
+           FindNeighbors(dims = 1:20) %>%
+           RunUMAP(dims = 1:20) 
+    
+    # Perform clustering at res = 0.1
+    so_filter_manual[[i]] <- FindClusters(so_filter_manual[[i]], resolution = ini$resolution)
+    
+}
+
+
+```
+
+### If required, find markers that define each cluster  
+
+Marker genes are required for each cell type, in order to assess decontX performance later.  
+If the cell types and markers are already known this step can be omitted.  
+Amend the parameter find_markers in the yml file to TRUE or FALSE.  
+NB FindAllMarkers takes quite a while to run (~30s-1min per cluster per sample) so only use it if you have to.  
+So for 10 samples of 8 clusters could be ~1hr  
+
+```{r, message = FALSE}
+if (ini$find_markers == TRUE) {
+    print("Finding markers")
+    markers <-  lapply(so_filter_manual, FindAllMarkers)
+    # save the marker df
+    dir.create(paste0(directory, "/Marker_lists/"))
+    for (i in 1: length(markers)){
+        write.table (markers[[i]], 
+                 file = paste0(directory, "/Marker_lists/", mainExpName(sce_filter_manual[[i]]), "_markers.txt"), 
+                 sep = "\t", row.names = FALSE, quote = FALSE)
+        }
+    } else {
+    print("Using markers from prior knowledge")
+    
+}
+```
+
+
+
+#### Plot the Seurat clustering on the UMAP
+
+```{r, fig.width=10, fig.height=20}
+
+plot_list <- list()
+
+for (i in 1:length(sce_filter_manual)){
+    plot_list[[i]] <- DimPlot(so_filter_manual[[i]], group.by = "seurat_clusters", label = TRUE)+
+        ggtitle(mainExpName(sce_filter_manual[[i]]))
+    
+}
+
+title <- ggdraw() + draw_label("Seurat clustering", fontface='bold', size = 24)
+p <- plot_grid(plotlist = plot_list, label_size = 12, ncol = 3)
+p <- plot_grid(title, p, ncol=1, rel_heights=c(0.1, 1))
+
+p
+
+
+```
+
+```{r}
+if (ini$decontX_clusters == "seurat_clusters"){
+ggsave(paste0(directory, "/QC_figures/Seurat_clusters.", ini$file_type), 
+    device = ini$file_type, width = 10, height = 20, bg = "white")
+}
+```
+
+#### Plot the %mt on the UMAP
+
+```{r, fig.width=14, fig.height=24, warning=FALSE, message=FALSE}
+
+plot_list <- list()
+
+for (i in 1:length(sce_filter_manual)){
+    
+    plot_list[[i]]  <- FeaturePlot(so_filter_manual[[i]], features = "subsets_mito_percent", reduction = "umap")+
+        scale_colour_gradientn(colours = viridis(256, option = "D"), name = "subsets_mito_percent")+
+        ggtitle(mainExpName(sce_filter_manual[[i]]))
+
+}
+
+title <- ggdraw() + draw_label("Mitochondrial percent", fontface='bold', size = 24)
+p <- plot_grid(plotlist = plot_list, label_size = 12, ncol = 3)
+p <- plot_grid(title, p, ncol=1, rel_heights=c(0.1, 1))
+
+p
+
+
+```
+
+
+```{r}
+
+ggsave(paste0(directory, "/QC_figures/Mito_umap.", ini$file_type), 
+    device = ini$file_type, width = 12, height = 24, bg = "white")
+
+```
+
+
+#### Update the sce object with clustering information
+
+```{r}
+
+for (i in 1:length(sce_filter_manual)){
+    # put the cluster info in the sce colData
+    colData(sce_filter_manual[[i]])$seurat_clusters <- so_filter_manual[[i]][["seurat_clusters"]]
+    # Add the PCA & UMAP dim reductions to the sce object
+    reducedDim(sce_filter_manual[[i]], type = "pca") <- Embeddings(so_filter_manual[[i]], reduction = "pca")
+    reducedDim(sce_filter_manual[[i]], type = "umap") <- Embeddings(so_filter_manual[[i]], reduction = "umap")
+}
+
+
+```
+
+
+#### Perform decontX
+
+The raw matrix is given as background.  
+The default is to use the seurat clustering but this can be amended to decontX clusering in the yml file  
+ 
+
+
+
+```{r, message = FALSE}
+
+if (ini$decontX_clusters == "seurat_clusters"){
+for (i in 1:length(sce_filter_manual)){
+    
+    sce_filter_manual[[i]] <- decontX(sce_filter_manual[[i]],
+                                         background = sce_raw[[i]],
+                                         z = pull(colData(sce_filter_manual[[i]])$seurat_clusters)
+                                      )
+}
+}else if (ini$decontX_clusters == "decontX_clusters"){
+    for (i in 1:length(sce_filter_manual)){
+    
+    sce_filter_manual[[i]] <- decontX(sce_filter_manual[[i]],
+                                         background = sce_raw[[i]],
+                                      )
+    }
+    
+}
+
+
+
+```
+
+#### Plot the detected contamination
+
+```{r, fig.width=12, fig.height = 20, warning=FALSE, message=FALSE}
+plot_list <- list()
+
+if (ini$decontX_clusters == "seurat_clusters"){
+    dim_reduction <- "umap"
+    
+}else if (ini$decontX_clusters == "decontX_clusters"){
+    dim_reduction <- "decontX_UMAP"
+}
+    
+for (i in 1:length(sce_filter_manual)){
+    plot_list[[i]] <- plotReducedDim(sce_filter_manual[[i]], dimred = dim_reduction, 
+               colour_by = "decontX_contamination")+
+        scale_color_continuous(type = "viridis", limits = c(0,1), name = "decontX score")+
+        ggtitle(mainExpName(sce_filter_manual[[i]]))
+}
+
+title <- ggdraw() + draw_label("Ambient RNA contamination", fontface='bold', size = 24)
+p <- plot_grid(plotlist = plot_list, label_size = 12, ncol = 3)
+p <- plot_grid(title, p, ncol=1, rel_heights=c(0.1, 1))
+p
+```
+
+```{r}
+ggsave(paste0(directory, "/QC_figures/Ambient_UMAP.", ini$file_type), 
+    device = ini$file_type, width = 12, height = 20, bg = "white")
+```
+
+
+
+#### Plot the distribution of contamination 
+
+```{r, fig.width=10, fig.height = 16, message = FALSE}
+
+plot_list <- list()
+for (i in 1:length(sce_filter_manual)){
+    plot_list[[i]] <- plotColData(sce_filter_manual[[i]], x = "sample", y = "decontX_contamination", colour = "sample")+
+        scale_colour_viridis_d()+
+        ggtitle(mainExpName(sce_filter_manual[[i]]))+
+        ylim(c(0,1))+
+        theme(legend.position = "none")
+}
+
+title <- ggdraw() + draw_label("Distribution of contamination", fontface='bold', size = 18)
+p <- plot_grid(plotlist = plot_list, label_size = 12, ncol = 3)
+p <- plot_grid(title, p, ncol=1, rel_heights=c(0.1, 1))
+p
+
+```
+
+```{r}
+ggsave(paste0(directory, "/QC_figures/Ambient_Vln.", ini$file_type), 
+    device = ini$file_type, width = 10, height = 16, bg = "white")
+```
+
+#### Plot the relationship between ambient RNA score and total counts
+
+```{r, fig.width=14, fig.height=24}
+plot_umi_vs_decontX <- function (sce_list){
+    plot_list <- list()
+    for (i in 1:length(sce_list)) {
+      
+        plot_list[[i]] <- colData(sce_list[[i]]) %>% 
+            as_tibble() %>%
+            ggplot(aes(x=sum, y=decontX_contamination )) + 
+            geom_point(aes(colour = detected )) + 
+            scale_colour_viridis()+
+            geom_vline(xintercept = ini$sum_filter) +
+            geom_hline(yintercept = ini$ambient_threshold)+
+            scale_x_log10()+
+            labs(x = "log(nUMIs)")+
+            ggtitle(mainExpName(sce_list[[i]])) +
+            theme(plot.title = element_text(size = 12))
+    }
+    
+    
+    title <- ggdraw() + draw_label("UMIs vs % decontX contamination", fontface='bold', size = 16)
+    p <- plot_grid(plotlist = plot_list, label_size = 12, ncol = 3)
+    p <- plot_grid(title, p, ncol=1, rel_heights=c(0.1, 2))
+    
+    p
+}
+
+p <- plot_umi_vs_decontX(sce_filter_manual)
+p
+
+```
+
+```{r}
+ggsave(paste0(directory, "/QC_figures/nUMI_vs_decontX.", ini$file_type), 
+    device = ini$file_type, width = 12, height = 24, bg = "white")
+```
+
+
+#### Check the effectiveness of ambient RNA detection  
+
+Detection of ambient RNA should provide a clearer signal of marker genes.  
+These can be plotted on the UMAP on a log scale.  
+Marker genes can be selected on the basis of known/expected biology, or else can be detected using Seurat FindAllMarkers (see above).  
+
+NB plot not printed, have a look at QC_figures/Cluster_markers/
+
+
+```{r, fig.width=10, fig.height=24, warning = FALSE}
+
+if (ini$find_markers == FALSE){
+    # calculate the log norm counts
+sce_filter_manual <- lapply(sce_filter_manual, logNormCounts)
+
+feature_plot_umap <- function (sce_list, position, feature_vector, celltype){
+   plotDimReduceFeature(x = logcounts(sce_list[[position]]),
+  dim1 = reducedDim((sce_list[[position]]), dim_reduction)[, 1],
+  dim2 = reducedDim((sce_list[[position]]), dim_reduction)[, 2],
+  features = feature_vector,
+  exactMatch = TRUE)+
+    ggtitle(paste0(celltype, " markers"))
+}
+
+plot_list <- list()
+for (i in 1:length(sce_filter_manual)){
+    p1 <- feature_plot_umap(sce_filter_manual, i, c("COL1A1", "COL1A2", "COL3A1"), "fibroblast")
+    p2 <- feature_plot_umap(sce_filter_manual, i, c("CD163", "MRC1"), "macrophage")
+    p3 <- feature_plot_umap(sce_filter_manual, i, c("GRAM", "AQP7", "ADIPOQ"), "adipocyte")
+    p4 <- feature_plot_umap(sce_filter_manual, i, c("PTPRC", "CDi47", "CD3E", "CD3D"), "T cell")
+    p5 <- feature_plot_umap(sce_filter_manual, i, c("CD69", "KIT", "CDK15"), "granulocyte")
+    p6 <- feature_plot_umap(sce_filter_manual, i, c("MS4A1", "CD37"), "B cell")
+    p7 <- feature_plot_umap(sce_filter_manual, i, c("BLNK", "SCD1", "CD38"), "plasma cell")
+    p8 <- feature_plot_umap(sce_filter_manual, i, c("PTPRB", "FLT1", "VWF"), "vascular endothelial cell")
+    p9 <- feature_plot_umap(sce_filter_manual, i, c("NOTCH3", "PDGFRB", "MYO1B"), "mural cell")
+    p10 <- feature_plot_umap(sce_filter_manual, i, c("ASPM", "DIAPH3"), "mitotic cell")
+
+    
+   
+    title <- ggdraw() + draw_label(mainExpName(sce_filter_manual[[i]]), fontface='bold', size = 18)
+     
+    if (ini$decontX_clusters == "seurat_clusters"){
+        p0  <- DimPlot(so_filter_manual[[i]], group.by = "seurat_clusters")
+    } else if (ini$decontX_clusters == "decontX_clusters"){
+        p0 <- plotReducedDim(sce_filter_manual[[i]], dimred = dim_reduction, 
+                   colour_by = "decontX_clusters")+
+            ggtitle("decontX clusters")
+}
+    p <- plot_grid(p0, p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, ncol = 2)
+     plot_list[[i]] <- plot_grid(title, p, ncol=1, rel_heights=c(0.1, 1))
+
+    
+}
+
+# save the plots (next chunk), do not display as they are very big to view
+
+}
+rm (p1, p2, p3, p4, p5, p6, p7, p8, p9, p10)
+
+```
+
+
+```{r}
+
+if (ini$find_markers == FALSE){
+    dir.create(paste0(directory, "/QC_figures/Cluster_markers/"))
+    for (i in 1:length(plot_list)){
+        ggsave(paste0(directory, "/QC_figures/Cluster_markers/",
+                      mainExpName(sce_filter_manual[[i]]), "_known_cluster_markers.", ini$file_type), 
+               plot = plot_list[[i]],
+               device = ini$file_type, width = 10, height = 24, bg = "white")
+    }
+}
+
+
+```
+
+
+```{r, warning = FALSE}
+
+if (ini$find_markers == TRUE){
+    
+        # calculate the log norm counts
+    sce_filter_manual <- lapply(sce_filter_manual, logNormCounts)
+    
+    feature_plot_umap <- function (sce_list, position, feature_vector, celltype){
+        plotDimReduceFeature(x = logcounts(sce_list[[position]]),
+                             dim1 = reducedDim((sce_list[[position]]), dim_reduction)[, 1],
+                             dim2 = reducedDim((sce_list[[position]]), dim_reduction)[, 2],
+                             features = feature_vector,
+                             exactMatch = TRUE)+
+            ggtitle(paste0(celltype, " markers"))
+    }
+    
+    plot_list <- list()
+    top4 <- list()
+    for (i in 1:length(sce_filter_manual)){
+        top4[[i]] <- markers[[i]] %>% 
+                group_by(cluster) %>% 
+                slice_max(order_by = avg_log2FC, n = 4)
+    
+        p_list <- list()
+        for (j in levels(top4[[i]]$cluster)){
+            #print(j)
+            p_list[[j]] <- feature_plot_umap(sce_filter_manual, i, 
+                                             top4[[i]] %>% 
+                                                 dplyr::filter(cluster == as.numeric(j)) 
+                                             %>% pull(gene),
+                                             paste0("Cluster ", j))
+        }
+        
+        title <- ggdraw() + draw_label(mainExpName(sce_filter_manual[[i]]), fontface='bold', size = 18)
+        p <- plot_grid(plotlist = p_list, ncol = 3)
+        plot_list[[i]] <- plot_grid(title, p, ncol=1, rel_heights=c(0.1, 1))
+        
+    }
+    
+}
+
+```
+
+
+```{r}
+
+if (ini$find_markers == TRUE){
+    dir.create(paste0(directory, "/QC_figures/Cluster_markers/"))
+    for (i in 1:length(plot_list)){
+        ggsave(paste0(directory, "/QC_figures/Cluster_markers/",
+                      mainExpName(sce_filter_manual[[i]]), "_found_cluster_markers.", ini$file_type), 
+               plot = plot_list[[i]],
+               device = ini$file_type, width = 12, height = 16, bg = "white")
+    }
+}
+
+
+```
+
+
+#### Look at % marker gene expression before and after decontX normalistaion
+This shows how specific the expression of marker genes is to each cluster. 
+The marker genes are listed according to the prior knowledge of the expert. 
+Alternatively the top genes from FindAllMarkers can be used (see below). 
+Plot the expression of marker genes, comparing logcounts with decontX counts  
+
+NB plot not printed, have a look at QC_figures/Marker_specificity
+
+```{r, fig.width=10, fig.height=10, warning = FALSE}
+
+if (ini$find_markers == FALSE){
+    knowledge_markers <- list(Fibroblast_markers =  c("COL1A1", "COL1A2", "COL3A1"),
+                Macrophage_Markers = c("CD163", "MRC1"),
+                Adipocyte_Markers = c("GRAM", "AQP7", "ADIPOQ"),
+                Tcell_Markers = c("PTPRC", "CD247"),
+                Granulocyte_markers = c("CD69", "KIT", "CDK15"),
+                Plasma_cell_markers = c("BLNK", "SCD1", "CD38"),
+                Vascular_endo_markers =  c("PTPRB", "FLT1", "VWF"),
+                Mural_cell_markers = c("NOTCH3", "PDGFRB", "MYO1B"),
+                B_cell_markers = c("MS4A1", "CD37", "CD79A", "CD79B")
+                
+)
+
+plot_list <- list()
+for (i in 1:length(sce_filter_manual)){
+    plot_list[[i]] <- plotDecontXMarkerPercentage(sce_filter_manual[[i]],
+                                                  markers = knowledge_markers,
+                                                  assayName = c("counts", "decontXcounts"))+
+        scale_fill_viridis_d(begin = 0, end = 0.75)+
+        ggtitle(mainExpName(sce_filter_manual[[i]]))
+}
+
+# display one plot only, save the rest (next chunk) as they are very big to view
+
+plot_list[[1]]
+}
+
+    
+```
+
+```{r}
+if (ini$find_markers == FALSE){
+    dir.create(paste0(directory, "/QC_figures/Marker_specificity/"))
+    for (i in 1:length(plot_list)){
+        ggsave(paste0(directory, "/QC_figures/Marker_specificity/", mainExpName(sce_filter_manual[[i]]), 
+                      "_knowledge_cluster_markers.", ini$file_type), 
+               plot = plot_list[[i]],
+            device = ini$file_type, width = 10, height = 10, bg = "white")
+    }
+}
+
+```
+
+
+
+
+Plot the specificity of markers from FindAllMarkers if required. 
+
+
+```{r, fig.width=10, fig.height=10}
+
+if (ini$find_markers == TRUE){
+    top5 <- list()
+    gene_list <- list()
+    plot_list <- list()
+    for (i in 1:length(markers)){
+        # get the top 5 markers for each cluster
+        top5[[i]] <- markers[[i]] %>% 
+            group_by(cluster) %>% 
+            slice_max(order_by = avg_log2FC, n = 5)
+        # convert gene_list to a named list
+        gene_list[[i]] <- split(top5[[i]]$gene, 
+                           cut(seq_along(top5[[i]]$gene),
+                           length(unique(top5[[i]]$cluster)),
+                           labels = unique(top5[[i]]$cluster)))
+        
+        # plot the marker specificity
+        plot_list[[i]] <- plotDecontXMarkerPercentage(sce_filter_manual[[i]],
+                                                  markers = gene_list[[i]],
+                                                  assayName = c("counts", "decontXcounts"))+
+        scale_fill_viridis_d(begin = 0, end = 0.75)+
+        ggtitle(mainExpName(sce_filter_manual[[i]]))
+    }
+
+}
+ 
+```
+
+
+
+```{r, warning=FALSE}
+if (ini$find_markers == TRUE){
+    dir.create(paste0(directory, "/QC_figures/Marker_specificity/"))
+    for (i in 1:length(plot_list)){
+        ggsave(paste0(directory, "/QC_figures/Marker_specificity/",
+                      mainExpName(sce_filter_manual[[i]]), 
+                      "_found_cluster_markers.", ini$file_type), 
+               plot = plot_list[[i]],
+            device = ini$file_type, width = 10, height = 10, bg = "white")
+    }
+}
+
+```
+
+Hopefully performing decontX has increased the cluster specificity of the markers.   
+
+#### Optional: Filter the sce according to ambient RNA contamination  
+
+If required, filter the sce with a threshold for ambient RNA contamination  
+e.g. all cells that have > 0.5 contamination score.  
+In the yml file set ambient_filter = TRUE and ambient_threshold = 0.5.  
+
+However it is recommended to proceed to the next Clustering script with all the cells still present, and visualise whether the ambient RNA forms a specific cluster.  
+In the yml file set ambient_filter = FALSE    
+
+If filtering is performed, re-plot the contamination distribution  
+
+```{r}
+if (ini$ambient_filter == TRUE){
+    print(paste("Ambient RNA filtering = TRUE"))
+}else{
+    print(paste("Ambient RNA filtering = FALSE"))
+    } 
+```
+
+
+```{r, fig.height=10, fig.width=10, message = FALSE}
+
+if (ini$ambient_filter == TRUE){
+    
+sce_filter_ambient <- list()
+plot_list <- list()
+for (i in 1:length(sce_filter_manual)){
+    sce_filter_ambient[[i]] <- sce_filter_manual[[i]][, sce_filter_manual[[i]]$decontX_contamination < ini$ambient_threshold ]
+    
+    plot_list[[i]] <- plotColData(sce_filter_ambient[[i]], x = "sample", y = "decontX_contamination", colour = "sample")+
+        scale_colour_viridis_d()+
+        theme(legend.position = "none")+
+        ggtitle(mainExpName(sce_filter_ambient[[i]]))
+}
+
+
+title <- ggdraw() + draw_label("Distribution of contamination after decontX filtering", fontface='bold', size = 18)
+p <- plot_grid(plotlist = plot_list, label_size = 12, ncol = 3)
+p <- plot_grid(title, p, ncol=1, rel_heights=c(0.1, 1))
+p
+
+}
+
+
+
+```
+
+Re-plot the contamination on the UMAP
+
+
+```{r, fig.height=10, fig.width=10}
+if (ini$ambient_filter == TRUE){
+plot_list <- list()
+for (i in 1:length(sce_filter_ambient)){
+    plot_list[[i]] <- plotReducedDim(sce_filter_ambient[[i]], dimred = dim_reduction, 
+               colour_by = "decontX_contamination")+
+        ggtitle(mainExpName(sce_filter_ambient[[i]]))
+
+}
+
+title <- ggdraw() + draw_label("Detected contamination after filtering", fontface='bold', size = 24)
+p <- plot_grid(plotlist = plot_list, label_size = 12, ncol = 3)
+p <- plot_grid(title, p, ncol=1, rel_heights=c(0.1, 1))
+p
+}
+```
+
+
+```{r}
+if (ini$ambient_filter == TRUE){
+ggsave(paste0(directory, "/QC_figures/Filter_Ambient_Vln.", ini$file_type), 
+    device = ini$file_type, width = 10, height = 10, bg = "white")
+}
+```
+
+#### Plot number of cells following ambient RNA removal
+
+NB in the following section, plotting functions are always defined.  
+Plots are only drawn if ini$ambient_filter = TRUE.  
+
+```{r}
+
+plot_cell_number <- function(sce_list, cell_drop, filter_method){
+    #create a df of number of cells or droplets per sample
+    df <- data.frame()
+    
+    for (i in 1:length(sce_list)) {
+        sample <- mainExpName(sce_list[[i]])
+        droplets <- ncol(sce_list[[i]])
+        df[i,1] <- sample
+        df[i, 2] <- droplets
+     }
+    
+    colnames(df) <- c("sample", "droplets")
+    
+    #plot the number of cells per sample as a bar chart
+    p <- ggplot(df, aes(x = sample, y = droplets, fill = sample))+
+        geom_col()+
+        ggtitle(paste0("Number of ", cell_drop, " per sample after ", filter_method, " filtering"))+
+        geom_text(aes(label=droplets), position=position_dodge(width=0.9), vjust=-0.25)+
+        theme_cowplot()+
+        theme(plot.title = element_text(size = 20))+
+        theme(axis.text.x = element_text(size = 12, angle = 45, hjust=1))+
+        theme(legend.position="none")+
+        scale_fill_viridis_d()
+    
+    p
+}
+```
+
+```{r, fig.width=10, fig.height=6}
+if (ini$ambient_filter == TRUE){
+plot_cell_number(sce_filter_ambient, "cells", "ambient")
+}
+```
+
+```{r}
+if (ini$ambient_filter == TRUE){
+ggsave(paste0(directory, "/QC_figures/Ambient_cell_number.", ini$file_type), 
+    device = ini$file_type, width = 10, height = 6, bg = "white")
+}
+```
+
+#### Plot QC metrics following ambient RNA removal
+
+Plot the number of counts per cell (nCount_RNA/sum) with low library size cells.  
+Plot the number of features per cell (nFeature_RNA/detected) with low number of features.  
+Plot the mitochondrial content (percent_mt/subsets_mito_percent) with high percent mt. 
+
+```{r}
+plot_filtered_qc <- function(sce_list, filter_method){
+    df <- list()
+    
+    for (i in 1:length(sce_list)){
+            
+        df[[i]] <- data.frame(
+            sce_list[[i]]$sample,
+            colnames(sce_list[[i]]),
+            sce_list[[i]]$sum,
+            sce_list[[i]]$detected,
+            sce_list[[i]]$subsets_mito_percent
+        )
+            
+            colnames(df[[i]]) <- c("sample", "barcode", "nCount_RNA", "nFeature_RNA", "percent_mt")
+    }
+        
+        # make concatenated df
+        
+        df_all <- plyr::ldply(df)
+        
+        #plot low library size
+        p1 <- ggplot(df_all, aes(x = sample, y = nCount_RNA))+
+            geom_violin(trim = FALSE, fill = "#440154", width = 1, position = position_dodge(0))+
+            scale_y_log10() + 
+            theme_cowplot()+
+            theme(axis.text.x = element_text(angle = 45, hjust=1))+
+            ggtitle("Library size")
+            
+        # plot low number of features
+        p2 <- ggplot(df_all, aes(x = sample, y = nFeature_RNA))+
+            geom_violin(trim = FALSE, fill = "#440154", width = 1, position = position_dodge(0))+
+            scale_y_log10() + 
+            theme_cowplot()+
+            theme(axis.text.x = element_text(angle = 45, hjust=1))+
+            ggtitle("Number of features")
+        
+        # plot mitochondrial content
+        
+        p3 <- ggplot(df_all, aes(x = sample, y = percent_mt))+
+            geom_violin(trim = FALSE, fill = "#440154", width = 1, position = position_dodge(0))+
+            theme_cowplot()+
+            theme(axis.text.x = element_text(angle = 45, hjust=1))+
+            ggtitle("Mitochondrial reads")
+        
+        
+        #add an overall title and arrange the graphs on one page
+        title <- ggdraw() + draw_label(paste0("QC after ", filter_method, " filtering"), fontface='bold', size = 16)
+        p <- plot_grid(p1, p2, p3, ncol = 1)
+        p <- plot_grid(title, p, ncol=1, rel_heights=c(0.1, 1))
+        
+        p
+        
+}
+```
+
+
+```{r, fig.width=12, fig.height=14}
+if (ini$ambient_filter == TRUE){
+plot_filtered_qc(sce_filter_ambient, "minimal")
+}
+
+```
+
+
+```{r}
+if (ini$ambient_filter == TRUE){
+ggsave(paste0(directory, "/QC_figures/Ambient_QC_Vlnplots.", ini$file_type), device = ini$file_type, width = 12, height = 14, bg = "white")
+}
+```
+
+
+#### Plot the UMI vs features coloured by % MT after ambient filtering 
+
+```{r}
+plot_qc <- function (sce_list, filter_method){
+    plot_list <- list()
+    for (i in 1:length(sce_list)) {
+      
+        plot_list[[i]] <- colData(sce_list[[i]]) %>% 
+            as_tibble() %>%
+            ggplot(aes(x=sum, y=detected)) + 
+            geom_point(aes(colour = subsets_mito_percent)) + 
+            scale_colour_viridis()+
+            #stat_smooth(method=lm) +
+            scale_x_log10() + 
+            scale_y_log10() + 
+            geom_vline(xintercept = 800) +
+            ggtitle(mainExpName(sce_list[[i]])) +
+            theme(plot.title = element_text(size = 12))
+    }
+    
+    
+    title <- ggdraw() + draw_label(paste0("UMIs vs genes after ", filter_method, " filtering"), fontface='bold', size = 24)
+    p <- plot_grid(plotlist = plot_list, label_size = 12, ncol = 3)
+    p <- plot_grid(title, p, ncol=1, rel_heights=c(0.1, 2))
+    
+    p
+}
+
+
+
+```
+
+
+```{r, fig.width=14, fig.height=24}
+if (ini$ambient_filter == TRUE){
+plot_qc(sce_filter_ambient, "ambient")
+}
+```
+
+```{r}
+if (ini$ambient_filter == TRUE){
+ggsave(paste0(directory, "/QC_figures/Ambient_filter_UMIvsgenes.", ini$file_type), 
+    device = ini$file_type, width = 14, height = 24, bg = "white")
+}
+```
+
+#### Plot the relationship between ambient RNA score and total counts
+
+```{r, fig.width=14, fig.height=24}
+if (ini$ambient_filter == TRUE){
+p <- plot_umi_vs_decontX(sce_filter_ambient)
+p
+}
+
+```
+
+```{r}
+if (ini$ambient_filter == TRUE){
+ggsave(paste0(directory, "/QC_figures/Ambient_filter_nUMI_vs_decontX.", ini$file_type), 
+    device = ini$file_type, width = 14, height = 24, bg = "white")
+}
+```
+
+
+## Doublet detection  
+
+Doublets are detected withe scDblFinder which performs well in benchmarking studies. 
+
+https://www.cell.com/cell-systems/fulltext/S2405-4712(20)30459-2  
+
+scDblFinder can be implemented in different ways: 
+ - without clustering  
+ - with its own clustering  
+ - with previously defined clusters 
+ 
+ Here we will perform scDblFinder using clusters defined by Seurat  
+ If no ambient filtering was performed, the same clusering can be used as above. 
+ If ambient RNA has been filtered, the clustering needs to be re-calculated.  
+
+ 
+#### If required, create a Seurat Object from the filtered sce object, perform log normalisation, dim reduction and clustering  
+
+```{r, message = FALSE, warning=FALSE}
+if (ini$ambient_filter == TRUE){
+    print("need to re-cluster")
+    so_filter_ambient <- list()
+
+    for (i in 1:length(sce_filter_ambient)) {
+        print (paste0("Analysing sample", i, ": ",  file = mainExpName(sce_filter_ambient[[i]]), "\n"))
+        # create seurat object
+        so_filter_ambient[[i]] <- CreateSeuratObject(counts = counts(sce_filter_ambient[[i]]),
+                                     assay = "RNA",
+                                     project = mainExpName(sce_filter_ambient[[i]]),
+                                     meta.data = as.data.frame(colData(sce_filter_ambient[[i]])))
+    # Perform normalisation, dim reduction 
+    so_filter_ambient[[i]] <- so_filter_ambient[[i]] %>% 
+           NormalizeData() %>%
+           FindVariableFeatures() %>% 
+           ScaleData() %>%
+           RunPCA()%>%
+           FindNeighbors(dims = 1:20) %>%
+           RunUMAP(dims = 1:20) 
+    
+    # Perform clustering at res = 0.1
+    so_filter_ambient[[i]] <- FindClusters(so_filter_ambient[[i]], resolution = ini$resolution)
+    
+}
+
+}else{
+    print("no reclustering needed")
+}
+```
+
+#### Plot the Seurat clustering on the UMAP
+
+```{r, fig.width=14, fig.height=24}
+if (ini$ambient_filter == TRUE){
+plot_list <- list()
+
+for (i in 1:length(sce_filter_manual)){
+    plot_list[[i]] <- DimPlot(so_filter_ambient[[i]], group.by = "seurat_clusters", label = TRUE)+
+        ggtitle(mainExpName(sce_filter_ambient[[i]]))
+    
+}
+
+title <- ggdraw() + draw_label("Seurat clustering after ambient filter", fontface='bold', size = 24)
+p <- plot_grid(plotlist = plot_list, label_size = 12, ncol = 3)
+p <- plot_grid(title, p, ncol=1, rel_heights=c(0.1, 1))
+
+p
+}
+```
+
+```{r}
+if (ini$ambient_filter == TRUE){
+ggsave(paste0(directory, "/QC_figures/Ambient_Seurat_clusters.", ini$file_type), 
+    device = ini$file_type, width = 10, height = 12, bg = "white")
+}
+```
+
+#### Update the sce object with clustering information
+
+```{r}
+
+if (ini$ambient_filter == TRUE){
+
+for (i in 1:length(sce_filter_ambient)){
+    # put the cluster info in the sce colData
+    colData(sce_filter_ambient[[i]])$seurat_clusters <- so_filter_ambient[[i]][["seurat_clusters"]]
+    # Add the PCA & UMAP dim reductions to the sce object
+    reducedDim(sce_filter_ambient[[i]], type = "pca") <- Embeddings(so_filter_ambient[[i]], reduction = "pca")
+    reducedDim(sce_filter_ambient[[i]], type = "umap") <- Embeddings(so_filter_ambient[[i]], reduction = "umap")
+}
+}
+```
+
+#### Run scDblFinder using the seurat clusters
+
+This algorithm adds several columns to the colData of the sce that can be used for filtering  
+NB If there is a warning: "Some cells in `sce` have an extremely low read counts; note that these could trigger errors and might best be filtered out" it might be best to go back and increase the UMI filter
+
+
+```{r, message = FALSE}
+
+if (ini$ambient_filter == TRUE){
+    sce <- sce_filter_ambient
+    print("Using filtered sce")
+} else {
+    sce <- sce_filter_manual
+    print("Using unfiltered sce")
+}
+
+sce_doublet <- list()
+my_clusters <- list()
+for (i in 1:length(sce)){
+    print(paste0("Analyzing sample ", i, ": ", mainExpName(sce[[i]])))
+    # create a vector of clusters
+    my_clusters[[i]] <- pull(colData(sce[[i]])$seurat_clusters)
+    #run scDblFinder  
+if (ini$scdblfinder_clusters == "seurat_clusters"){
+    sce_doublet[[i]] <- scDblFinder(sce[[i]], clusters = my_clusters[[i]])
+    } else if (ini$scdblfinder_clusters == "no_clusters"){
+        sce_doublet[[i]] <- scDblFinder(sce[[i]])
+    }
+   
+    print(table(colData(sce_doublet[[i]])$scDblFinder.class))
+    
+}
+
+
+
+```
+
+Plot the library size of singlets vs doublets.  
+This demonstrates that we cannot identify doublets on the basis of number of counts alone.
+
+```{r, fig.width=10, fig.height=16}
+plot_list <- list()
+
+for (i in 1:length(sce_doublet)){
+    
+     plot_data <- tibble(
+         library_size = colSums(assay(sce_doublet[[i]], "counts")),
+         doublet_class = sce_doublet[[i]]$scDblFinder.class
+         )
+     
+     plot_list[[i]] <- ggplot(plot_data, aes(doublet_class, library_size)) +
+            geom_jitter(width = 0.1, height = 0, size = 0.1) +
+            scale_y_continuous(trans = "log10") +
+            cowplot::theme_cowplot()+
+            ggtitle(mainExpName(sce_doublet[[i]]))+
+            theme(axis.title.x = element_blank())
+}
+
+
+#add an overall title and arrange the graphs on one page
+title <- ggdraw() + draw_label("Library size of singles vs doublets", fontface='bold', size = 24)
+p <- plot_grid(plotlist = plot_list, label_size = 24, ncol = 3)
+p <- plot_grid(title, p, ncol=1, rel_heights=c(0.1, 1))
+
+p
+```
+
+```{r}
+ggsave(paste0(directory, "/QC_figures/Doublet_library_size.", ini$file_type), 
+    device = ini$file_type, width = 10, height = 16, bg = "white")
+```
+
+### Plot the position of doublets on the UMAP
+
+```{r, fig.width=14, fig.height = 24, message = FALSE, warning=FALSE}
+plot_list <- list()
+for (i in 1:length(sce_doublet)){
+    plot_list[[i]] <- plotReducedDim(sce_doublet[[i]], dimred = "umap", 
+               colour_by = "scDblFinder.class")+
+        scale_colour_viridis_d(begin = 0, end = 0.75)+
+        ggtitle(mainExpName(sce_doublet[[i]]))
+}
+
+title <- ggdraw() + draw_label("Doublet detection", fontface='bold', size = 24)
+p <- plot_grid(plotlist = plot_list, label_size = 12, ncol = 3)
+p <- plot_grid(title, p, ncol=1, rel_heights=c(0.1, 1))
+p
+```
+
+```{r}
+ggsave(paste0(directory, "/QC_figures/Doublet_detection.", ini$file_type), 
+    device = ini$file_type, width = 10, height = 10, bg = "white")
+```
+
+#### Save sce object with ambient RNA and doublets calculated
+Update the name of the objects if ambient RNA was removed  
+
+```{r, warning=FALSE}
+
+if (ini$ambient_filter == FALSE) {
+    save_name <- "ambient_doublet_calculated"
+} else {
+    save_name <- "ambient_filtered_doublet_calculated"
+}
+
+dir.create(paste0(directory, "/RDS_objects.dir/"))
+dir.create(paste0(directory, "/RDS_objects.dir/", save_name, "/"))
+
+for (i in 1:length(sce_doublet)){
+    
+    saveRDS(sce_doublet[[i]], 
+            paste0(directory, "/RDS_objects.dir/", save_name, "/",
+                   mainExpName(sce_doublet[[i]]),
+                   "_", save_name, "_SingleCellExp.rds"))
+    
+}
+
+```
+
+
+#### Filter out doublets  
+
+If required, the doublets can be filtered out of the sce (use doublet_filter = TRUE in the yml file). 
+However it is recommended to leave them in here, and remove them after the more thorough clustering analysis 
+
+Create a new sce with doublets (and possibly ambient RNA) removed  
+
+```{r, echo=FALSE}
+
+if (ini$doublet_filter == TRUE){
+sce_filter_doublet <- list()
+
+for (i in 1:length(sce_doublet)){
+    
+    sce_filter_doublet[[i]] <- sce_doublet[[i]][, 
+                                sce_doublet[[i]]$scDblFinder.class == "singlet"]
+    
+}
+}
+```
+
+#### Plot number of cells following doublet removal
+
+```{r, fig.width=10, fig.height=6}
+if (ini$doublet_filter == TRUE){
+plot_cell_number(sce_filter_doublet, "cells", "doublet")
+}
+```
+
+```{r}
+if (ini$doublet_filter == TRUE){
+ggsave(paste0(directory, "/QC_figures/Doublet_cell_number.", ini$file_type), 
+    device = ini$file_type, width = 10, height = 6, bg = "white")
+}
+```
+
+#### Plot QC metrics following doublet removal
+
+```{r, fig.width=12, fig.height=14}
+if (ini$doublet_filter == TRUE){
+plot_filtered_qc(sce_filter_doublet, filter_method = "doublet")
+}
+```
+
+```{r}
+if (ini$doublet_filter == TRUE){
+ggsave(paste0(directory, "/QC_figures/Doublet_QC_Vlnplots.", ini$file_type), device = ini$file_type, width = 12, height = 14, bg = "white")
+}
+```
+
+#### Plot the UMI vs features coloured by % MT after doublet filtering 
+
+```{r, fig.width=14, fig.height=24}
+
+if (ini$doublet_filter == TRUE){
+    plot_qc(sce_filter_doublet, "doublet")
+    }
+
+```
+
+```{r}
+if (ini$doublet_filter == TRUE){
+ggsave(paste0(directory, "/QC_figures/Doublet_filter_UMIvsgenes.", ini$file_type), 
+    device = ini$file_type, width = 14, height = 24, bg = "white")
+}
+```
+
+#### Plot Novelty after doublet removal
+
+```{r, fig.width = 10, fig.height=16, warning=FALSE}
+if (ini$doublet_filter == TRUE){
+plot_novelty <- function (sce_list, filter_method){
+    plot_list <- list()
+    for (i in 1:length(sce_list)) {
+      
+        plot_list[[i]] <- colData(sce_list[[i]]) %>%
+            as_tibble()%>%
+            ggplot(aes(x=log10GenesPerUMI, fill = sample)) +
+            geom_density() +
+            scale_fill_viridis_d()+
+            ggtitle(mainExpName(sce_list[[i]]))+
+            theme(plot.title = element_text(size = 12))+
+            xlim(0.5, 1)+
+            theme_cowplot()+
+            theme(legend.position="none")
+            
+    }
+    
+    title <- ggdraw() + draw_label(paste0("Novelty after ", filter_method, " filtering"), fontface='bold', size = 24)
+    p <- plot_grid(plotlist = plot_list, label_size = 12, ncol = 3)
+    p <- plot_grid(title, p, ncol=1, rel_heights=c(0.1, 1))
+    
+    p
+}
+
+plot_novelty(sce_filter_doublet, "doublet")
+}
+```
+```{r}
+ggsave(paste0(directory, "/QC_figures/Doublet_filter_Novelty.", ini$file_type), 
+    device = ini$file_type, width = 10, height = 16, bg = "white")
+```
+
+### QC summary plots 
+
+Plot side by side for each sample
+- Vln plots for nCounts, nFeatures, % mt
+- Seurat clustering
+- % mt on UMAP
+- decontX on UMAP
+- decontX Vln
+- doublet on UMAP
+
+```{r, fig.width=14, fig.height=16, message = FALSE}
+if (ini$doublet_filter == FALSE){
+    sce <- sce_doublet
+} else{
+    sce <- sce_filter_doublet
+}
+
+plot_list <- list()
+for (i in 1:length (sce)){
+    p_list <- list()
+
+    # violin plot of nUMI
+    p_list[[1]] <- plotColData(sce[[i]], x = "sample", y = "sum", colour = "sample")+
+        #add a title
+        ggtitle("Number of counts") +
+        theme(plot.title = element_text(size = 12),
+              axis.title.x = element_blank(),
+              legend.position = "none")+
+        scale_colour_viridis_d()
+
+    # violin plot of nFeatures
+    p_list[[2]] <- plotColData(sce[[i]], x = "sample", y = "detected", colour = "sample")+
+        #add a title
+        ggtitle("Number of features") +
+        theme(plot.title = element_text(size = 12),
+              axis.title.x = element_blank(),
+              legend.position = "none")+
+        scale_colour_viridis_d()
+     
+
+    # violin plot of % mitochondrial reads
+    p_list[[3]] <- plotColData(sce[[i]], x = "sample", y = "subsets_mito_percent", colour = "sample")+
+        #add a title
+        ggtitle("% mitochondrial reads") +
+        theme(plot.title = element_text(size = 12),
+              axis.title.x = element_blank(),
+              legend.position = "none")+
+        scale_colour_viridis_d()
+    
+    # UMI vs features coloured by % MT
+    p_list[[4]] <- colData(sce[[i]]) %>% 
+            as_tibble() %>%
+            ggplot(aes(x=sum, y=detected)) + 
+            geom_point(aes(colour = subsets_mito_percent)) + 
+            scale_colour_viridis()+
+            #stat_smooth(method=lm) +
+            scale_x_log10() + 
+            scale_y_log10() + 
+            geom_vline(xintercept = 800) +
+            ggtitle("UMI vs features") +
+            theme(plot.title = element_text(size = 12))
+    
+    # Novelty
+    p_list[[5]] <- colData(sce[[i]]) %>%
+            as_tibble()%>%
+            ggplot(aes(x=log10GenesPerUMI, fill = sample)) +
+            geom_density() +
+            scale_fill_viridis_d()+
+            ggtitle("Novelty")+
+            theme(plot.title = element_text(size = 12))+
+            xlim(0.5, 1)+
+            theme_cowplot()+
+            theme(legend.position="none")
+    
+    # Seurat clustering 
+    p_list[[6]] <- DimPlot(so_filter_manual[[i]], group.by = "seurat_clusters", label = TRUE)+
+        ggtitle("Seurat clustering")
+    
+    # % mt on UMAP
+    p_list[[7]]  <- FeaturePlot(so_filter_manual[[i]], features = "subsets_mito_percent", reduction = "umap")+
+        scale_colour_gradientn(colours = viridis(256, option = "D"), name = "subsets_mito_percent")+
+        ggtitle("% mitochondrial content")
+    
+    # DecontX score
+    p_list[[8]] <- plotReducedDim(sce[[i]], dimred = dim_reduction, 
+               colour_by = "decontX_contamination")+
+        ggtitle("DeontX contamination")
+    
+
+    # decontX distribution
+    p_list[[9]] <- plotColData(sce[[i]], x = "sample", y = "decontX_contamination", 
+                               colour = "sample")+
+        scale_colour_viridis_d()+
+        theme(legend.position = "none")+
+        ggtitle("DecontX distribution")
+    
+        # Doublet detection
+    p_list[[10]] <- plotReducedDim(sce[[i]], dimred = "umap", 
+               colour_by = "scDblFinder.class")+
+        scale_colour_viridis_d(begin = 0, end = 0.75)+
+        ggtitle("Doublet detection")
+    
+    
+    title <- ggdraw() + 
+        draw_label(paste0(mainExpName(sce[[i]]), ": ", ncol(sce[[i]]), " cells"), 
+                          fontface='bold', size = 24)
+    p1 <-  plot_grid(plotlist = p_list[1:3], ncol =3)
+    p2 <-  plot_grid(plotlist = p_list[4:5], ncol = 2)
+    p3 <-  plot_grid(plotlist = p_list[6:7], ncol = 2)
+    p4 <-  plot_grid(plotlist = p_list[8:10], ncol = 3)
+    plot_list[[i]] <- plot_grid(title, p1, p2, p3, p4, ncol=1, rel_heights=c(0.1, 1, 1, 1, 1))
+    
+}
+
+```
+
+```{r, warning=FALSE}
+dir.create(paste0(directory, "/QC_figures/QC_summary_per_sample/"))
+for (i in 1:length(plot_list)){
+        ggsave(paste0(directory, "/QC_figures/QC_summary_per_sample/",
+                      mainExpName(sce_doublet[[i]]), 
+                      "_qc_summary.", ini$file_type), 
+               plot = plot_list[[i]],
+            device = ini$file_type, width = 14, height = 16, bg = "white")
+    }
+
+
+```
+
+
+
+
+#### Save the filtered sce objects
+Update the names of the objects according to whether ambient filtering was also performed.  
+
+```{r, warning=FALSE}
+if (ini$doublet_filter == TRUE){
+    if (ini$ambient_filter == TRUE){
+        save_name <- "ambient_doublet_filter"
+    } else {
+        save_name <- "ambient_calc_doublet_filter"
+    }
+
+    dir.create(paste0(directory, "/RDS_objects.dir/"))
+    dir.create(paste0(directory, "/RDS_objects.dir/", save_name, "/"))
+    
+    for (i in 1:length(sce_filter_doublet)){
+        
+        saveRDS(sce_filter_doublet[[i]], 
+                paste0(directory, "/RDS_objects.dir/", save_name, "/", 
+                       mainExpName(sce_filter_doublet[[i]]),
+                       "_", save_name, "_SingleCellExp.rds"))
+        
+    }
+}
+
+```
+

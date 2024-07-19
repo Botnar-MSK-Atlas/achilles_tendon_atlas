@@ -1,0 +1,705 @@
+---
+title: "Achilles Integration"
+author: "C.Paul/ Carla Cohen"
+date: "08/03/2023"
+output: html_document
+---
+
+The aim of this script is to perform integration of Achilles data. 
+
+Working directory is 
+
+/project/tendonhca/shared/chromium/analysis/20230006_achilles
+
+## Set up
+
+Set up and read in the yml file. 
+
+```{r setup, load packages, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+library(Seurat)
+library(tidyverse)
+library(harmony)
+library(cowplot)
+library(clustree)
+library(sctransform)
+library(yaml)
+library(scSHC)
+library(viridis)
+library(lisi)
+library(glmGamPoi)
+
+# make a new output folder for each run, with the date & time in the directory name
+date <- Sys.Date() %>% str_replace_all("-", "")
+time <- format(Sys.time(), "%X") %>% str_replace_all(":", "-") %>%
+    str_sub(1, 5)
+directory <- paste0(date,"_", time, "_Integration.dir")
+dir.create(directory, showWarnings = FALSE)
+
+#need to update yml file as appropriate
+ini <- read_yaml("integration.yml")
+
+```
+
+Print the parameters used
+```{r}
+ini
+```
+
+
+#### Read in Seurat objects
+
+
+```{r, read in objects}
+
+#make a list of sample files
+if (ini$doublet_filter == TRUE){
+    doublet_name <- "doublet_filtered"
+    
+} else if (ini$doublet_filter == FALSE){
+    doublet_name <- "doublets_calc"
+    
+}
+
+file_list <- list.files(paste0(ini$doublet_date, "_Doublet.dir/RDS_objects.dir/", doublet_name, "/Seurat/"), 
+                                 pattern="_SeuratObject.rds")
+
+names(file_list) <- str_replace(file_list, paste0("_", doublet_name, "_SeuratObject.rds"), "")
+
+
+```
+
+Remove any samples that have failed QC.  
+This may be updated at a later date, using all samples for now.  
+
+```{r}
+#file_list <- file_list[names(file_list) %in% "MSK0785-Ach-MB" == FALSE]
+#file_list <- file_list[names(file_list) %in% "MSK1250-Ach-MB2" == FALSE]
+
+file_list
+```
+Read in the data
+
+```{r}
+
+#Make a new list for the seurat objects
+so <- list()
+
+# generate a list of Seurat objects
+for (i in 1:length(file_list)){
+    
+    so[[i]] <- readRDS(paste0(ini$doublet_date, "_Doublet.dir/RDS_objects.dir/", doublet_name, "/Seurat/", file_list[i]))
+    
+}
+
+names(so) <- names(file_list)
+
+```
+
+
+#### Parameters
+Extract some names that depend on the normalisation method performed
+
+```{r}
+
+if (ini$normalisation_method == "SCTransform"){
+        
+        # save the reduction names
+        pca_name <- "sct.pca"
+        umap_name <- "sct.umap"
+        
+        # save the resolution prefix
+        res_prefix <- "SCT_snn_res."
+        
+    } else if (ini$normalisation_method == "SCTransformv2"){
+    
+    # save the reduction names
+     pca_name <- "sctv2.pca"
+     umap_name <- "sctv2.umap"
+     
+     # save the resolution prefix
+     res_prefix <- "SCTv2_snn_res."
+    
+    } else if (ini$normalisation_method == "LogNormalise"){
+    
+     # save the reduction names
+     pca_name <- "lognorm.pca"
+     umap_name <- "lognorm.umap"
+     
+     # save the resolution prefix
+     res_prefix <- "RNA_snn_res."
+     
+    # Some prefixes change if decontX is used for normalisation
+    if (ini$normalisation_assay == "decontXcounts"){
+        res_prefix <- "decontXcounts_snn_res."
+    }
+    if (ini$normalisation_assay == "soupX"){
+        res_prefix <- "soupX_snn_res."
+    }
+        
+}
+ 
+
+print(ini$normalisation_method) 
+print(pca_name)
+print(umap_name)
+print(res_prefix)
+
+```
+
+
+## Merging
+Merge the Seurat objects
+
+```{r merge all datasets}
+
+#perform the merge of so1 with all other sos in the list and add cell IDs
+so.merge <- merge(so[[1]], y = so[-c(1)], add.cell.ids = names(file_list))
+
+```
+
+Optional: Remove ambient RNA above a given threshold.
+For now I have set this to FALSE.
+
+
+```{r}
+if (ini$ambient_filter == TRUE){
+    so.merge <- subset(so.merge, decontX_contamination < ini$ambient_threshold)
+}
+
+print("Dimensions of merged object:")
+dim(so.merge)
+```
+
+
+
+#### Perform Normalisation on the merged object
+
+Default method is SCTransform, can also update to logNormalise or SCTransform v2 using the yml file. 
+Perform the downstream steps with default parameters and using 30 PCs (this will be optimised later)
+
+
+```{r, message=FALSE, warning = FALSE}
+
+DefaultAssay(so.merge) <- ini$normalisation_assay
+
+if (ini$normalisation_method == "SCTransform"){
+        
+        so.merge <- SCTransform(so.merge,
+                           method = "glmGamPoi", #added to increase efficiency
+                           #vars.to.regress = "percent_mt", 
+                           verbose = FALSE) %>% 
+        RunPCA(reduction.name = "sct.pca") %>% 
+        FindNeighbors(dims = 1:ini$n_dims, reduction = "sct.pca") %>%
+        RunUMAP(dims = 1:ini$n_dims, reduction = "sct.pca", reduction.name = "sct.umap") 
+    
+        # gene names in SCT assay will be the same as RNA assay
+        
+} else if (ini$normalisation_method == "SCTransformv2"){
+    
+    so.merge <- SCTransform(so.merge,
+                           method = "glmGamPoi", #added to increase efficiency
+                           #vars.to.regress = "percent_mt", 
+                           vst.flavor = "v2", 
+                           new.assay.name = "SCTv2", # using SCTransform v2
+                           verbose = FALSE) %>% 
+        RunPCA(reduction.name = "sctv2.pca") %>% 
+        FindNeighbors(dims = 1:ini$n_dims, reduction = "sctv2.pca") %>%
+        RunUMAP(dims = 1:ini$n_dims, reduction = "sctv2.pca", reduction.name = "sctv2.umap") 
+    
+      # # gene names in SCTv2 assay will be the same as RNA assay
+        
+} else if (ini$normalisation_method == "LogNormalise"){
+    
+        so.merge <- so.merge %>% 
+           NormalizeData() %>%
+           FindVariableFeatures(nfeatures = ini$nfeatures) %>% 
+           ScaleData() %>%
+           RunPCA(reduction.name = "lognorm.pca")%>%
+           FindNeighbors(dims = 1:ini$n_dims, reduction = "lognorm.pca") %>%
+           RunUMAP(dims = 1:ini$n_dims, reduction = "lognorm.pca", reduction.name = "lognorm.umap") 
+        
+    }
+    
+  
+```
+#### QC plots on merged object
+
+Elbow Plot
+
+```{r}
+p <- ElbowPlot(so.merge, reduction = pca_name, ndims = 50)
+p
+```
+
+```{r, include=FALSE}
+#save the plot
+dir.create(paste0(directory, "/Integration_Figures.dir/"))
+ggsave(paste0(directory, "/Integration_Figures.dir/ElbowPlot.", ini$file_type), 
+       p, device = ini$file_format, width = 6, height = 4, bg = "white")
+
+
+```
+
+
+## Integration using Harmony
+
+Perform harmony integration
+
+Trying to fix an error running on the cluster. Set "orig.ident" to be a factor
+```{r}
+so.merge$orig.ident <- as.factor(so.merge$orig.ident)
+
+```
+
+Number of dims can be set here. 
+NB for achilles data using 40, 50 dims throws a warning: Quick-TRANSfer stage steps exceeded maximum (= 3862450)
+Will use fewer dims.
+
+```{r}
+so.harmony <- RunHarmony(so.merge, 
+                         reduction.use = pca_name, 
+                         group.by.vars = ini$group_by_vars, 
+                         plot_convergence = TRUE, 
+                         dims.use = 1:ini$harmony_dims, 
+                         kmeans_init_nstart=20, kmeans_init_iter_max=100)
+```
+
+Run UMAP, Find Neighbours and Find Clusters on the integrated object. 
+Calculate clustering for a range of resolutions from 0.1 to 1. 
+
+```{r}
+so.harmony <- so.harmony %>% 
+    RunUMAP(reduction = "harmony", dims = 1:ini$n_dims, reduction.name = "harmony.umap") %>%
+    FindNeighbors(reduction = "harmony", dims = 1:ini$n_dims) %>% 
+    FindClusters(resolution = seq(0.1, 1, 0.1))
+
+```
+
+#### QC to check how well the integration has worked
+
+For additional QC run Integration-QC-achilles.Rmd. 
+
+Compare Elbow plot from the merged vs integrated data
+
+```{r, fig.width=10, fig.height=4}
+
+p1 <- ElbowPlot(so.harmony, ndims = 50, reduction = pca_name) + ggtitle ("Elbow plot merged")
+p2 <- ElbowPlot(so.harmony, ndims = 50, reduction = "harmony") + ggtitle ("Elbow plot integrated")
+p <- plot_grid(p1,p2)
+p
+```
+
+```{r}
+ggsave(paste0(directory, "/Integration_Figures.dir/Elbowplot_merged_vs_integrated.", ini$file_type), 
+       p, device = ini$file_format, width = 10, height = 4, bg = "white")
+```
+
+Which genes are driving each PC?
+
+```{r, fig.width=10, fig.height=10}
+DimHeatmap(so.harmony, dims = 1:4, cells = 500, balanced = TRUE, reduction = pca_name, ncol =2)
+
+```
+
+
+```{r}
+#not working as the DimHeatmap plot does not assign to the variable
+#ggsave(paste0(directory, "/Integration_Figures.dir/PCA_DimHeatmap.", ini$file_type), 
+#       p, device = ini$file_format, width = 10, height = 10, bg = "white")
+```
+
+
+Plot the clustree to determine the most appropriate resolution to use
+
+```{r, fig.height= 10, fig.width=10}
+
+p <- clustree(so.harmony, prefix = res_prefix, 
+              node_colour = "sc3_stability", 
+              #layout = "sugiyama"
+              ) + 
+        ggtitle("Clustree")
+    
+p
+
+```
+
+
+```{r, include=FALSE}
+#save the plot
+ggsave(paste0(directory, "/Integration_Figures.dir/Clustree_plot.", ini$file_type), 
+       p, device = ini$file_format, width = 10, height = 10, bg = "white")
+
+
+```
+
+Plot UMAPs at multiple clustering resolutions
+
+```{r, fig.width=10, fig.height=20}
+
+resolutionList <- grep(res_prefix, colnames(so.harmony@meta.data), value = TRUE)
+
+plot_list <- list()
+
+for (resolution in resolutionList){
+      plot_list [[resolution]] <- DimPlot(object = so.harmony, label = TRUE, reduction = "harmony.umap", group.by = resolution, shuffle = TRUE)+
+          #scale_colour_viridis_d()
+          theme(legend.position="none")
+      }
+
+title <- ggdraw() + draw_label("UMAPs of clustering resolutions 0.1-1", fontface='bold', size = 24)
+p <- plot_grid(plotlist = plot_list, ncol = 2) 
+p <- plot_grid(title, p, ncol=1, rel_heights=c(0.05, 1))
+
+
+p
+
+```
+
+```{r, include=FALSE}
+#save the plot
+ggsave(paste0(directory, "/Integration_Figures.dir/UMAP_compare_resolutions.", ini$file_type), 
+       p, device = ini$file_format, width = 10, height = 20, bg = "white")
+
+
+```
+
+Select a resolution and set seurat clusters to that resolution 
+
+```{r} 
+
+so.harmony[["seurat_clusters"]] <- so.harmony[[paste0(res_prefix, ini$integrated_resolution)]]
+Idents(so.harmony) <- so.harmony[[paste0(res_prefix, ini$integrated_resolution)]]
+
+```
+
+
+## Save objects 
+Save merged & integrated Seurat objects
+```{r}
+dir.create(paste0(directory, "/RDS_objects.dir/"))
+
+saveRDS(so.merge, paste0(directory, "/RDS_objects.dir/Achilles_merge_SeuratObject.rds"))
+saveRDS(so.harmony, paste0(directory, "/RDS_objects.dir/Achilles_harmony_SeuratObject.rds"))
+
+```
+
+#Calculate lisi score/other metrics
+
+Compute LISI : https://github.com/immunogenomics/LISI 
+
+Compute integration LISI and cell-type LISI for merged and integrated objects
+iLISI - effective number of datasets in a neighbourhood - want this to equal number of batches
+cLISI - want this to equal 1 - number of cell types in neighbourhood i.e. different cell types should form distinct clusters
+So when comparing merged and integrated data, iLISI should go up and cLISI should go down. 
+
+
+```{r}
+
+iLISI_merged <- lisi::compute_lisi(Embeddings(so.merge, reduction = umap_name), 
+                               so.merge[[]], "orig.ident")
+
+cat("Merged - iLISI mean and range")
+cat("\n")
+iLISI_merged_mean <- mean(iLISI_merged$orig.ident)   # 2.63 (12 would be perfect if equal number of cells in each dataset)
+iLISI_merged_mean
+range(iLISI_merged$orig.ident)
+
+# For cLISI, need to give the clusters not the sample name
+cLISI_clusters <- paste0(ini$doublets_assay, "_snn_res.", ini$resolution)
+cLISI_clusters
+cLISI_merged <- lisi::compute_lisi(Embeddings(so.merge, reduction = umap_name), 
+                               so.merge[[]],
+                               label_colnames = cLISI_clusters)
+cat("Merged - cLISI mean and range")
+cat("\n")
+LISI_column_name <- colnames(cLISI_merged)
+cLISI_merged_mean <- mean(cLISI_merged %>% pull(LISI_column_name))   # result would be 1 if each cluster is really unique
+cLISI_merged_mean
+range(cLISI_merged %>% pull(LISI_column_name))
+
+iLISI_integrated <- lisi::compute_lisi(Embeddings(so.harmony, reduction = "harmony"), 
+                               so.harmony[[]], "orig.ident")
+
+cat("Integrated - iLISI mean and range")
+cat("\n")
+iLISI_integrated_mean <- mean(iLISI_integrated$orig.ident)   # 2.63 (12 would be perfect if equal number of cells in each dataset)
+iLISI_integrated_mean
+range(iLISI_integrated$orig.ident)
+
+# For cLISI, need to give the clusters not the sample name
+cLISI_integrated <- lisi::compute_lisi(Embeddings(so.harmony, reduction = "harmony"), 
+                               so.harmony[[]],
+                               "seurat_clusters")
+cat("Integrated - cLISI mean and range")
+cat("\n")
+cLISI_integrated_mean <- mean(cLISI_integrated$seurat_clusters)   # result would be 1 if each cluster is really unique
+cLISI_integrated_mean
+range(cLISI_integrated$seurat_clusters)
+
+```
+
+Plot the LISI scores
+
+```{r}
+# prepare the data by ranking the outputs
+iLISI_merged <- cbind(iLISI_merged, rank(iLISI_merged$orig.ident))
+cLISI_merged <- cbind(cLISI_merged, rank(LISI_column_name))
+colnames(cLISI_merged) <- c("cluster_res", "rank")
+iLISI_integrated <- cbind(iLISI_integrated, rank(iLISI_integrated$orig.ident))
+cLISI_integrated <- cbind(cLISI_integrated, rank(cLISI_integrated$seurat_clusters))
+```
+
+```{r, fig.width=10, fig.height=8}
+
+
+p1 <- ggplot(data = iLISI_merged, aes(x = orig.ident, y = rank(iLISI_merged$orig.ident))) +
+          geom_point() +
+          labs(title = paste0("Merged iLISI score: mean = ", format(iLISI_merged_mean, digits = 4)),
+               x = "iLISI score",
+               y = "Rank")+
+    #xlim(c(0, 8))+
+    theme_cowplot()
+
+p2 <- ggplot(data = cLISI_merged, aes(x = cluster_res, y = rank)) +
+          geom_point() +
+          labs(title = paste0("Merged cLISI score: mean = ", format(cLISI_merged_mean, digits = 4)),
+               x = "cLISI score",
+               y = "Rank")+
+    #xlim(c(0, 8))+
+    theme_cowplot()
+
+p3 <- ggplot(data = iLISI_integrated, aes(x = orig.ident, y = rank(iLISI_integrated$orig.ident))) +
+          geom_point() +
+          labs(title = paste0("Integrated iLISI score: mean = ", format(iLISI_integrated_mean, digits = 4)),
+               x = "iLISI score",
+               y = "Rank")+
+    #xlim(c(0, 8))+
+    theme_cowplot()
+
+p4 <- ggplot(data = cLISI_integrated, aes(x = seurat_clusters, y = rank(cLISI_integrated$seurat_clusters))) +
+          geom_point() +
+          labs(title = paste0("Integrated cLISI score: mean = ", format(cLISI_integrated_mean, digits = 4)),
+               x = "cLISI score",
+               y = "Rank")+
+    #xlim(c(0, 8))+
+    theme_cowplot()
+
+p <- plot_grid(p1, p2, p3, p4)
+p
+
+
+```
+
+```{r}
+ggsave(paste0(directory, "/Integration_Figures.dir/LISI_results.", ini$file_type), 
+       p, device = ini$file_format, width = 12, height = 8, bg = "white")
+
+
+```
+
+#### Clustering stability
+
+Use sc-SHC (https://www.nature.com/articles/s41592-023-01933-9) to analyse the validity of the Seurat clusters at resolution 0.2
+
+Not included here as takes a very long time to run. 
+Run as a separate job script. 
+
+See sc-SHC-Achilles.Rmd
+(Also better to run after annotation has been done)
+
+### Visualise QC metrics 
+
+```{r, message = FALSE, fig.width=10, fig.height=15}
+# change the order of the levels of the idents (so it's not 0, 1, 10, 2....)
+#unique(so.harmony[["decontXcounts_snn_res.0.4"]])
+#Idents(so.harmony) <- factor(Idents(so.harmony), levels = c(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12))
+
+p1 <- VlnPlot(so.harmony, features = "sum", assay = "RNA", pt.size = 0)+
+    scale_y_log10() +
+    scale_fill_viridis_d()+
+    theme(legend.position="none")+
+    theme_cowplot()+
+    ggtitle("nCounts")
+
+p2 <- VlnPlot(so.harmony, features = "detected", assay = "RNA", pt.size = 0)+
+    scale_y_log10() +
+    scale_fill_viridis_d()+
+    theme(legend.position="none")+
+    theme_cowplot()+
+    ggtitle("nFeatures")
+
+p3 <- VlnPlot(so.harmony, features = "subsets_mito_percent", assay = "RNA", pt.size = 0)+
+    scale_fill_viridis_d()+
+    theme(legend.position="none")+
+    theme_cowplot()+
+    ggtitle("Percent mitochondrial reads")
+
+p <- plot_grid(p1, p2, p3, ncol = 1)
+p
+
+```
+```{r, include=FALSE}
+#save the plot
+ggsave(paste0(directory, "/Integration_Figures.dir/QC_metrics_across_clusters.", ini$file_type), 
+       p, device = ini$file_type, width = 10, height = 15, bg = "white")
+
+
+```
+
+
+Plot QC metrics on UMAP
+
+```{r, fig.height=6, fig.width=16, message = FALSE}
+p1<- FeaturePlot(so.harmony, features = "sum", reduction = "harmony.umap")+ggtitle ("nCounts")+
+    scale_color_continuous(type = "viridis", limits = c(0,10000))
+p2<- FeaturePlot(so.harmony, features = "detected", reduction = "harmony.umap") + ggtitle("nFeatures")+
+    scale_color_continuous(type = "viridis", limits = c(0,5000))
+p3<- FeaturePlot(so.harmony, features = "subsets_mito_percent", reduction = "harmony.umap") + ggtitle ("Percent mito reads")+
+    scale_color_continuous(type = "viridis")
+p <- plot_grid(p1, p2, p3, nrow = 1)
+p
+
+```
+
+```{r, include=FALSE}
+#save the plot
+ggsave(paste0(directory, "/Integration_Figures.dir/UMAP_harmony_QC_metrics.", ini$file_type), 
+       p, device = ini$file_type, width = 10, height = 3, bg = "white")
+
+
+```
+
+Plot ambient RNA and doublets on UMAP
+
+```{r, fig.height=6, fig.width=16, message = FALSE}
+p1<- FeaturePlot(so.harmony, features = "decontX_contamination", reduction = "harmony.umap")+
+    scale_colour_gradientn(colours = viridis(256, option = "D"), name = "decontX score")+
+        ggtitle("decontX_contamination")
+
+p2<- DimPlot(so.harmony, reduction = "harmony.umap", group.by = "scDblFinder.class", shuffle = TRUE) +
+    scale_colour_viridis_d(begin = 0, end = 0.75)+
+        ggtitle("doublet status")
+p <- plot_grid(p1, p2, nrow = 1)
+p
+
+
+
+
+```
+
+```{r, include=FALSE}
+#save the plot
+ggsave(paste0(directory, "/Integration_Figures.dir/UMAP_harmony_decontX_doublets.", ini$file_type), 
+       p, device = ini$file_type, width = 10, height = 5, bg = "white")
+
+
+```
+
+
+## Integration visualisation
+Visualization of merged and integrated data via UMAP split by sample
+
+```{r, fig.width = 8, fig.height=12}
+p1 <- DimPlot(so.merge, reduction = umap_name, pt.size = .1, group.by = "orig.ident", shuffle = TRUE) +
+    scale_colour_viridis_d()+
+    ggtitle("Merged")
+p2 <- DimPlot(so.harmony, reduction = "harmony.umap", pt.size = .1, group.by = "orig.ident", shuffle = TRUE)+ 
+    scale_colour_viridis_d()+
+    ggtitle ("Harmony Integration")
+p <- plot_grid (p1, p2, ncol = 1)
+p
+
+```
+
+```{r, include=FALSE}
+#save the plot
+ggsave(paste0(directory, "/Integration_Figures.dir/UMAP_merged_vs_harmony.", ini$file_type), 
+       p, device = ini$file_format, width = 8, height = 12, bg = "white")
+
+
+```
+
+Visualization of integrated data via UMAP at chosen resolution
+
+```{r, fig.height=7, fig.width=7}
+p <- DimPlot(so.harmony, reduction = "harmony.umap", pt.size = .1)+ 
+    scale_colour_viridis_d()+
+    ggtitle (paste0("Harmony Integration Clustering at resolution = ", ini$integrated_resolution))
+p
+
+
+```
+
+```{r, include=FALSE}
+#save the plot
+ggsave(paste0(directory, "/Integration_Figures.dir/UMAP_harmony_clustering_res_", ini$integrated_resolution, ".", ini$file_type), 
+       p, device = ini$file_format, width = 10, height = 10, bg = "white")
+
+
+```
+
+
+
+UMAP of integrated data by sample with each sample on a separate plot
+
+```{r, fig.width=14, fig.height=24}
+
+p <- DimPlot(so.harmony, reduction = "harmony.umap", split.by = "orig.ident", ncol = 3)+
+    scale_colour_viridis_d()+
+    theme(panel.background = element_rect(colour = "black", linewidth = 1))
+
+p
+```
+
+```{r, include=FALSE}
+#save the plot
+ggsave(paste0(directory, "/Integration_Figures.dir/UMAP_harmony_by_sample.", ini$file_type), 
+       p, device = ini$file_format, width = 14, height = 20, bg = "white")
+
+
+```
+
+
+UMAP of integrated data by patient with each patient on a separate plot
+
+```{r, fig.width=14, fig.height=10}
+
+p <- DimPlot(so.harmony, reduction = "harmony.umap", split.by = "patient", ncol = 3)+
+    scale_colour_viridis_d()+
+    theme(panel.background = element_rect(colour = "black", linewidth = 1))
+
+p
+```
+
+
+
+```{r, include=FALSE}
+#save the plot
+ggsave(paste0(directory, "/Integration_Figures.dir/UMAP_harmony_by_patient.", ini$file_type), 
+       p, device = ini$file_format, width = 14, height = 10, bg = "white")
+
+
+```
+Plot UMAP of microanatomical site on separate plots
+
+
+```{r, fig.width = 10, fig.height = 10, message = FALSE}
+
+p <- DimPlot(so.harmony, reduction = "harmony.umap", pt.size = .1, split.by = "microanatomical_site", ncol = 2)+
+    scale_colour_viridis_d()+
+    theme(panel.background = element_rect(colour = "black", linewidth = 1))
+    ggtitle("microanatomical site")
+p
+```
+
+```{r, include=FALSE}
+#save the plot
+ggsave(paste0(directory, "/Integration_Figures.dir/UMAP_harmony_by_microanatomy.", ini$file_type), 
+       p, device = ini$file_type, width = 10, height = 10, bg = "white")
+
+
+```
+
+

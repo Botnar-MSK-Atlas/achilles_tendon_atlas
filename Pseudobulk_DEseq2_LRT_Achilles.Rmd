@@ -1,0 +1,900 @@
+---
+title: "Pseuobulk_DEseq2_LRT_Achilles"
+author: "Carla Cohen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+# Pseudobulk and differential expression
+
+The aim of this script is to perform pseudobulk per sample, and then perform differential expression across microanatomy.  
+
+### Workflow:
+
+1. Perform pseudobulk for each cell type
+
+2. Use DEseq2 to analyse expression using LRT test
+- Check if there are enough replicates to run DEseq2
+- Run DEseq2 on cell types with n>=3
+- Save results
+
+3. Visualise outputs
+- Data Pre-QC (PCA, heatmaps, dispersions)
+- Results (cluster plots, volcano plots, heatmaps)
+- Data Post-QC (PCA, heatmap)
+
+### Set up
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(Seurat)
+library(tidyverse)
+library(DESeq2)
+library(DEGreport)
+library(EnhancedVolcano)
+library(cowplot)
+library(pheatmap)
+library(yaml)
+
+# make a new output folder for each run, with the date & time in the directory name
+date <- Sys.Date() %>% str_replace_all("-", "")
+time <- format(Sys.time(), "%X") %>% str_replace_all(":", "-") %>%
+    str_sub(1, 5)
+directory <- paste0(date,"_", time, "_Pseudobulk.dir")
+dir.create(directory, showWarnings = FALSE)
+dir.create(paste0(directory, "/DEseq2_results/"))
+dir.create(paste0(directory, "/Cluster_results/"))
+dir.create(paste0(directory, "/Pre-heatmap/"))
+dir.create(paste0(directory, "/Post-heatmap/"))
+dir.create(paste0(directory, "/Pre-PCA/"))
+dir.create(paste0(directory, "/Post-PCA/"))
+dir.create(paste0(directory, "/Dispersions/"))
+dir.create(paste0(directory, "/Correlation-heatmap/"))
+dir.create(paste0(directory, "/Volcano_plots/"))
+dir.create(paste0(directory, "/Cluster_plots/"))
+
+# read the yaml file
+ini <- read_yaml("deseq2_LRT.yml")
+
+# microanatomy colours
+Okabe_Ito <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#000000")
+ma.cols <-  c(Enth = Okabe_Ito[3], MB = Okabe_Ito[5], MTJ = Okabe_Ito[6], muscle = Okabe_Ito[7])
+```
+
+Print the parameters used
+
+```{r}
+ini
+```
+
+
+Read in Seurat object
+
+```{r}
+so.achilles <- readRDS("/project/tendonhca/shared/chromium/analysis/20231006_achilles/20240119_11-02_Fine_annotation.dir/RDS_objects.dir/Achilles_integrated_annotated.rds")
+so.achilles
+```
+Simplify cell names
+
+```{r}
+df <- data.frame("cell_annotation_update" = unique( so.achilles$cell_annotation_update))
+df$cell_annotation <- c("Adipocyte", 
+                        "Mural", 
+                        "ITGA10Fibroblasts", 
+                        "VEC", 
+                        "NEGR1Fibroblasts", 
+                        "Macrophages", 
+                        "Tcells", 
+                        "LEC", 
+                        "Slowtwitch", 
+                        "Nerve", 
+                        "Fasttwitch", 
+                        "Granulocytes", 
+                        "Satellite", 
+                        "Transitionalmuscle", 
+                        "Bcells")
+df
+
+cell_annotation <- left_join(so.achilles[[]], df)
+rownames(cell_annotation) <- colnames(so.achilles)
+cell_annotation <- cell_annotation %>% select("cell_annotation")
+
+so.achilles <- AddMetaData(so.achilles, metadata = cell_annotation, col.name = "cell_annotation")
+```
+If required, subset the seurat object to remove the muscle samples
+
+```{r}
+if (ini$subset_muscle == TRUE){
+    so.achilles <- subset(so.achilles, subset = microanatomical_site != "muscle")
+}
+so.achilles
+
+```
+
+Plot UMAP for reference
+
+```{r, fig.width=8, fig.height=10}
+# visualise the distribution of clusters based on sample (patient) 
+cell_plot <- DimPlot(so.achilles, reduction = 'harmony.umap', group.by = 'cell_annotation', label = TRUE)
+cond_plot <- DimPlot(so.achilles, reduction = 'harmony.umap', group.by = 'sample', shuffle = TRUE)
+plot_grid(cell_plot, cond_plot, ncol = 1)
+```
+
+## Pseudobulk
+
+We want to pseudobulk using sample and microanatomy information. We already have this information in the "sample" column in the format MSK0785-Ach-Enth. 
+
+[from Jolet/Marie]
+```{r}
+
+# 1. counts matrix - sample level
+
+#Aggregation of counts to sample level per cell type
+cts <- AggregateExpression(so.achilles, 
+                    group.by = c("cell_annotation", "sample"),
+                    assays = 'soupX',
+                    slot = "counts",
+                    return.seurat = FALSE)
+
+# transpose & convert to df
+cts.t <- as.data.frame(t(cts$soupX))
+
+# get values where to split
+splitRows <- gsub('_.*', '', rownames(cts.t))
+
+# split data.frame into a list of df for each cell type
+cts.split <- split.data.frame(cts.t,
+                 f = factor(splitRows), 
+                 drop = TRUE)
+
+# fix colnames and transpose function
+rownames_change <- function(x){
+  rownames(x) <- gsub('.*_(.*)', '\\1', rownames(x))
+  return(x)
+}
+
+# create a list of df for each cell type
+counts_list <- list()
+for (i in 1:length(names(cts.split))){
+    counts_list[[i]] <- t(rownames_change(cts.split[[i]]))
+}
+
+names(counts_list) <- names(cts.split)
+```
+
+### Generate sample level metadata 
+
+NB the order of the sample names needs to be the same in the colData$patient column and the colnames of the counts matrix. 
+
+```{r}
+
+colData <- data.frame(sample = unique(so.achilles[["sample"]]))
+colData <- left_join(colData, so.achilles[[]], keep = FALSE, multiple = "first") %>% 
+    select(sample, patient, microanatomical_site, sequencing_date, sex)
+rownames(colData) <- colData$sample
+colData
+
+```
+## Check if there are enough replicates to run DEseq2
+
+```{r}
+find_celltypes_to_run <- function(celltype){
+    
+    positions <- which(colData$sample %in% colnames(counts_list[[celltype]]))
+    coldata <- colData[positions, ]
+    rownames(coldata) <- coldata$sample
+    coldata <- coldata[order(row.names(coldata)), ]
+    
+    # check that there are at least 3 samples in each condition
+    n_enth <- coldata %>% filter(coldata$microanatomical_site =="Enth") %>% nrow()
+    n_mb <- coldata %>% filter(coldata$microanatomical_site =="MB") %>% nrow()
+    n_mtj <- coldata %>% filter(coldata$microanatomical_site =="MTJ") %>% nrow()
+    n_muscle <- coldata %>% filter(coldata$microanatomical_site =="muscle") %>% nrow()
+    
+    if (ini$subset_muscle == FALSE){
+        if (n_enth <3 | n_mb < 3 | n_mtj < 3 | n_muscle < 3){
+        # print("Too few replicates to perform DEseq2")
+        new_celltype <- NULL
+        } else {
+        # print("Enough replicates")
+        new_celltype <- celltype
+        }
+    }else if (ini$subset_muscle == TRUE){
+        if (n_enth <3 | n_mb < 3 | n_mtj < 3 ){
+        # print("Too few replicates to perform DEseq2")
+        new_celltype <- NULL
+        } else {
+        # print("Enough replicates")
+        new_celltype <- celltype
+        }
+    }
+    return(new_celltype)
+}
+
+```
+
+```{r}
+celltypes_list <- as.list(names(counts_list))
+
+new_celltypes_list <- list()
+for (i in 1:length(celltypes_list)){
+    # print(paste0("Analyzing celltype: ", celltypes_list[[i]]))
+    new_celltypes_list[[i]] <- find_celltypes_to_run(celltypes_list[[i]])
+}
+
+# remove empty items from the list
+celltypes_list = new_celltypes_list[-which(sapply(new_celltypes_list, is.null))]
+
+print("Celltypes with enough replicates to perform DEseq2")
+celltypes_list
+
+# temporarily subset the celltypes list for testing
+# celltypes_list <- celltypes_list[c(1,4)]
+```
+
+## Run DEseq2 on all cell types
+
+```{r}
+# Create a function to run DESeq2
+run_DEseq2 <- function (celltype, ref_site){
+    out <- list()
+    
+    # filter the colData to samples that are present in the counts matrix
+    positions <- which(colData$sample %in% colnames(counts_list[[celltype]]))
+    coldata <- colData[positions, ]
+
+    #reorder colnames in counts data
+    counts_list[[celltype]] <- counts_list[[celltype]][, order(colnames(counts_list[[celltype]]))]
+        
+    # Create DESeq2 object   
+    dds <- DESeqDataSetFromMatrix(countData = round(counts_list[[celltype]]),
+                       colData = coldata,
+                       design = ~ patient + microanatomical_site)
+        
+    # filter (keep the genes that have a minimum of 10 reads)
+    keep <- rowSums(counts(dds)) >=10
+    dds <- dds[keep,]
+    
+    # select which microanatomical site is the reference
+    dds$microanatomical_site <- relevel(dds$microanatomical_site, ref = ref_site)
+    
+    # run DESeq2
+    dds <- DESeq(dds, 
+             test = "LRT", 
+             reduced = ~patient,#remove the thing you want to test for i.e. microanatomy in this case
+             #useT = TRUE, # do not assume normal distribution
+             #minmu = 1e-6, #optimised for single cell data
+             #minReplicatesForReplace = Inf, # never replace outliers (for single cell)
+             #fitType = "glmGamPoi"
+             ) 
+
+    out[["dds"]] <- dds
+    # Generate results objects 
+    
+    if (ref_site == "Enth"){
+        out[["res_MBvsEnth"]] <- results(dds, name = "microanatomical_site_MB_vs_Enth", test = "Wald")
+        out[["res_MTJvsEnth"]] <- results(dds, name = "microanatomical_site_MTJ_vs_Enth", test = "Wald")
+        out[["res_MBvsEnth_lfcshrink"]] <- lfcShrink(dds, coef = "microanatomical_site_MB_vs_Enth", type = "apeglm")
+        out[["res_MTJvsEnth_lfcshrink"]] <- lfcShrink(dds, coef = "microanatomical_site_MTJ_vs_Enth", type = "apeglm")
+        
+        if (ini$subset_muscle == FALSE){
+            out[["res_musclevsEnth"]] <- results(dds, name = "microanatomical_site_muscle_vs_Enth", test = "Wald")
+            out[["res_musclevsEnth_lfcshrink"]] <- lfcShrink(dds, coef = "microanatomical_site_muscle_vs_Enth", type = "apeglm")
+        }
+    } else if (ref_site == "MTJ"){
+        out[["res_EnthvsMTJ"]] <- results(dds, name = "microanatomical_site_Enth_vs_MTJ", test = "Wald")
+        out[["res_MBvsMTJ"]] <- results(dds, name = "microanatomical_site_MB_vs_MTJ", test = "Wald")
+        out[["res_EnthvsMTJ_lfcshrink"]] <- lfcShrink(dds, coef = "microanatomical_site_Enth_vs_MTJ", type = "apeglm")
+        out[["res_MBvsMTJ_lfcshrink"]] <- lfcShrink(dds, coef = "microanatomical_site_MB_vs_MTJ", type = "apeglm")
+        
+        if (ini$subset_muscle == FALSE){
+            out[["res_musclevsMTJ"]] <- results(dds, name = "microanatomical_site_muscle_vs_MTJ", test = "Wald")
+            out[["res_musclevsMTJ_lfcshrink"]] <- lfcShrink(dds, coef = "microanatomical_site_muscle_vs_MTJ", type ="apeglm")
+        }  
+    }
+    
+    return(out)
+
+}
+
+```
+
+Make a list of cell types and apply the function over the list
+Make two results outputs, one where Enth is the reference sample, and one where MTJ is the reference sample. 
+The Enth will mostly be used for plotting, but the MTJ will be useful to directly compare MTJ and muscle. 
+
+```{r}
+
+DEseq2_results_cells_Enth <- list()
+DEseq2_results_cells_MTJ <- list()
+for (i in 1:length(celltypes_list)){
+    print(paste0("Analyzing celltype: ", celltypes_list[[i]]))
+    DEseq2_results_cells_Enth[[i]] <- run_DEseq2(celltypes_list[[i]], ref_site = "Enth")
+    DEseq2_results_cells_MTJ[[i]] <- run_DEseq2(celltypes_list[[i]], ref_site = "MTJ")
+}
+names(DEseq2_results_cells_Enth) <- celltypes_list
+names(DEseq2_results_cells_MTJ) <- celltypes_list
+```
+
+Save the files
+
+```{r}
+save_DEseq2 <- function (DEseq2_results, celltype, ref_site){
+    
+    if (ref_site == "Enth"){
+        write.csv(DEseq2_results$res_MBvsEnth, 
+              paste0(directory, "/DEseq2_results/", celltype, "_MBvsEnth.csv"))
+        write.csv(DEseq2_results$res_MTJvsEnth, 
+                  paste0(directory, "/DEseq2_results/", celltype, "_MTJvsEnth.csv"))
+        write.csv(DEseq2_results$res_MBvsEnth_lfcshrink, 
+                  paste0(directory, "/DEseq2_results/", celltype, "_MBvsEnth_lfcshrink.csv"))
+        write.csv(DEseq2_results$res_MTJvsEnth_lfcshrink, 
+                  paste0(directory, "/DEseq2_results/", celltype, "_MTJvsEnth_lfcshrink.csv"))
+        
+        if (ini$subset_muscle == FALSE){
+            write.csv(DEseq2_results$res_musclevsEnth, 
+                  paste0(directory, "/DEseq2_results/", celltype, "_musclevsEnth.csv"))
+            write.csv(DEseq2_results$res_musclevsEnth_lfcshrink, 
+                  paste0(directory, "/DEseq2_results/", celltype, "_musclevsEnth_lfcshrink.csv"))
+        }
+    } else if (ref_site == "MTJ"){
+        write.csv(DEseq2_results$res_EnthvsMB, 
+              paste0(directory, "/DEseq2_results/", celltype, "_EnthvsMTJ.csv"))
+    write.csv(DEseq2_results$res_MBvsMTJ, 
+              paste0(directory, "/DEseq2_results/", celltype, "_MBvsMTJ.csv"))
+    write.csv(DEseq2_results$res_EnthvsMB_lfcshrink, 
+              paste0(directory, "/DEseq2_results/", celltype, "_EnthvsMB_lfcshrink.csv"))
+    write.csv(DEseq2_results$res_MBvsMTJ_lfcshrink, 
+              paste0(directory, "/DEseq2_results/", celltype, "_MBvsMTJ_lfcshrink.csv"))
+    
+    if (ini$subset_muscle == FALSE){
+        write.csv(DEseq2_results$res_musclevsMTJ, 
+              paste0(directory, "/DEseq2_results/", celltype, "_musclevsMTJ.csv"))
+        write.csv(DEseq2_results$res_musclevsEnth_lfcshrink, 
+              paste0(directory, "/DEseq2_results/", celltype, "_musclevsMTJ_lfcshrink.csv"))
+    }
+    
+    }
+}
+```
+
+```{r}
+
+for (i in 1:length(celltypes_list)){
+    save_DEseq2(DEseq2_results_cells_Enth[[i]], celltypes_list[[i]], "Enth")
+    save_DEseq2(DEseq2_results_cells_MTJ[[i]], celltypes_list[[i]], "MTJ")
+}
+```
+
+## DEseq2 data QC
+
+Plot PCA prior to any normalisation to look for batch effects in the raw data  
+```{r}
+# create plotting function
+plot_pre_PCA <- function(results_obj, celltype){
+    
+    res_list <- results_obj[[celltype]]
+    dds <- res_list$dds
+
+    # Transform counts for data visualization
+    rld <- rlog(dds, blind=TRUE) # using blind=TRUE means we are looking at the data irrespective of the design
+
+    # Plot PCA before correction
+    # cat("plotting PCA")
+    data <- plotPCA(rld, intgroup=c("patient", "microanatomical_site", "sequencing_date", "sex"), returnData = TRUE)
+
+    p1 <- ggplot(data, aes(x=PC1, y=PC2, col=microanatomical_site, shape=patient)) + 
+        geom_point(size =3)+
+        scale_colour_manual(values = ma.cols) +
+        theme_classic()+
+        ggtitle("PCA plot for patient & microanatomy")
+    
+    p2 <- ggplot(data, aes(x=PC1, y=PC2, col=microanatomical_site, shape=sequencing_date)) + 
+        geom_point(size =3)+
+        scale_colour_manual(values = ma.cols) +
+        theme_classic()+
+        ggtitle("PCA plot for sequencing date & microanatomy")
+    
+    p3 <- ggplot(data, aes(x=PC1, y=PC2, col=microanatomical_site, shape=sex)) + 
+        geom_point(size =3)+
+        scale_colour_manual(values = ma.cols) +
+        theme_classic()+
+        ggtitle("PCA plot for sex & microanatomy")
+    
+    p <- plot_grid(p1, p2, p3)
+    
+}
+
+
+```
+Plot expression heatmaps on raw data
+
+```{r}
+# create plotting heatmap function
+plot_pre_heatmap <- function(results_obj, celltype){
+    
+    res_list <- results_obj[[celltype]]
+    dds <- res_list$dds
+    
+    print(paste0("Analysing cell type: ", celltype))
+    # plot heatmap not considering the design
+    ntd <- normTransform(dds)
+    select <- order(rowMeans(counts(dds,normalized=TRUE)),
+                    decreasing=TRUE)[1:20]
+    df <- as.data.frame(colData(dds)[,c("microanatomical_site", "patient", "sequencing_date", "sex")])
+    pheatmap(assay(ntd)[select,], cluster_rows=FALSE, show_rownames=FALSE,
+             cluster_cols=TRUE, annotation_col=df,
+             filename = paste0(directory, "/Pre-heatmap/", celltype, ".png"), 
+         width = 6, height = 5)
+
+}
+
+
+```
+
+Plot correlations heatmap
+```{r}
+# Extract the rlog matrix from the object and compute pairwise correlation values
+plot_cor_heatmap <- function(results_obj, celltype){
+    
+    res_list <- results_obj[[celltype]]
+    dds <- res_list$dds
+    
+    rld <- rlog(dds, blind=TRUE)
+    rld_mat <- assay(rld)
+    rld_cor <- cor(rld_mat)
+    
+    annotation <- data.frame(sample_id = colnames(rld),
+                             patient = rld$patient,
+                             microanatomical_site = rld$microanatomical_site, 
+                             sequencing_batch = rld$sequencing_date)
+    
+    annotation <- annotation %>% column_to_rownames("sample_id")
+    annotation
+    
+    pheatmap(rld_cor, annotation_col = annotation,
+             filename = paste0(directory, "/Correlation-heatmap/", celltype, ".png"), 
+         width = 8, height = 5)
+}
+
+```
+
+
+
+Plot dispersions
+
+```{r}
+# plot dispersions
+plot_dispersions <- function(results_obj, celltype){
+    res_list <- results_obj[[celltype]]
+    dds <- res_list$dds
+    
+    # Open a pdf file
+    png(paste0(directory, "/Dispersions/", celltype, ".png"))
+    # 2. Create a plot
+    plotDispEsts(dds)
+    # Close the pdf file
+    dev.off() 
+    
+}
+
+```
+
+## Visualise DEseq2 results
+Use the `degPatterns` function from the 'DEGreport' package to calculate and plot gene clusters across sample groups
+```{r}
+calc_clusters <- function(results_obj, celltype){
+    
+    res_list <- results_obj[[celltype]]
+    dds <- res_list$dds
+    
+    # Generate results object 
+    res_LRT <- results(dds)
+    
+    # Select significant results
+    res_LRT_tb <- res_LRT %>%
+      data.frame() %>%
+      rownames_to_column(var="gene") %>% 
+      filter(padj < 0.05)
+
+    # Get number of significant genes
+    print(paste0(celltype, " has ", nrow(res_LRT_tb), " significant genes"))
+
+    if (nrow(res_LRT_tb) > 15) {
+        # Obtain rlog values for those significant genes
+    rld <- rlog(dds, blind=FALSE)
+    rld_mat <- assay(rld)
+    cluster_rlog <- rld_mat[res_LRT_tb$gene, ]
+    design <- as.data.frame(colData(dds))
+    clusters <- degPatterns(cluster_rlog, metadata = design, time = "microanatomical_site", plot = FALSE)
+    
+    return(clusters)
+    }else{
+        print ("Not enough genes to cluster")
+    }
+    
+}
+
+clusters_list <- list()
+for (i in 1:length(celltypes_list)){
+    clusters_list[[i]] <- calc_clusters(DEseq2_results_cells_Enth, celltypes_list[[i]])
+}
+names(clusters_list) <- celltypes_list
+```
+
+Save the cluster outputs
+```{r}
+save_clusters <- function (cluster_results, celltype){
+    
+    clusters <- cluster_results[[celltype]]
+    
+    if (is.null(names(clusters)) == TRUE){ # skip cell types where no clustering was done
+        print(paste0(celltype, ": no files to save"))
+    }else{
+        write.csv(clusters$df, 
+              paste0(directory, "/Cluster_results/", celltype, "_df.csv"))
+        write.csv(clusters$normalized, 
+                  paste0(directory, "/Cluster_results/", celltype, "_normalized.csv"))
+        write.csv(clusters$summarise, 
+                  paste0(directory, "/Cluster_results/", celltype, "_summarise.csv"))
+        saveRDS(clusters$plot, 
+                paste0(directory, "/Cluster_results/", celltype, "_plot.rds"))
+    }
+    
+    
+}
+
+
+for (i in 1:length(celltypes_list)){
+    save_clusters(clusters_list, celltypes_list[[i]])
+}
+
+
+```
+
+
+Plot the clusters
+```{r}
+plot_clusters <- function(clusters_obj, celltype){
+    
+    clusters <- clusters_obj[[celltype]]
+        
+    if (is.null(names(clusters)) == TRUE){ # skip cell types where no clustering was done
+        print(paste0(celltype, ": no data to plot"))
+    }else{
+        
+        p <- clusters$plot +
+            theme_classic()+
+            theme(legend.position = "none")+
+            scale_colour_viridis_d(begin = 0.3)+
+            ggtitle(celltype)
+        return(p)
+    }    
+}
+
+```
+
+Plot a heatmap of the log2fold changes
+
+```{r, fig.height=10, fig.width=8}
+plot_post_heatmap <- function(results_obj, celltype){
+    
+    res_list <- results_obj[[celltype]]
+    dds <- res_list$dds
+    
+    # Generate results object 
+    res_LRT <- results(dds)
+    
+    # Select significant results
+    res_LRT_tb <- res_LRT %>%
+      data.frame() %>%
+      rownames_to_column(var="gene") %>% 
+      filter(padj < 0.05)
+
+
+    betas <- coef(dds)
+    topGenes <- head(order(res_LRT$padj),100)
+    my_cols <- grep("micro*", colnames(betas))
+    mat <- betas[topGenes, my_cols]
+    if (ini$subset_muscle == FALSE){
+        my_labels <- c("MB_vs_Enth", "MTJ_vs_Enth", "muscle_vs_Enth")
+    } else if (ini$subset_muscle == TRUE){
+        my_labels <- c("MB_vs_Enth", "MTJ_vs_Enth")
+    }
+    
+    pheatmap(mat, filename = paste0(directory, "/Post-heatmap/", celltype, ".png"), 
+         width = 8, height = 10, 
+         main = celltype, 
+         labels_col = my_labels, 
+         angle_col = 90, show_rownames = FALSE)
+}
+
+for (i in 1:length(celltypes_list)){
+    plot_post_heatmap(DEseq2_results_cells_Enth, celltypes_list[[i]])
+}
+```
+
+
+
+Plot volcano plots of pairwise comparisons
+
+```{r}
+plot_volcano <- function(results_obj, celltype, ref_site){
+    
+    DEseq2_results <- results_obj[[celltype]]
+    print(celltype)
+    print(ref_site)
+    if (ref_site == "Enth"){
+        
+        p1 <- EnhancedVolcano(DEseq2_results$res_MBvsEnth_lfcshrink, 
+                    lab = rownames(DEseq2_results$res_MBvsEnth_lfcshrink), 
+                    x = 'log2FoldChange', 
+                    y = 'padj', 
+                    title = paste0('MB vs Enthesis: ', celltype), 
+                    pCutoff = 0.05, 
+                    FCcutoff = 1.0,
+                    xlim = c(-15, 15),
+                    ylim = c(0, -log10(10e-16)),
+                    pointSize = 0.5, 
+                    labSize = 3.0, 
+                    max.overlaps = 10,
+                    colAlpha = 1,
+                    legendPosition = "bottom", 
+                    subtitle = NULL, 
+                    )+ theme(plot.title = element_text(size=12))+
+            theme(legend.text=element_text(size=10))
+    
+        p2 <- EnhancedVolcano(DEseq2_results$res_MTJvsEnth_lfcshrink, 
+                    lab = rownames(DEseq2_results$res_MTJvsEnth_lfcshrink), 
+                    x = 'log2FoldChange', 
+                    y = 'padj', 
+                    title = paste0('MTJ vs Enthesis: ', celltype), 
+                    pCutoff = 0.05, 
+                    FCcutoff = 1.0,
+                    xlim = c(-15, 15),
+                    ylim = c(0, -log10(10e-16)),
+                    pointSize = 0.5, 
+                    labSize = 3.0, 
+                    max.overlaps = 10,
+                    colAlpha = 1,
+                    legendPosition = "bottom",
+                    subtitle = NULL, 
+                    )+ theme(plot.title = element_text(size=12))+
+            theme(legend.text=element_text(size=10))
+        
+        
+        if (ini$subset_muscle == FALSE){
+            p3 <- EnhancedVolcano(DEseq2_results$res_musclevsEnth_lfcshrink, 
+                    lab = rownames(DEseq2_results$res_musclevsEnth_lfcshrink), 
+                    x = 'log2FoldChange', 
+                    y = 'padj', 
+                    pointSize = 0.5,
+                    title = paste0('Muscle vs Enthesis: ', celltype), 
+                    pCutoff = 0.05, 
+                    FCcutoff = 1.0,
+                    xlim = c(-15, 15),
+                    ylim = c(0, -log10(10e-16)),
+                    labSize = 3.0, 
+                    colAlpha = 1,
+                    max.overlaps = 10,
+                    legendPosition = "bottom",
+                    subtitle = NULL, 
+                    )+ theme(plot.title = element_text(size=12))+
+            theme(legend.text=element_text(size=10))
+        p <- plot_grid(p1, p2, p3, ncol = 3)
+        } else if (ini$subset_muscle == TRUE){
+            p <- plot_grid(p1, p2, ncol = 2)
+        }
+    } else if (ref_site == "MTJ"){
+                p1 <- EnhancedVolcano(DEseq2_results$res_EnthvsMTJ_lfcshrink, 
+                    lab = rownames(DEseq2_results$res_EnthvsMTJ_lfcshrink), 
+                    x = 'log2FoldChange', 
+                    y = 'padj', 
+                    title = paste0('Enth vs MTJ: ', celltype), 
+                    pCutoff = 0.05, 
+                    FCcutoff = 1.0,
+                    xlim = c(-15, 15),
+                    ylim = c(0, -log10(10e-16)),
+                    pointSize = 0.5, 
+                    labSize = 3.0, 
+                    max.overlaps = 10,
+                    colAlpha = 1,
+                    legendPosition = "bottom", 
+                    subtitle = NULL, 
+                    )+ theme(plot.title = element_text(size=12))+
+            theme(legend.text=element_text(size=10))
+    
+        p2 <- EnhancedVolcano(DEseq2_results$res_MBvsMTJ_lfcshrink, 
+                    lab = rownames(DEseq2_results$res_MBvsMTJ_lfcshrink), 
+                    x = 'log2FoldChange', 
+                    y = 'padj', 
+                    title = paste0('MB vs MTJ: ', celltype), 
+                    pCutoff = 0.05, 
+                    FCcutoff = 1.0,
+                    xlim = c(-15, 15),
+                    ylim = c(0, -log10(10e-16)),
+                    pointSize = 0.5, 
+                    labSize = 3.0, 
+                    max.overlaps = 10,
+                    colAlpha = 1,
+                    legendPosition = "bottom",
+                    subtitle = NULL, 
+                    )+ theme(plot.title = element_text(size=12))+
+            theme(legend.text=element_text(size=10))
+        
+        
+        if (ini$subset_muscle == FALSE){
+            p3 <- EnhancedVolcano(DEseq2_results$res_musclevsMTJ_lfcshrink, 
+                    lab = rownames(DEseq2_results$res_musclevsMTJ_lfcshrink), 
+                    x = 'log2FoldChange', 
+                    y = 'padj', 
+                    pointSize = 0.5,
+                    title = paste0('Muscle vs MTJ: ', celltype), 
+                    pCutoff = 0.05, 
+                    FCcutoff = 1.0,
+                    xlim = c(-15, 15),
+                    ylim = c(0, -log10(10e-16)),
+                    labSize = 3.0, 
+                    colAlpha = 1,
+                    max.overlaps = 10,
+                    legendPosition = "bottom",
+                    subtitle = NULL, 
+                    )+ theme(plot.title = element_text(size=12))+
+            theme(legend.text=element_text(size=10))
+        p <- plot_grid(p1, p2, p3, ncol = 3)
+        } else if (ini$subset_muscle == TRUE){
+            p <- plot_grid(p1, p2, ncol = 2)
+        }
+    }
+    ggsave(paste0(directory, "/Volcano_plots/", celltype, "_", ref_site, "_Volcano_plots.png"), plot = p,
+           device = "png", width = 16, height = 7, bg = "white")
+ 
+}
+#plot_volcano(DEseq2_results_cells_Enth[1], celltypes_list[[1]], ref_site = "Enth")
+```
+
+
+
+
+
+## Post-DEseq2 data QC
+
+Plot PCA after normalisation
+ 
+```{r}
+
+plot_post_PCA <- function (results_obj, celltype){
+    
+    DEseq2_results <- results_obj[[celltype]]
+    dds <- DEseq2_results[["dds"]]
+    
+    # access normalised data
+    vsd <- varianceStabilizingTransformation(dds, blind=FALSE) # have to use this function not vst as <1000 genes
+    mat <- assay(vsd)
+    mm <- model.matrix(~microanatomical_site, colData(vsd))
+    mat <- limma::removeBatchEffect(mat, batch=vsd$patient, design=mm)
+    assay(vsd) <- mat
+
+    # Plot PCA before correction
+    data2 <- plotPCA(vsd, intgroup=c("patient", "microanatomical_site", "sequencing_date", "sex"), returnData = TRUE)
+    
+    p1 <- ggplot(data2, aes(x=PC1, y=PC2, col=microanatomical_site, shape=patient)) + 
+        geom_point(size =3)+
+        scale_colour_manual(values = ma.cols) +
+        theme_classic()+
+        ggtitle("PCA plot for patient & microanatomy")
+    
+    p2 <- ggplot(data2, aes(x=PC1, y=PC2, col=microanatomical_site, shape=sequencing_date)) + 
+        geom_point(size =3)+
+        scale_colour_manual(values = ma.cols) +
+        theme_classic()+
+        ggtitle("PCA plot for sequencing date & microanatomy")
+    
+    p3 <- ggplot(data2, aes(x=PC1, y=PC2, col=microanatomical_site, shape=sex)) + 
+        geom_point(size =3)+
+        scale_colour_manual(values = ma.cols) +
+        theme_classic()+
+        ggtitle("PCA plot for sequencing date & sex")
+    
+    p <- plot_grid(p1, p2, p3)
+    ggsave(paste0(directory, "/Post-PCA/PCA_", celltype, ".png"), width = 12, height = 10 )
+}
+
+```
+
+Do all plotting functions together
+
+```{r}
+plot_list <- list()
+plot_list_2 <- list()
+
+for (i in 1:length(celltypes_list)){
+    print(celltypes_list[[i]])
+    print ("Pre-PCA")
+    plot_list[[i]] <- plot_pre_PCA(DEseq2_results_cells_Enth, celltypes_list[[i]])
+    ggsave(plot = plot_list[[i]],
+           file = paste0(directory, "/Pre-PCA/", celltypes_list[[i]], ".png"), 
+           device = "png", width = 12, height = 7, bg = "white")
+    print("Pre-heatmap")
+    plot_pre_heatmap(DEseq2_results_cells_Enth, celltypes_list[[i]])
+    print("Correlation heatmap")
+    plot_cor_heatmap(DEseq2_results_cells_Enth, celltypes_list[[i]])
+    print("Dispersions")
+    plot_dispersions(DEseq2_results_cells_Enth, celltypes_list[[i]])
+    print("Clusters")
+    plot_list_2[[i]] <- plot_clusters(clusters_list, celltypes_list[[i]])
+    if (is.character(plot_list_2[[i]]) == FALSE){ # only save the plot if there is one
+        ggsave(plot = plot_list_2[[i]],
+               file = paste0(directory, "/Cluster_plots/", celltypes_list[[i]], ".png"), 
+               device = "png", width = 12, height = 7, bg = "white")
+    }
+    print("Post-Heatmap")
+    plot_post_heatmap(DEseq2_results_cells_Enth, celltypes_list[[i]])
+    print("Volcano")
+    plot_volcano(DEseq2_results_cells_Enth, celltypes_list[[i]], "Enth")
+    plot_volcano(DEseq2_results_cells_MTJ, celltypes_list[[i]], "MTJ")
+    print("Post-PCA")
+    plot_post_PCA(DEseq2_results_cells_Enth, celltypes_list[[i]])
+
+}
+
+
+```
+
+Build table with number of genes upregulated/downregulated according to set filters
+
+```{r}
+build_summary <- function (DEseq2_results, ref_site){
+    print(ref_site)
+    if (ref_site == "Enth"){
+        if (ini$subset_muscle == FALSE){
+            comparisons <- c("MBvsEnth", "MTJvsEnth", "musclevsEnth")
+        } else if (ini$subset_muscle == TRUE){
+            comparisons <- c("MBvsEnth", "MTJvsEnth")
+        }
+    } else if (ref_site == "MTJ"){
+        if (ini$subset_muscle == FALSE){
+            comparisons <- c("EnthvsMTJ", "MBvsMTJ", "musclevsMTJ")
+        } else if (ini$subset_muscle == TRUE){
+            comparisons <- c("EnthvsMTJ", "MBvsMTJ")
+        }
+    }
+    
+    #print(comparisons)
+    df_list <- list()
+    for (i in 1:length(celltypes_list)){
+        df <- data.frame(col1 = character(), col2 = character(), col2 =  numeric(), col3 = numeric(), col4 = numeric())
+        for (j in 1:length(comparisons)){
+            results_name <- paste0("res_", comparisons[j])
+            res_filt = na.omit(DEseq2_results[[i]][results_name]) %>% as.data.frame()
+            colnames(res_filt) <- c("baseMean", "log2FolChange", "lfcSE", "stat", "pvalue", "padj")
+            res_filt_upregulated <- res_filt %>% filter(padj < 0.05 & log2FolChange > 1) %>% nrow()
+            print(res_filt_upregulated)
+            res_filt_downregulated <- res_filt %>% filter(padj < 0.05 & log2FolChange < 1) %>% nrow()
+            df[j,] <- c(names(DEseq2_results[i]), comparisons[j], res_filt_upregulated, 
+                        res_filt_downregulated, sum(res_filt_downregulated, res_filt_upregulated)
+                        )
+            
+            df_list[[i]] <- df
+        
+        }
+    }
+    
+    DEGs.df <- bind_rows(df_list)
+    colnames(DEGs.df) <- c("cell_annotation", "comparison", "Upregulated DEGs", "Downregulated DEGs", "Total DEGs")
+    write.table(DEGs.df, paste0(directory, "/DEseq2_results/", ref_site, "_results_summary.txt"), sep = "\t", quote = FALSE)
+    return(DEGs.df)
+}
+
+build_summary(DEseq2_results_cells_Enth, "Enth")
+build_summary(DEseq2_results_cells_MTJ, "MTJ")
+
+```
+
+Plot the summary of results
+
+
+Show which packages were used
+```{r}
+sessionInfo()
+```
+

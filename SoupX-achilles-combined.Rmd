@@ -1,0 +1,638 @@
+---
+title: "SoupX detection of ambient RNA"
+author: "Carla Cohen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# SoupX workflow  
+
+This script detects and visualises Ambient RNA using soupX in single-nuc data. 
+It follows the Ambient-doublet workflow  
+This specific script analyses the Achilles dataset. 
+The working directory is  
+/project/tendonhca/ccohen/chromium/analysis/20230118_achilles/  
+
+The inputs of the workflow are:  
+* Single Cell experiment objects with ambient RNA detected by decontX, and doublets removed
+* Single cell experiment objects with no filtering (raw)  
+* ambient-doublet.yml supplies parameters including date that the Ambient-doublet script was run  
+
+The steps in the workflow are:  
+
+1. Set up and read in sce objects  
+* load packages, read in yml file, create output directory  
+* read in the filtered and raw sce
+
+2. Ambient RNA detection using SoupX
+* start using the automated method  
+* use the manual method with cluster-specific genes if required  
+* plots to confirm effectiveness of ambient RNA detection
+
+ 
+3. Visualisation of ambient removal methods
+* Use featureplots and dotplots to compare the RNA matrix with the adjusted matrices from decontX and soupX  
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+## 1. Set up and read in sce objects 
+
+#### Load packages, read in yml file, create output directory 
+
+```{r, include=FALSE}
+
+library(yaml)
+library(tidyverse)
+library(cowplot)
+library(scater)
+library(viridis)
+library(Seurat)
+library(celda)
+library(scater)
+library(SoupX)
+
+# Read in the yml file
+ini <- read_yaml("soupX.yml")
+
+# make a new output folder for each run, with the date & time in the directory name
+date <- Sys.Date() %>% str_replace_all("-", "")
+time <- format(Sys.time(), "%X") %>% str_replace_all(":", "-") %>%
+    str_sub(1, 5)
+directory <- paste0(date,"_", time, "_SoupX.dir")
+dir.create(directory, showWarnings = FALSE)
+
+
+```
+
+```{r}
+# Print the parameters used
+ini
+```
+
+
+#### Read in the filtered and raw sce
+
+Raw objects are sce objects with the raw kallisto output (no filtering) from the QC-filter pipeline
+
+Filtered objects are from the end of the Ambient-doublet pipeline which have had MAD and threshold filtering done, and decontX counts and doublets removed (optionally).  
+
+```{r}
+
+# get directory according to whether ambient RNA (decontX) and doublets were filtered
+if (ini$decontX_filter == TRUE && ini$doublet_filter == TRUE){
+    open_name <- "ambient_doublet_filter"
+    print(open_name)
+} else if (ini$decontX_filter == FALSE && ini$doublet_filter == TRUE) {
+    open_name <- "ambient_calc_doublet_filter"
+    print(open_name)
+} else if (ini$decontX_filter == TRUE && ini$doublet_filter == FALSE){
+    open_name <- "ambient_filtered_doublet_calculated"
+    print(open_name)
+} else if (ini$decontX_filter == FALSE && ini$doublet_filter == FALSE){
+    open_name <- "ambient_doublet_calculated"
+    print(open_name)
+}
+
+
+# make a named vector of filtered sample files
+
+file_list_filtered <- list.files(paste0(ini$ambient_doublet, "_Ambient-doublet.dir/RDS_objects.dir/", open_name, "/"), 
+                                 pattern="_SingleCellExp.rds")
+
+names(file_list_filtered) <- str_replace(file_list_filtered, paste0("_", open_name, "_SingleCellExp.rds"), "")
+
+# make a named vector of raw sample files
+file_list_raw <- list.files(paste0(ini$qc_filter, "_QC-Filter.dir/RDS_objects.dir/raw/"), 
+                                 pattern="_SingleCellExp.rds")
+
+names(file_list_raw) <- str_replace(file_list_raw, "_raw_SingleCellExp.rds", "")
+
+```
+
+
+Read in the sce objects  
+
+```{r, echo=FALSE}
+
+#Make a new list for the sce objects
+sce_filter_manual <- list()
+sce_raw <- list()
+
+# generate a list of sce objects
+for (i in 1:length(file_list_filtered)){
+    
+    sce_filter_manual[[i]] <- readRDS(paste0(ini$ambient_doublet, "_Ambient-doublet.dir/RDS_objects.dir/", open_name, "/",
+                                                file_list_filtered[i]))
+    
+    sce_raw[[i]] <- readRDS(paste0(ini$qc_filter, "_QC-Filter.dir/RDS_objects.dir/raw/",
+                                 file_list_raw[i]))
+  
+}
+
+```
+
+Update rownames, which must be identical in the raw and filtered objects
+
+```{r}
+for (i in 1:length(file_list_filtered)){
+    rownames(sce_raw[[i]])  <- rownames(sce_filter_manual[[i]])
+}
+```
+
+## 2. Ambient RNA detection using SoupX
+
+Here the package soupX is used to detect contaminating ambient RNA.  
+The ouputs of soupX is an adjusted count matrix that has a better signal-to-noise ratio for marker gene expression  
+
+SoupX requires pre-calculated clusters which should be present in our filtered objects. 
+It requires a sample-specific background (empty counts matrix).  
+
+
+#### Perform soupX
+
+Make a soup channel and profile the soup  
+Add metadata and UMAP to the soup channel
+
+```{r, message = FALSE}
+soup.channel <- list()
+clusters <- list()
+for (i in 1:length(file_list_filtered)){
+    #print (paste0("Analysing sample ", i))
+    #create the soup channel
+    soup.channel[[i]] <- SoupChannel(counts(sce_raw[[i]]), counts(sce_filter_manual[[i]]))
+    # add metadata (seurat clusters) to the soup channel
+    clusters[[i]] <- setNames(pull(colData(sce_filter_manual[[i]])$seurat_clusters),
+                              rownames(colData(sce_filter_manual[[i]])))
+    #print("Cluster info")
+    #print(head(clusters[[i]]))
+    #print ("Adding clusters to soup channel")
+    soup.channel[[i]]  <- setClusters(soup.channel[[i]], clusters[[i]])
+    # add dim reduction to the soup channel
+    #print ("Adding dim red to soup channel")
+    soup.channel[[i]]  <- setDR(soup.channel[[i]], reducedDim(sce_filter_manual[[i]], "umap"))
+}
+```
+
+Perform automated contamination estimation
+
+This is failing on some samples, so make a new list with those samples removed.
+Two samples fail: 
+MSK0785-Ach-Enth, MSK1284-Ach-Enth
+
+```{r}
+names(soup.channel) <- names(file_list_filtered)
+
+# remove files that fail this step
+soup.channel.auto <- soup.channel
+files_to_remove <- c("MSK0785-Ach-Enth", "MSK1284-Ach-Enth")
+
+# get the positions of unwanted files in the vector
+positions <- match(files_to_remove, names(soup.channel.auto))
+
+# remove certain files using those names
+soup.channel.auto <- soup.channel.auto[-positions] 
+
+# perform automated contamination estimation
+for (i in 1:length(soup.channel.auto)){
+    print (paste("Analysing sample", i, names(soup.channel.auto)[[i]]))
+    soup.channel.auto[[i]]  <- autoEstCont(soup.channel.auto[[i]], 
+    soupQuantile = ini$soupquantile, 
+    tfidfMin = ini$tfidfMin)
+}
+```
+
+#### Extract the adjusted count matrices & add back to SCE object  
+This step adds the soupX adjusted count matrix as a new assay in the SCE object. 
+
+```{r, warning=FALSE}
+sce_filter_manual.auto <- sce_filter_manual[-positions] 
+
+adj.matrix.auto <- list()
+for (i in 1:length(soup.channel.auto)){
+    adj.matrix.auto[[i]]  <- adjustCounts(soup.channel.auto[[i]], roundToInt = T)
+    assay(sce_filter_manual.auto[[i]], "soupX") <- adj.matrix.auto[[i]]
+}
+names(adj.matrix.auto) <- names(sce_filter_manual.auto)
+```
+
+
+
+#### Perform manual contamination estimation 
+
+Provide list of genes specific to one cell population that you think is causing ambient RNA contamination
+
+```{r}
+# Make a new list of samples to analyse
+soup.channel.manual <- soup.channel[c("MSK0785-Ach-Enth", "MSK1284-Ach-Enth")]
+names(sce_filter_manual) <- names(file_list_filtered)
+sce_filter_manual.manual <- sce_filter_manual[c("MSK0785-Ach-Enth", "MSK1284-Ach-Enth")]
+
+```
+
+
+```{r, fig.height=8, fig.width=12}
+#this example  uses a list of markers that are specifically expressed in adipocytes
+
+adipocytemarkers <- c("ADIPOQ", "PLIN1", "PLIN4", "GPAM", "AQP7")
+    
+p_list <- list()
+for (i in 1:length(soup.channel.manual)){
+    plot_list <- list()
+    for (gene in adipocytemarkers){
+        plot_list[[gene]] <- plotReducedDim(sce_filter_manual.manual[[i]], 
+                                            dimred = "umap", 
+                                            colour_by = gene)+
+            ggtitle(gene)
+    }
+    p <- plot_grid(plotlist = plot_list, nrow = 1 )+
+        ggtitle(mainExpName(sce_filter_manual.manual[[i]]))
+    title <- ggdraw() + 
+        draw_label(mainExpName(sce_filter_manual.manual[[i]]), 
+                          fontface='bold', size = 12)
+    p_list[[i]] <- plot_grid(title, p, ncol=1, rel_heights=c(0.1, 1))
+    }
+    
+title <- ggdraw() + draw_label("Adipocyte gene expression", fontface='bold', size = 24)
+p <- plot_grid(plotlist = p_list, ncol = 1)
+p <- plot_grid(title, p, ncol=1, rel_heights=c(0.05, 1))
+    
+p
+
+```
+
+```{r}
+dir.create(paste0(directory, "/SoupX_figures"))
+dir.create(paste0(directory, "/SoupX_figures/Manual/"))
+ggsave(paste0(directory, "/SoupX_figures/Manual/Adipocyte_feature_plots.", ini$file_type), 
+        device = ini$file_type, width = 12, height = 8, bg = "white")
+
+```
+
+Estimate which cells should not express the list of markers.  
+Play around with the maximum contamination number to get the right cells (which you can do based on expression of these markers on the feature plots above). Default is 6, here I have to use 3 to get it to find the adipocytes in MSK1284-Ach-Enth.  
+The function automatically uses your clustering information, but you can choose NOT to use this by adding "clusters = F".  
+
+```{r, fig.height=4, fig.width=10}
+useToEst_list <- list()
+plot_list <- list()
+for (i in 1:length(soup.channel.manual)){
+    useToEst_list[[i]] = estimateNonExpressingCells(soup.channel.manual[[i]], 
+                                                    nonExpressedGeneList = list(IG = adipocytemarkers), 
+                                                    maximumContamination = ini$maximumContamination)  
+    plot_list[[i]] <- plotMarkerMap(soup.channel.manual[[i]], 
+                                    geneSet = adipocytemarkers, 
+                                    useToEst = useToEst_list[[i]])+
+        ggtitle(mainExpName(sce_filter_manual.manual[[i]]))
+    }
+
+title <- ggdraw() + draw_label("Cells expressing adipocyte genes", fontface='bold', size = 24)
+p <- plot_grid(plotlist = plot_list, label_size = 12)
+p <- plot_grid(title, p, ncol=1, rel_heights=c(0.1, 1))
+
+p
+
+#If happy with the selected non-expressing cells, continue to calculate the contamination fraction
+```
+
+```{r}
+dir.create(paste0(directory, "/SoupX_figures"))
+ggsave(paste0(directory, "/SoupX_figures/Manual/Cells_expressing_adipocyte_genes.", ini$file_type), 
+        device = ini$file_type, width = 10, height = 4, bg = "white")
+
+```
+
+
+Calculate contamination fraction & export matrix of adjusted counts, add back to SCE object
+```{r}
+adj.matrix.manual <- list()
+for (i in 1:length(soup.channel.manual)){
+    print (paste("Analyzing sample ", i, mainExpName(sce_filter_manual.manual[[i]])))
+    soup.channel.manual[[i]] <- calculateContaminationFraction(soup.channel.manual[[i]], 
+                                                   list(IG = adipocytemarkers), 
+                                                   useToEst = useToEst_list[[i]], 
+                                                   forceAccept = T)
+    adj.matrix.manual[[i]] <- adjustCounts(soup.channel.manual[[i]])
+    assay(sce_filter_manual.manual[[i]], "soupX") <- adj.matrix.manual[[i]]
+    
+}
+
+names(adj.matrix.manual) <- names(sce_filter_manual.manual)
+```
+
+
+### MSK1284-Ach-Enth
+Did a quick annotation of this sample in case there would be a better cluster to use for the soupX manual method. 
+
+```{r}
+# create a Seurat object of this sample
+
+so_1284 <- CreateSeuratObject(counts = counts(sce_filter_manual[["MSK1284-Ach-Enth"]]), 
+                   project = "MSK1284-Ach-Enth", 
+                   assay = "RNA", 
+                   meta.data = as.data.frame(colData(sce_filter_manual[["MSK1284-Ach-Enth"]])))
+
+#add the umap reduction
+so_1284[["UMAP"]] <- CreateDimReducObject(embeddings = reducedDim(sce_filter_manual[["MSK1284-Ach-Enth"]],
+                                                                  type = "umap"), 
+                                          key = "UMAP_", 
+                                          assay = "RNA")
+
+# Set the identities to the seurat clusters
+Idents(so_1284) <- so_1284$seurat_clusters
+
+```
+
+Do a quick annotation of this sample
+
+```{r, fig.height=8, fig.width=10}
+geneName <- c("COL1A1", "COL1A2", "COL3A1", "DCN", "PRG4", "CLIC5", "FAP", "THY1", "PDPN", "POSTN",
+              "PECAM1", "PTPRB", "FLT1", "VWF", "VEGFC",
+              "NOTCH3", "PDGFRB", "MYO1B", 
+              "MMRN1", "PROX1", "KDR", "FLT4", 
+              "GPAM", "AQP7", "ADIPOQ", 
+              "PTPRC", "CD247", 
+              "CD69", "KIT", "CDK15",
+              "MS4A1", "CD37", "BLNK", "SDC1", "IGHA1", 
+              "CD14", "CD48", "CD163", "MERTK", "MRC1",
+              "ASPM", "DIAPH3",
+              "IRF7", "CLEC4C", "IL3RA")
+
+p_dotplot <- DotPlot(so_1284, 
+             features = geneName) + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle("RNA assay") + 
+    coord_flip()
+
+p_clustering <- DimPlot(so_1284)
+plot_grid(p_dotplot, p_clustering)
+```
+Looks like using adipocytes is still the best way to go since the other clusters probably contain multiple cell types. 
+
+Try using a different list of genes for endothelial and mural cells
+
+
+```{r}
+endothelialmarkers <- c("PECAM1", "PTPRB", "FLT1", "VWF", "NOTCH3", "PDGFRB", "MYO1B")
+useToEst_list[[2]] = estimateNonExpressingCells(soup.channel.manual[[2]], 
+                                                    nonExpressedGeneList = list(IG = adipocytemarkers), 
+                                                    maximumContamination = ini$maximumContamination)  
+p <- plotMarkerMap(soup.channel.manual[[2]], 
+                                    geneSet = adipocytemarkers, 
+                                    useToEst = useToEst_list[[2]])+
+        ggtitle(mainExpName(sce_filter_manual.manual[[2]]))
+p
+```
+
+```{r}
+soup.channel.manual[[2]] <- calculateContaminationFraction(soup.channel.manual[[2]], 
+                                                   list(IG = adipocytemarkers), 
+                                                   useToEst = useToEst_list[[2]], 
+                                                   forceAccept = T)
+adj.matrix.manual[[2]] <- adjustCounts(soup.channel.manual[[2]])
+assay(sce_filter_manual.manual[[2]], "soupX") <- adj.matrix.manual[[2]]
+```
+This also gives a very high contamination fraction.  Set contamination to 0.3 for this sample.  
+
+```{r}
+soup.channel.manual[[2]] <- setContaminationFraction(soup.channel.manual[[2]], 0.3)
+adj.matrix.manual[[2]] <- adjustCounts(soup.channel.manual[[2]])
+assay(sce_filter_manual.manual[[2]], "soupX") <- adj.matrix.manual[[2]]
+```
+
+
+
+#### Combine the lists, convert to seurat objects
+
+```{r, warning=FALSE}
+sce_filter_manual <- c(sce_filter_manual.auto, sce_filter_manual.manual)
+adj.matrix <- c(adj.matrix.auto, adj.matrix.manual)
+soup.channel <- c(soup.channel.auto, soup.channel.manual)
+
+so_soupX <- list()
+
+for (i in 1:length(sce_filter_manual)){
+                               
+    # Create seurat object
+    so_soupX[[i]] <- CreateSeuratObject(counts = counts(sce_filter_manual[[i]]), 
+                   project = mainExpName(sce_filter_manual[[i]]), 
+                   assay = "RNA", 
+                   meta.data = as.data.frame(colData(sce_filter_manual[[i]])))
+    
+    # add the decontX counts
+    so_soupX[[i]][["decontXcounts"]] <- CreateAssayObject(
+        counts = decontXcounts(sce_filter_manual[[i]]))
+    
+    # add the soupX counts
+    so_soupX[[i]][["soupX"]] <- CreateAssayObject(
+        counts = adj.matrix[[i]])
+
+    # Add the dim reductions
+    so_soupX[[i]][["PCA"]] <- CreateDimReducObject(
+        embeddings = reducedDim(sce_filter_manual[[i]],
+                                type = "pca"), 
+        key = "PC_", 
+        assay = "RNA")
+    
+    so_soupX[[i]][["UMAP"]] <- CreateDimReducObject(
+        embeddings = reducedDim(sce_filter_manual[[i]],
+                                type = "umap"), 
+        key = "UMAP_", 
+        assay = "RNA")
+    
+}
+
+```
+
+
+#### Normalise and scale RNA, soupX & decontX counts so that they can be used for plotting
+```{r, message = FALSE}
+
+for (i in 1:length(so_soupX)){
+    print (paste("Analyzing sample ", i, so_soupX[[i]]@project.name))
+    print ("Working on RNA assay")
+    
+    DefaultAssay(object = so_soupX[[i]]) <- "RNA"
+    
+    so_soupX[[i]] <- so_soupX[[i]] %>% 
+               NormalizeData() %>%
+               FindVariableFeatures() %>% 
+               ScaleData()
+    
+    print ("Working on SoupX assay")
+    DefaultAssay(object = so_soupX[[i]]) <- "soupX"
+    
+    so_soupX[[i]] <- so_soupX[[i]] %>% 
+               NormalizeData() %>%
+               FindVariableFeatures() %>% 
+               ScaleData()
+    
+    print ("Working on decontX assay")
+    DefaultAssay(object = so_soupX[[i]]) <- "decontXcounts"
+    
+    so_soupX[[i]] <- so_soupX[[i]] %>% 
+               NormalizeData() %>%
+               FindVariableFeatures() %>% 
+               ScaleData()
+}
+
+```
+#### Check the ambient correction of key genes
+
+```{r, fig.height=8, fig.width=12}
+p_list <- list()
+for (i in 1:length(soup.channel)){
+    plot_list <- list()
+    for (gene in adipocytemarkers){
+        plot_list[[gene]] <- plotChangeMap(soup.channel[[i]], adj.matrix[[i]], gene) + 
+            ggtitle(gene)
+    }
+    p <- plot_grid(plotlist = plot_list, nrow = 2 )+
+        ggtitle(mainExpName(sce_filter_manual[[i]]))
+    title <- ggdraw() + 
+        draw_label(mainExpName(sce_filter_manual[[i]]), 
+                          fontface='bold', size = 12)
+    p_list[[i]] <- plot_grid(title, p, ncol=1, rel_heights=c(0.1, 1))
+    }
+    
+p_list[[1]]
+#save the plots as individual figures (next chunk)
+
+```
+
+```{r, include=FALSE}
+#save the plots
+dir.create(paste0(directory, "/SoupX_figures/Contamination_QC/"))
+
+for(i in 1:length(so_soupX)){
+    ggsave(paste0(directory, "/SoupX_figures/Contamination_QC/", 
+                  so_soupX[[i]]@project.name, ".", ini$file_type), 
+       plot = p_list[[i]], device = ini$file_type, width = 12, height = 8, bg = "white")
+}
+
+
+```
+
+### Featureplots to compare ambient RNA detection methods
+
+```{r, message = FALSE, fig.width=10, fig.height=7}
+featurelist <- c("VWF", "ADIPOQ", "COL1A2")
+
+plot_list <- list()
+
+for (i in 1:length(so_soupX)){
+    
+    # Set the identities to the seurat clusters
+    Idents(so_soupX[[i]]) <- so_soupX[[i]]$seurat_clusters
+    
+    DefaultAssay(so_soupX[[i]]) <- "RNA"
+    p_RNA <- FeaturePlot(so_soupX[[i]], 
+             features = featurelist, ncol = 1) 
+    
+    DefaultAssay(so_soupX[[i]]) <- "decontXcounts"
+    p_decontX <- FeaturePlot(so_soupX[[i]], 
+             features = featurelist, ncol = 1) 
+    
+    DefaultAssay(so_soupX[[i]]) <- "soupX"
+    p_soupX <- FeaturePlot(so_soupX[[i]], 
+             features = featurelist, ncol = 1) 
+
+    p <- plot_grid(p_RNA, p_decontX, p_soupX, ncol = 3, labels = c("RNA", "decontX", "soupX"))
+    title <- ggdraw() + draw_label(so_soupX[[i]]@project.name, fontface='bold', size = 16)
+    plot_list[[i]] <- plot_grid(title, p, ncol=1, rel_heights=c(0.05, 1))
+    
+}
+
+# save as individual plots as they are too big to put on one page
+plot_list[[i]]
+```
+
+```{r, include=FALSE}
+#save the plots
+dir.create(paste0(directory, "/SoupX_figures/Feature_plots/"))
+
+for(i in 1:length(so_soupX)){
+    ggsave(paste0(directory, "/SoupX_figures/Feature_plots/", 
+                  so_soupX[[i]]@project.name, ".", ini$file_type), 
+       plot = plot_list[[i]], device = ini$file_type, width = 12, height = 8, bg = "white")
+}
+
+
+```
+### Dotplots to compare ambient RNA detection methods
+
+```{r, fig.width=16, fig.height=8, message = FALSE, warning=FALSE}
+
+plot_list <- list()
+
+for(i in 1:length(so_soupX)){
+
+    # Set the identities to the seurat clusters
+    Idents(so_soupX[[i]]) <- so_soupX[[i]]$seurat_clusters
+    
+    DefaultAssay(so_soupX[[i]]) <- "RNA"
+    p_RNA <- DotPlot(so_soupX[[i]], 
+             features = geneName) + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle("RNA assay") + 
+    coord_flip()
+    
+    DefaultAssay(so_soupX[[i]]) <- "decontXcounts"
+    p_decontX <- DotPlot(so_soupX[[i]], 
+             features = geneName) + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle("decontX assay") + 
+    coord_flip()
+    
+    DefaultAssay(so_soupX[[i]]) <- "soupX"
+    p_soupX <- DotPlot(so_soupX[[i]], 
+             features = geneName) + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle("soupX assay") + 
+    coord_flip()
+
+    p <- plot_grid(p_RNA, p_decontX, p_soupX, ncol = 3)
+    title <- ggdraw() + draw_label(so_soupX[[i]]@project.name, fontface='bold', size = 16)
+    plot_list[[i]] <- plot_grid(title, p, ncol=1, rel_heights=c(0.05, 1))
+    
+}
+
+# save as individual plots as they are too big to put on one page
+plot_list[[i]]
+```
+
+
+
+
+```{r, include=FALSE}
+#save the plots
+dir.create(paste0(directory, "/SoupX_figures/Dotplots/"))
+
+for(i in 1:length(so_soupX)){
+    ggsave(paste0(directory, "/SoupX_figures/Dotplots/", 
+                  so_soupX[[i]]@project.name, ".", ini$file_type), 
+       plot = plot_list[[i]], device = ini$file_type, width = 16, height = 8, bg = "white")
+}
+
+
+```
+
+Save the sce and seurat objects
+
+```{r}
+
+dir.create(paste0(directory, "/RDS_objects.dir/"))
+dir.create(paste0(directory, "/RDS_objects.dir/Seurat/"))
+dir.create(paste0(directory, "/RDS_objects.dir/SingleCellExp/"))
+
+for (i in 1:length(so_soupX)){
+   saveRDS(so_soupX[[i]], 
+            paste0(directory, "/RDS_objects.dir/Seurat/", so_soupX[[i]]@project.name, "_filtered_soupX_SeuratObject.rds")) 
+   saveRDS(sce_filter_manual[[i]], 
+            paste0(directory, "/RDS_objects.dir/SingleCellExp/", mainExpName(sce_filter_manual[[i]]), "_filtered_soupX_SingleCellExp.rds")) 
+    
+}
+
+```
+
