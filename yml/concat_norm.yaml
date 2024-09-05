@@ -1,0 +1,9 @@
+datadir: 'data/individual_objects/'
+
+neighbours:
+  n_pcs: 30
+
+variable_genes:
+  n_genes: 5000
+  flavor: 'seurat_v3'
+  batch: 'patient.seqbatch'
