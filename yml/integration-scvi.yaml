@@ -1,0 +1,10 @@
+datadir: '20240829_14-04_concat_norm.dir'
+
+neighbours:
+  n_pcs: 30
+
+variable_genes:
+  n_genes: 5000
+  flavor: 'seurat'
+  batch: 'patient.seqbatch'
+  hvg_subset: True
