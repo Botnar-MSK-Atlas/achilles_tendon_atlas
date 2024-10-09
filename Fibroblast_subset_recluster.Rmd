@@ -155,8 +155,8 @@ if (ini$integration_method == "harmony"){
     rownames(scVI_embeddings) <- rownames(scVI_obs)
     
     # subset for testing
-    #scVI_embeddings <- scVI_embeddings[colnames(so.fibroblasts),]
-    #scVI_obs <- scVI_obs[colnames(so.fibroblasts),]
+    scVI_embeddings <- scVI_embeddings[colnames(so.fibroblasts),]
+    scVI_obs <- scVI_obs[colnames(so.fibroblasts),]
     
     # add the new embeddings to the subsetted object
     so.fibroblasts[["X_scVI"]] <- CreateDimReducObject(embeddings = scVI_embeddings, key = "scVI_", assay = "RNA")
@@ -203,10 +203,10 @@ if (ini$integration_method == "harmony"){
 
 } else if (ini$integration_method == "scVI"){
     if (ini$cluster_method == "louvain"){
-        so.fibroblasts <- FindClusters(so.fibroblasts, resolution = seq(0.05, 0.3, 0.05), 
+        so.fibroblasts <- FindClusters(so.fibroblasts, resolution = seq(0.05, 0.5, 0.05), 
                                        graph.name = "X_scVI_snn")
     } else if (ini$cluster_method == "leiden"){
-        so.fibroblasts <- so.fibroblasts %>% FindClusters(resolution = seq(0.05, 0.3, 0.05), 
+        so.fibroblasts <- so.fibroblasts %>% FindClusters(resolution = seq(0.05, 0.5, 0.05), 
                                               algorithm = "leiden",
                                               method = "igraph", 
                                               graph.name = "X_scVI_snn" #this was calc using scVI reduction on RNA assay
@@ -233,7 +233,7 @@ ggsave(paste0(directory, "/Subset_figures/Clustree_plot.png"),
 
 Plot UMAP for each clustering resolution
 
-```{r, fig.width=10, fig.height=16}
+```{r, fig.width=10, fig.height=20}
 
 resolutionList <- grep("_snn_res", colnames(so.fibroblasts@meta.data), value = TRUE)
 
@@ -244,7 +244,7 @@ for (resolution in resolutionList){
                                           group.by = resolution, shuffle = TRUE)
       }
 
-title <- ggdraw() + draw_label("UMAPs of clustering resolutions 0.05-0.3", fontface='bold', size = 24)
+title <- ggdraw() + draw_label("UMAPs of multiple clustering resolutions", fontface='bold', size = 24)
 p <- plot_grid(plotlist = plot_list, ncol = 2) 
 p <- plot_grid(title, p, ncol=1, rel_heights=c(0.05, 1))
 
@@ -478,15 +478,20 @@ Calculate the top 10 markers for each cluster by log2FC
 
 top10_markers <- list()
 for (resolution in resolutionList){
+        # only do this if there were marker genes found
+        if (length(found_markers[[resolution]]$gene > 0)){
       top10_markers[[resolution]] <- found_markers[[resolution]] %>% 
           group_by(cluster) %>% 
           slice_max(n=10, order_by = abs(avg_log2FC))
+    }
       
 }
 
-found_markers[["leiden_X_scVI_snn_res.0.3"]] %>% 
-          group_by(cluster) %>% 
-          slice_max(n=10, order_by = abs(avg_log2FC))
+
+
+#found_markers[["leiden_X_scVI_snn_res.0.3"]] %>% 
+#          group_by(cluster) %>% 
+#          slice_max(n=10, order_by = abs(avg_log2FC))
 
 ```
 
@@ -495,29 +500,31 @@ Plot the top 10 markers as a dotplot and heatmap
 ```{r}
 
 for (resolution in resolutionList){
-    
-    # set the idents to the resolution
-    Idents(so.fibroblasts) <- so.fibroblasts[[resolution]] %>% pull()
-    
-    res <- str_remove(resolution, "soupX_snn_res.")
-    DotPlot(so.fibroblasts,
-             features = unique(top10_markers[[resolution]]$gene),
-             assay = "soupX") + 
-    scale_colour_viridis(direction = -1) + 
-    coord_flip()+
-    ggtitle(paste0("Top 10 markers at resolution ", res))
-    
-    ggsave(paste0(directory, "/Dotplots/Top10markers_", res, ".png"), width = 10, height = 12)
-    ggsave(paste0(directory, "/Dotplots/Top10markers_", res, ".svg"), width = 10, height = 12)
-    
-    DoHeatmap(subset(so.fibroblasts), 
-               features = unique(top10_markers[[resolution]]$gene),
-               assay = "soupX") + 
-        scale_fill_viridis()+
-        ggtitle(paste0("Heatmap of top 10 markers at resolution ", res))
-    
-    ggsave(paste0(directory, "/Heatmaps/Top10markers_", res, ".png"), width = 12, height = 12)
-    ggsave(paste0(directory, "/Heatmaps/Top10markers_", res, ".svg"), width = 12, height = 12)
+    # only do this if there were marker genes found
+    if (length(found_markers[[resolution]]$gene > 0)){
+        # set the idents to the resolution
+        Idents(so.fibroblasts) <- so.fibroblasts[[resolution]] %>% pull()
+        
+        res <- str_remove(resolution, "soupX_snn_res.")
+        DotPlot(so.fibroblasts,
+                 features = unique(top10_markers[[resolution]]$gene),
+                 assay = "soupX") + 
+        scale_colour_viridis(direction = -1) + 
+        coord_flip()+
+        ggtitle(paste0("Top 10 markers at resolution ", res))
+        
+        ggsave(paste0(directory, "/Dotplots/Top10markers_", res, ".png"), width = 10, height = 12)
+        ggsave(paste0(directory, "/Dotplots/Top10markers_", res, ".svg"), width = 10, height = 12)
+        
+        DoHeatmap(subset(so.fibroblasts), 
+                   features = unique(top10_markers[[resolution]]$gene),
+                   assay = "soupX") + 
+            scale_fill_viridis()+
+            ggtitle(paste0("Heatmap of top 10 markers at resolution ", res))
+        
+        ggsave(paste0(directory, "/Heatmaps/Top10markers_", res, ".png"), width = 12, height = 12)
+        ggsave(paste0(directory, "/Heatmaps/Top10markers_", res, ".svg"), width = 12, height = 12)
+    }
 }
 
 

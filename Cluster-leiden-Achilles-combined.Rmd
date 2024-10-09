@@ -1,0 +1,398 @@
+---
+title: "Clustering with Leiden"
+author: "Carla Cohen"
+date: "06/09/2024"
+output: html_document
+---
+
+The aim of this script is to perform Clustering with the Leiden algorithm, in order to compare it with the default louvain algorithm. 
+
+Working directory is 
+
+/project/tendonhca/shared/chromium/analysis/20230006_achilles
+
+## Set up
+
+Set up and read in the yml file. 
+
+```{r setup, load packages, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+library(Seurat)
+library(tidyverse)
+library(cowplot)
+library(clustree)
+library(yaml)
+library(viridis)
+library(reticulate)
+library(withr)
+reticulate::use_condaenv(condaenv = "reticulate-env", conda = "/project/ancestryhca/ccohen/mamba_installation/conda/condabin/conda", required = F)
+reticulate::import(module = 'leidenalg')
+
+
+
+# make a new output folder for each run, with the date & time in the directory name
+date <- Sys.Date() %>% str_replace_all("-", "")
+time <- format(Sys.time(), "%X") %>% str_replace_all(":", "-") %>%
+    str_sub(1, 5)
+directory <- paste0(date,"_", time, "_Cluster_leiden.dir")
+dir.create(directory, showWarnings = FALSE)
+
+#need to update yml file as appropriate
+ini <- read_yaml("cluster_leiden.yml")
+
+```
+
+Print the parameters used
+```{r}
+ini
+```
+
+
+#### Read in the Seurat object
+
+Integrated with harmony or scVI.  
+
+```{r}
+if (ini$integration_method == "harmony"){
+    so <- readRDS(paste0(ini$integration_date, "_Integration.dir/RDS_objects.dir/Achilles_harmony_SeuratObject.rds"))
+}else if (ini$integration_method == "scVI"){
+    so <- readRDS(paste0(ini$integration_date, "_Integration-scvi-visualisation.dir/RDS_objects.dir/Achilles_harmony_scvi_SeuratObject.rds"))
+}
+
+so
+```
+
+
+#### Parameters
+Extract some names that depend on the normalisation method performed
+
+```{r}
+
+if (ini$normalisation_method == "SCTransform"){
+        
+        # save the reduction names
+        pca_name <- "sct.pca"
+        umap_name <- "sct.umap"
+        
+        # save the resolution prefix
+        res_prefix <- "SCT_snn_res."
+        
+    } else if (ini$normalisation_method == "SCTransformv2"){
+    
+    # save the reduction names
+     pca_name <- "sctv2.pca"
+     umap_name <- "sctv2.umap"
+     
+     # save the resolution prefix
+     res_prefix <- "SCTv2_snn_res."
+    
+    } else if (ini$normalisation_method == "LogNormalise"){
+    
+     # save the reduction names
+     pca_name <- "lognorm.pca"
+     umap_name <- "lognorm.umap"
+     
+     # save the resolution prefix
+     res_prefix <- "RNA_snn_res."
+     
+    # Some prefixes change if decontX is used for normalisation
+    if (ini$normalisation_assay == "decontXcounts"){
+        res_prefix <- "decontXcounts_snn_res."
+    }
+    if (ini$normalisation_assay == "soupX"){
+        res_prefix <- "leiden_soupX_snn_res."
+    }
+        
+    }
+
+if (ini$integration_method == "harmony"){
+    integrated_umap_name <-  "harmony.umap"
+    graph_name <- "soupX_snn"
+} else if (ini$integration_method == "scVI"){
+    integrated_umap_name <-  "umap.scvi"
+    res_prefix <- "leiden_X_scVI_snn_res."
+    graph_name <- "X_scVI_snn" 
+}
+
+
+print(ini$normalisation_method) 
+print(pca_name)
+print(umap_name)
+print(res_prefix)
+print(integrated_umap_name)
+print(graph_name)
+
+
+
+```
+Update the naming of earlier clustering with louvain
+
+```{r}
+# it is not possible to directly change metadata column names
+# create a df with new column names
+metadata <- so[[]]
+names <- colnames(so[[]])
+names <- str_replace(names, "^soupX", "louvain_soupX")
+if (ini$integration_method == "scVI"){
+    names <- str_replace(names, "^X_scVI", "louvain_X_scVI")
+}
+colnames(metadata) <- names
+metadata <- metadata %>% select(starts_with("louvain"))
+
+# remove old columns from metadata
+
+resolutionList <- grep("_snn_res", colnames(so@meta.data), value = TRUE)
+
+for (resolution in resolutionList){
+      so[[resolution]] <- NULL
+      }
+
+# add the newly labelled columns
+
+so <- AddMetaData(so, metadata)
+
+colnames(so[[]])
+
+
+```
+
+
+
+#### Find Clusters using leiden algorithm. 
+
+NB this does throw a warning which is currently unresolved:
+https://github.com/satijalab/seurat/issues/6958
+
+
+```{r, warning = FALSE, message = FALSE}
+
+so <- so %>% FindClusters(resolution = seq(0.1, 0.6, 0.1), 
+                                          algorithm = "leiden",
+                                          graph.name = graph_name, #makes sure the scVI graph is used 
+                          method = "igraph", # needed if running leiden
+                          verbose = TRUE) 
+
+```
+
+```{r}
+colnames(so[[]])
+```
+
+Update the column names to leiden_soupX
+
+```{r}
+# it is not possible to directly change metadata column names
+# create a df with new column names
+metadata <- so[[]]
+names <- colnames(so[[]])
+names <- str_replace(names, "^soupX", "leiden_soupX")
+names <- str_replace(names, "^X_scVI", "leiden_X_scVI")
+
+colnames(metadata) <- names
+metadata <- metadata %>% select(starts_with("leiden"))
+
+# add the newly labelled columns
+
+so <- AddMetaData(so, metadata)
+
+# remove old columns from metadata
+if (ini$integration_method == "harmony"){
+    resolutionList <- grep("^soupX_snn_res", colnames(so@meta.data), value = TRUE)
+}else if (ini$integration_method == "scVI"){
+    resolutionList <- grep("^X_scVI_snn_res", colnames(so@meta.data), value = TRUE)
+}
+
+
+for (resolution in resolutionList){
+      so[[resolution]] <- NULL
+      }
+
+
+colnames(so[[]])
+
+
+```
+
+
+## Clustree
+Plot the clustree to determine the most appropriate resolution to use
+
+```{r, fig.height= 10, fig.width=10}
+
+p <- clustree(so, prefix = res_prefix, 
+              node_colour = "sc3_stability", 
+              #layout = "sugiyama"
+              ) + 
+        ggtitle("Clustree")
+    
+p
+
+```
+
+
+```{r, include=FALSE}
+#save the plot
+ggsave(paste0(directory, "/Integration_Figures.dir/Clustree_plot.", ini$file_type), 
+       p, device = ini$file_format, width = 10, height = 10, bg = "white")
+
+
+```
+
+Plot UMAPs at multiple clustering resolutions
+
+```{r, fig.width=10, fig.height=15}
+
+resolutionList <- grep(res_prefix, colnames(so@meta.data), value = TRUE)
+
+plot_list <- list()
+
+for (resolution in resolutionList){
+      plot_list [[resolution]] <- DimPlot(object = so, label = TRUE, reduction = integrated_umap_name, group.by = resolution, shuffle = TRUE)+
+          #scale_colour_viridis_d()
+          theme(legend.position="none")
+      }
+
+title <- ggdraw() + draw_label("UMAPs of clustering resolutions 0.1-1", fontface='bold', size = 24)
+p <- plot_grid(plotlist = plot_list, ncol = 2) 
+p <- plot_grid(title, p, ncol=1, rel_heights=c(0.05, 1))
+
+
+p
+
+```
+
+```{r, include=FALSE}
+ggsave(paste0(directory, "/Integration_Figures.dir/UMAP_compare_resolutions.", ini$file_type), 
+       p, device = ini$file_format, width = 10, height = 20, bg = "white")
+```
+
+Select a resolution and set seurat clusters to that resolution 
+
+```{r} 
+
+so[["seurat_clusters"]] <- so[[paste0(res_prefix, ini$integration_resolution)]]
+Idents(so) <- so[[paste0(res_prefix, ini$integration_resolution)]]
+
+```
+
+
+## Save objects 
+Save Seurat object with new clustering
+```{r}
+dir.create(paste0(directory, "/RDS_objects.dir/"))
+saveRDS(so, paste0(directory, "/RDS_objects.dir/Achilles_harmony_SeuratObject.rds"))
+
+```
+
+
+### Visualise clustering QC metrics 
+
+```{r, message = FALSE, fig.width=10, fig.height=15}
+p1 <- VlnPlot(so, features = "sum", assay = "RNA", pt.size = 0)+
+    scale_y_log10() +
+    scale_fill_viridis_d()+
+    theme(legend.position="none")+
+    theme_cowplot()+
+    ggtitle("nCounts")
+
+p2 <- VlnPlot(so, features = "detected", assay = "RNA", pt.size = 0)+
+    scale_y_log10() +
+    scale_fill_viridis_d()+
+    theme(legend.position="none")+
+    theme_cowplot()+
+    ggtitle("nFeatures")
+
+p3 <- VlnPlot(so, features = "subsets_mito_percent", assay = "RNA", pt.size = 0)+
+    scale_fill_viridis_d()+
+    theme(legend.position="none")+
+    theme_cowplot()+
+    ggtitle("Percent mitochondrial reads")
+
+p4 <- VlnPlot(so, features = "decontX_contamination", assay = "RNA", pt.size = 0)+
+    scale_fill_viridis_d()+
+    theme(legend.position="none")+
+    theme_cowplot()+
+    ggtitle("decontX score")
+
+p <- plot_grid(p1, p2, p3, p4, ncol = 1)
+p
+
+```
+```{r, include=FALSE}
+#save the plot
+ggsave(paste0(directory, "/Integration_Figures.dir/QC_metrics_across_clusters.", ini$file_type), 
+       p, device = ini$file_type, width = 10, height = 15, bg = "white")
+
+
+```
+
+
+
+## Integration visualisation
+
+Visualization of integrated data via UMAP at chosen resolution
+
+```{r, fig.height=7, fig.width=7}
+p <- DimPlot(so, reduction = integrated_umap_name, pt.size = .1)+ 
+    ggtitle (paste0(ini$integration_method, " Leiden Clustering at resolution = ", ini$integration_resolution))
+p
+
+
+```
+
+```{r, include=FALSE}
+#save the plot
+ggsave(paste0(directory, "/Integration_Figures.dir/UMAP_leiden_clustering_res_", ini$integrated_resolution, ".", ini$file_type), 
+       p, device = ini$file_format, width = 10, height = 10, bg = "white")
+
+
+```
+
+
+Very quick annotation
+
+```{r, fig.height=10, fig.width=8}
+
+plot_updated_markers <- function (so, resolution){
+    p <- DotPlot(so, 
+             features =c("COL1A1", "COL1A2", "COL3A1", "DCN",
+              "HMCN1", "NEGR1", "DCLK1", "KAZN", "BICC1", "PRICKLE1",
+              "CLU", "COMP", "MMP3", "NOVA1", "CILP", "FBLN1", "PRG4",
+              "TRDN", "TTN", "NEB", "TNNT1", "LGR5", "ATP2A2",
+              "PECAM1", "PTPRB", "FLT1", "VWF",
+              "PTPRC", "F13A1", "CD163", "MRC1", "MSR1",
+              "PLIN1", "AQP7", "ADIPOQ",
+              "NOTCH3", "PDGFRB", "MYO1B",
+              "TNNT3", "MYH1", "MYH3",
+              "CD247", "SKAP1", "THEMIS",
+              "MMRN1", "PROX1", "PKHD1L1",
+              "PAX7",
+              "KIT", "CPA3", "IL18R1",
+              "MS4A1", "CD37", "BLNK",
+              "IL1RAPL2", "XKR4", "NRXN1",
+                "ASPM", "DIAPH3", "TOP2A"),
+             assay = ini$normalisation_assay) + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle(paste0("Updated markers resolution ", resolution)) + 
+    coord_flip()
+    
+    p
+}
+plot_updated_markers(so, 0.1)
+
+```
+
+```{r}
+
+ggsave(paste0(directory, "/Marker_dotplots/dotplot_updated_general_markers_", resolution, ".", ini$file_type), 
+       device = ini$file_type, width = 10, height = 16, 
+       bg = "white")
+
+```
+
+
+```{r}
+sessionInfo()
+```
+

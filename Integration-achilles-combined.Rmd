@@ -67,18 +67,21 @@ file_list <- list.files(paste0(ini$doublet_date, "_Doublet.dir/RDS_objects.dir/"
 
 names(file_list) <- str_replace(file_list, paste0("_", doublet_name, "_SeuratObject.rds"), "")
 
-
+names(file_list)
 ```
 
-Remove any samples that have failed QC.  
-This may be updated at a later date, using all samples for now.  
-
+Optionally remove the muscle samples
 ```{r}
-#file_list <- file_list[names(file_list) %in% "MSK0785-Ach-MB" == FALSE]
-#file_list <- file_list[names(file_list) %in% "MSK1250-Ach-MB2" == FALSE]
+if (ini$remove_muscle == TRUE){
+    print ("Removing muscle samples")
+    muscle_samples <- grep("muscle", file_list)
+    file_list <- file_list[-muscle_samples]
+    names(file_list)
+}
 
-file_list
 ```
+
+
 Read in the data
 
 ```{r}
@@ -159,9 +162,19 @@ so.merge <- merge(so[[1]], y = so[-c(1)], add.cell.ids = names(file_list))
 
 ```
 
-Optional: Remove ambient RNA above a given threshold.
-For now I have set this to FALSE.
+#### Ambient QC
 
+Plot the decontX and soupX fractions before additional filtering
+
+```{r, fig.height=12, fig.width=8}
+VlnPlot(so.merge, features = c("decontX_contamination", "soupX_fraction"), 
+        group.by = "orig.ident", ncol = 1, pt.size = 0)
+ggsave(paste0(directory, "/Integration_Figures.dir/Vln_ambient_before_filter.", ini$file_type), 
+       device = ini$file_format, width = 8, height = 12, bg = "white")
+```
+
+
+Optional: Remove ambient RNA (decontX) above a given threshold.
 
 ```{r}
 if (ini$ambient_filter == TRUE){
@@ -172,6 +185,53 @@ print("Dimensions of merged object:")
 dim(so.merge)
 ```
 
+Optional: Remove ambient RNA (soupX) above a given threshold.
+
+```{r}
+if (ini$soupX_filter == TRUE){
+    so.merge <- subset(so.merge, soupX_fraction < ini$soupX_threshold)
+}
+
+print("Dimensions of merged object:")
+dim(so.merge)
+```
+
+Plot the decontX and soupX fractions after additional filtering
+
+```{r, fig.height=12, fig.width=8}
+VlnPlot(so.merge, features = c("decontX_contamination", "soupX_fraction"), 
+        group.by = "orig.ident", ncol = 1, pt.size = 0)
+ggsave(paste0(directory, "/Integration_Figures.dir/Vln_ambient_after_filter.", ini$file_type), 
+       device = ini$file_format, width = 8, height = 12, bg = "white")
+```
+
+
+## Subset
+Subset the merged object (downsample) in order to test the following code more quickly  
+```{r}
+#so.merge <- so.merge[, sample(colnames(so.merge), size =5000, replace=F)]
+#so.merge
+```
+
+
+# Add a new column in the metadata for patient.seqbatch 
+
+```{r}
+patient_seqbatch <- so.merge[[]] %>% 
+    unite("patient.seqbatch", c(patient, sequencing_date), remove = FALSE) %>% 
+    select(patient.seqbatch)
+
+so.merge <- AddMetaData(so.merge, patient_seqbatch, "patient.seqbatch")
+```
+
+## Remove samples that have failed QC
+
+```{r}
+if (is.null(ini$samples_to_remove) == FALSE){
+    so.merge <- subset(so.merge, orig.ident == ini$samples_to_remove, invert = TRUE)
+}
+
+```
 
 
 #### Perform Normalisation on the merged object
@@ -224,6 +284,15 @@ if (ini$normalisation_method == "SCTransform"){
     
   
 ```
+
+```{r}
+Idents(so.merge) <- "orig.ident"
+DimPlot(so.merge, reduction = umap_name)
+dir.create(paste0(directory, "/Integration_Figures.dir/"))
+ggsave(paste0(directory, "/Integration_Figures.dir/UMAP_merged.", ini$file_type), 
+       device = ini$file_format, width = 10, height = 7, bg = "white")
+```
+
 #### QC plots on merged object
 
 Elbow Plot
@@ -234,13 +303,10 @@ p
 ```
 
 ```{r, include=FALSE}
-#save the plot
-dir.create(paste0(directory, "/Integration_Figures.dir/"))
 ggsave(paste0(directory, "/Integration_Figures.dir/ElbowPlot.", ini$file_type), 
        p, device = ini$file_format, width = 6, height = 4, bg = "white")
-
-
 ```
+
 
 
 ## Integration using Harmony
@@ -262,7 +328,7 @@ so.harmony <- RunHarmony(so.merge,
                          reduction.use = pca_name, 
                          group.by.vars = ini$group_by_vars, 
                          plot_convergence = TRUE, 
-                         dims.use = 1:ini$harmony_dims, 
+                         dims.use = 1:ini$n_dims, 
                          kmeans_init_nstart=20, kmeans_init_iter_max=100)
 ```
 
@@ -294,95 +360,6 @@ p
 ```{r}
 ggsave(paste0(directory, "/Integration_Figures.dir/Elbowplot_merged_vs_integrated.", ini$file_type), 
        p, device = ini$file_format, width = 10, height = 4, bg = "white")
-```
-
-Which genes are driving each PC?
-
-```{r, fig.width=10, fig.height=10}
-DimHeatmap(so.harmony, dims = 1:4, cells = 500, balanced = TRUE, reduction = pca_name, ncol =2)
-
-```
-
-
-```{r}
-#not working as the DimHeatmap plot does not assign to the variable
-#ggsave(paste0(directory, "/Integration_Figures.dir/PCA_DimHeatmap.", ini$file_type), 
-#       p, device = ini$file_format, width = 10, height = 10, bg = "white")
-```
-
-
-Plot the clustree to determine the most appropriate resolution to use
-
-```{r, fig.height= 10, fig.width=10}
-
-p <- clustree(so.harmony, prefix = res_prefix, 
-              node_colour = "sc3_stability", 
-              #layout = "sugiyama"
-              ) + 
-        ggtitle("Clustree")
-    
-p
-
-```
-
-
-```{r, include=FALSE}
-#save the plot
-ggsave(paste0(directory, "/Integration_Figures.dir/Clustree_plot.", ini$file_type), 
-       p, device = ini$file_format, width = 10, height = 10, bg = "white")
-
-
-```
-
-Plot UMAPs at multiple clustering resolutions
-
-```{r, fig.width=10, fig.height=20}
-
-resolutionList <- grep(res_prefix, colnames(so.harmony@meta.data), value = TRUE)
-
-plot_list <- list()
-
-for (resolution in resolutionList){
-      plot_list [[resolution]] <- DimPlot(object = so.harmony, label = TRUE, reduction = "harmony.umap", group.by = resolution, shuffle = TRUE)+
-          #scale_colour_viridis_d()
-          theme(legend.position="none")
-      }
-
-title <- ggdraw() + draw_label("UMAPs of clustering resolutions 0.1-1", fontface='bold', size = 24)
-p <- plot_grid(plotlist = plot_list, ncol = 2) 
-p <- plot_grid(title, p, ncol=1, rel_heights=c(0.05, 1))
-
-
-p
-
-```
-
-```{r, include=FALSE}
-#save the plot
-ggsave(paste0(directory, "/Integration_Figures.dir/UMAP_compare_resolutions.", ini$file_type), 
-       p, device = ini$file_format, width = 10, height = 20, bg = "white")
-
-
-```
-
-Select a resolution and set seurat clusters to that resolution 
-
-```{r} 
-
-so.harmony[["seurat_clusters"]] <- so.harmony[[paste0(res_prefix, ini$integrated_resolution)]]
-Idents(so.harmony) <- so.harmony[[paste0(res_prefix, ini$integrated_resolution)]]
-
-```
-
-
-## Save objects 
-Save merged & integrated Seurat objects
-```{r}
-dir.create(paste0(directory, "/RDS_objects.dir/"))
-
-saveRDS(so.merge, paste0(directory, "/RDS_objects.dir/Achilles_merge_SeuratObject.rds"))
-saveRDS(so.harmony, paste0(directory, "/RDS_objects.dir/Achilles_harmony_SeuratObject.rds"))
-
 ```
 
 #Calculate lisi score/other metrics
@@ -445,16 +422,20 @@ Plot the LISI scores
 ```{r}
 # prepare the data by ranking the outputs
 iLISI_merged <- cbind(iLISI_merged, rank(iLISI_merged$orig.ident))
-cLISI_merged <- cbind(cLISI_merged, rank(LISI_column_name))
+colnames(iLISI_merged) <- c("orig.ident", "rank")
+cLISI_merged_values <- cLISI_merged[LISI_column_name] %>% pull() %>% rank()
+cLISI_merged <- cbind(cLISI_merged, cLISI_merged_values)
 colnames(cLISI_merged) <- c("cluster_res", "rank")
 iLISI_integrated <- cbind(iLISI_integrated, rank(iLISI_integrated$orig.ident))
+colnames(iLISI_integrated) <- c("orig.ident", "rank")
 cLISI_integrated <- cbind(cLISI_integrated, rank(cLISI_integrated$seurat_clusters))
+colnames(cLISI_integrated) <- c("seurat_clusters", "rank")
 ```
 
 ```{r, fig.width=10, fig.height=8}
 
 
-p1 <- ggplot(data = iLISI_merged, aes(x = orig.ident, y = rank(iLISI_merged$orig.ident))) +
+p1 <- ggplot(data = iLISI_merged, aes(x = orig.ident, y = rank)) +
           geom_point() +
           labs(title = paste0("Merged iLISI score: mean = ", format(iLISI_merged_mean, digits = 4)),
                x = "iLISI score",
@@ -470,7 +451,7 @@ p2 <- ggplot(data = cLISI_merged, aes(x = cluster_res, y = rank)) +
     #xlim(c(0, 8))+
     theme_cowplot()
 
-p3 <- ggplot(data = iLISI_integrated, aes(x = orig.ident, y = rank(iLISI_integrated$orig.ident))) +
+p3 <- ggplot(data = iLISI_integrated, aes(x = orig.ident, y = rank)) +
           geom_point() +
           labs(title = paste0("Integrated iLISI score: mean = ", format(iLISI_integrated_mean, digits = 4)),
                x = "iLISI score",
@@ -478,7 +459,7 @@ p3 <- ggplot(data = iLISI_integrated, aes(x = orig.ident, y = rank(iLISI_integra
     #xlim(c(0, 8))+
     theme_cowplot()
 
-p4 <- ggplot(data = cLISI_integrated, aes(x = seurat_clusters, y = rank(cLISI_integrated$seurat_clusters))) +
+p4 <- ggplot(data = cLISI_integrated, aes(x = seurat_clusters, y = rank)) +
           geom_point() +
           labs(title = paste0("Integrated cLISI score: mean = ", format(cLISI_integrated_mean, digits = 4)),
                x = "cLISI score",
@@ -491,7 +472,6 @@ p
 
 
 ```
-
 ```{r}
 ggsave(paste0(directory, "/Integration_Figures.dir/LISI_results.", ini$file_type), 
        p, device = ini$file_format, width = 12, height = 8, bg = "white")
@@ -499,23 +479,82 @@ ggsave(paste0(directory, "/Integration_Figures.dir/LISI_results.", ini$file_type
 
 ```
 
-#### Clustering stability
+## Clustree
+Plot the clustree to determine the most appropriate resolution to use
 
-Use sc-SHC (https://www.nature.com/articles/s41592-023-01933-9) to analyse the validity of the Seurat clusters at resolution 0.2
+```{r, fig.height= 10, fig.width=10}
 
-Not included here as takes a very long time to run. 
-Run as a separate job script. 
+p <- clustree(so.harmony, prefix = res_prefix, 
+              node_colour = "sc3_stability", 
+              #layout = "sugiyama"
+              ) + 
+        ggtitle("Clustree")
+    
+p
 
-See sc-SHC-Achilles.Rmd
-(Also better to run after annotation has been done)
+```
+
+
+```{r, include=FALSE}
+#save the plot
+ggsave(paste0(directory, "/Integration_Figures.dir/Clustree_plot.", ini$file_type), 
+       p, device = ini$file_format, width = 10, height = 10, bg = "white")
+
+
+```
+
+Plot UMAPs at multiple clustering resolutions
+
+```{r, fig.width=10, fig.height=20}
+
+resolutionList <- grep(res_prefix, colnames(so.harmony@meta.data), value = TRUE)
+
+plot_list <- list()
+
+for (resolution in resolutionList){
+      plot_list [[resolution]] <- DimPlot(object = so.harmony, label = TRUE, reduction = "harmony.umap", group.by = resolution, shuffle = TRUE)+
+          #scale_colour_viridis_d()
+          theme(legend.position="none")
+      }
+
+title <- ggdraw() + draw_label("UMAPs of clustering resolutions 0.1-1", fontface='bold', size = 24)
+p <- plot_grid(plotlist = plot_list, ncol = 2) 
+p <- plot_grid(title, p, ncol=1, rel_heights=c(0.05, 1))
+
+
+p
+
+```
+
+```{r, include=FALSE}
+ggsave(paste0(directory, "/Integration_Figures.dir/UMAP_compare_resolutions.", ini$file_type), 
+       p, device = ini$file_format, width = 10, height = 20, bg = "white")
+```
+
+Select a resolution and set seurat clusters to that resolution 
+
+```{r} 
+
+so.harmony[["seurat_clusters"]] <- so.harmony[[paste0(res_prefix, ini$integrated_resolution)]]
+Idents(so.harmony) <- so.harmony[[paste0(res_prefix, ini$integrated_resolution)]]
+
+```
+
+
+## Save objects 
+Save merged & integrated Seurat objects
+```{r}
+dir.create(paste0(directory, "/RDS_objects.dir/"))
+
+saveRDS(so.merge, paste0(directory, "/RDS_objects.dir/Achilles_merge_SeuratObject.rds"))
+saveRDS(so.harmony, paste0(directory, "/RDS_objects.dir/Achilles_harmony_SeuratObject.rds"))
+
+```
+
 
 ### Visualise QC metrics 
 
 ```{r, message = FALSE, fig.width=10, fig.height=15}
-# change the order of the levels of the idents (so it's not 0, 1, 10, 2....)
-#unique(so.harmony[["decontXcounts_snn_res.0.4"]])
-#Idents(so.harmony) <- factor(Idents(so.harmony), levels = c(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12))
-
 p1 <- VlnPlot(so.harmony, features = "sum", assay = "RNA", pt.size = 0)+
     scale_y_log10() +
     scale_fill_viridis_d()+
@@ -536,7 +575,13 @@ p3 <- VlnPlot(so.harmony, features = "subsets_mito_percent", assay = "RNA", pt.s
     theme_cowplot()+
     ggtitle("Percent mitochondrial reads")
 
-p <- plot_grid(p1, p2, p3, ncol = 1)
+p4 <- VlnPlot(so.harmony, features = "decontX_contamination", assay = "RNA", pt.size = 0)+
+    scale_fill_viridis_d()+
+    theme(legend.position="none")+
+    theme_cowplot()+
+    ggtitle("decontX score")
+
+p <- plot_grid(p1, p2, p3, p4, ncol = 1)
 p
 
 ```
@@ -603,10 +648,8 @@ Visualization of merged and integrated data via UMAP split by sample
 
 ```{r, fig.width = 8, fig.height=12}
 p1 <- DimPlot(so.merge, reduction = umap_name, pt.size = .1, group.by = "orig.ident", shuffle = TRUE) +
-    scale_colour_viridis_d()+
     ggtitle("Merged")
 p2 <- DimPlot(so.harmony, reduction = "harmony.umap", pt.size = .1, group.by = "orig.ident", shuffle = TRUE)+ 
-    scale_colour_viridis_d()+
     ggtitle ("Harmony Integration")
 p <- plot_grid (p1, p2, ncol = 1)
 p
@@ -625,7 +668,6 @@ Visualization of integrated data via UMAP at chosen resolution
 
 ```{r, fig.height=7, fig.width=7}
 p <- DimPlot(so.harmony, reduction = "harmony.umap", pt.size = .1)+ 
-    scale_colour_viridis_d()+
     ggtitle (paste0("Harmony Integration Clustering at resolution = ", ini$integrated_resolution))
 p
 
@@ -647,7 +689,7 @@ UMAP of integrated data by sample with each sample on a separate plot
 ```{r, fig.width=14, fig.height=24}
 
 p <- DimPlot(so.harmony, reduction = "harmony.umap", split.by = "orig.ident", ncol = 3)+
-    scale_colour_viridis_d()+
+    #scale_colour_viridis_d()+
     theme(panel.background = element_rect(colour = "black", linewidth = 1))
 
 p
@@ -655,9 +697,26 @@ p
 
 ```{r, include=FALSE}
 #save the plot
-ggsave(paste0(directory, "/Integration_Figures.dir/UMAP_harmony_by_sample.", ini$file_type), 
+ggsave(paste0(directory, "/Integration_Figures.dir/UMAP_harmony_by_orig.ident.", ini$file_type), 
        p, device = ini$file_format, width = 14, height = 20, bg = "white")
 
+
+```
+
+Just plot the Enthesis samples, to check how MSK1284 compares to the others. It is missing some cell types but this may be because it is only enthesis, the other microanatomies are not present.
+
+```{r, fig.width=14, fig.height=10}
+so.enth <- subset(so.harmony, microanatomical_site == "Enth")
+p <- DimPlot(so.enth, reduction = "harmony.umap", split.by = "orig.ident", ncol = 3)+
+    #scale_colour_viridis_d()+
+    theme(panel.background = element_rect(colour = "black", linewidth = 1))
+
+p
+```
+
+```{r}
+ggsave(paste0(directory, "/Integration_Figures.dir/UMAP_harmony_Enthesis.", ini$file_type), 
+       p, device = ini$file_format, width = 14, height = 10, bg = "white")
 
 ```
 
@@ -667,7 +726,7 @@ UMAP of integrated data by patient with each patient on a separate plot
 ```{r, fig.width=14, fig.height=10}
 
 p <- DimPlot(so.harmony, reduction = "harmony.umap", split.by = "patient", ncol = 3)+
-    scale_colour_viridis_d()+
+    #scale_colour_viridis_d()+
     theme(panel.background = element_rect(colour = "black", linewidth = 1))
 
 p
@@ -682,13 +741,13 @@ ggsave(paste0(directory, "/Integration_Figures.dir/UMAP_harmony_by_patient.", in
 
 
 ```
-Plot UMAP of microanatomical site on separate plots
 
+Plot UMAP of microanatomical site on separate plots
 
 ```{r, fig.width = 10, fig.height = 10, message = FALSE}
 
 p <- DimPlot(so.harmony, reduction = "harmony.umap", pt.size = .1, split.by = "microanatomical_site", ncol = 2)+
-    scale_colour_viridis_d()+
+    #scale_colour_viridis_d()+
     theme(panel.background = element_rect(colour = "black", linewidth = 1))
     ggtitle("microanatomical site")
 p
@@ -702,4 +761,269 @@ ggsave(paste0(directory, "/Integration_Figures.dir/UMAP_harmony_by_microanatomy.
 
 ```
 
+
+Plot UMAP of sequencing batch on separate plots
+
+```{r, fig.width = 10, fig.height = 4, message = FALSE}
+
+p <- DimPlot(so.harmony, reduction = "harmony.umap", pt.size = .1, split.by = "sequencing_date", ncol = 3)+
+    theme(panel.background = element_rect(colour = "black", linewidth = 1))
+    ggtitle("sequencing date")
+p
+```
+
+```{r, include=FALSE}
+#save the plot
+ggsave(paste0(directory, "/Integration_Figures.dir/UMAP_harmony_by_sequencing_date.", ini$file_type), 
+       p, device = ini$file_type, width = 10, height = 4, bg = "white")
+
+
+```
+
+
+## QC on integrated object
+
+Compare PCA plot from the merged vs integrated data by orig.ident
+
+```{r, fig.width = 14, fig.height=6}
+
+p1 <- DimPlot(so.merge, reduction = pca_name, group.by = "orig.ident", shuffle = TRUE) +
+    #scale_colour_viridis_d()+
+        ggtitle ("PCA plot merged")
+p2 <- DimPlot(so.harmony, reduction = "harmony", group.by = "orig.ident", shuffle = TRUE) + 
+    #scale_colour_viridis_d()+
+    ggtitle ("PCA plot integrated")
+
+p <- plot_grid(p1,p2, nrow = 1)
+p
+
+
+```
+
+
+```{r}
+ggsave(paste0(directory, "/Integration_Figures.dir/PCA_merged_vs_integrated.", ini$file_type), 
+       p, device = ini$file_format, width = 14, height = 6, bg = "white")
+```
+
+PCA by other variables
+
+```{r, fig.width = 10, fig.height=10}
+
+p1 <- DimPlot(so.merge, reduction = pca_name, group.by = "patient", shuffle = TRUE)
+p2 <- DimPlot(so.harmony, reduction = pca_name, group.by = "sequencing_date", shuffle = TRUE) 
+p3 <- DimPlot(so.harmony, reduction = pca_name, group.by = "age", shuffle = TRUE) 
+p4 <- DimPlot(so.harmony, reduction = pca_name, group.by = "sex", shuffle = TRUE) 
+p5 <- DimPlot(so.harmony, reduction = pca_name, group.by = "microanatomical_site", shuffle = TRUE) 
+p <- plot_grid(p1,p2,p3, p4, p5, ncol = 2)
+p
+
+
+```
+```{r}
+ggsave(paste0(directory, "/Integration_Figures.dir/PCA_Metafeatures.", ini$file_type), 
+       p, device = ini$file_format, width = 10, height = 10, bg = "white")
+```
+PCA3-4 by other variables
+
+```{r, fig.width = 10, fig.height=10}
+
+p1 <- DimPlot(so.merge, reduction = pca_name, group.by = "patient", shuffle = TRUE, dims = c(3, 4))
+p2 <- DimPlot(so.harmony, reduction = pca_name, group.by = "sequencing_date", shuffle = TRUE, dims = c(3, 4)) 
+p3 <- DimPlot(so.harmony, reduction = pca_name, group.by = "age", shuffle = TRUE, dims = c(3, 4)) 
+p4 <- DimPlot(so.harmony, reduction = pca_name, group.by = "sex", shuffle = TRUE, dims = c(3, 4)) 
+p5 <- DimPlot(so.harmony, reduction = pca_name, group.by = "microanatomical_site", shuffle = TRUE, dims = c(3, 4)) 
+p <- plot_grid(p1,p2,p3, p4, p5, ncol = 2)
+p
+
+```
+Plot metafeatures on Vln plot of PC1
+
+```{r, fig.height=10, fig.width=12}
+plot_list <- list()
+
+#By sample
+plot_list[[1]] <- VlnPlot(object = so.harmony, features = "PC_1", group.by = "orig.ident", pt.size = 0) +
+    theme(legend.position="none")+
+    ggtitle("orig.ident")
+#By patient
+plot_list[[2]] <- VlnPlot(so.harmony, pt.size = 0, features = "PC_1", group.by = "patient")+
+    theme(legend.position="none")+ggtitle("patient")
+#By age
+plot_list[[3]] <- VlnPlot(so.harmony, pt.size = 0, features = "PC_1", group.by = "age")+
+    theme(legend.position="none") +ggtitle("age")
+#By sex
+plot_list[[4]] <- VlnPlot(so.harmony, pt.size = 0, features = "PC_1", group.by = "sex")+
+    theme(legend.position="none")+ ggtitle("sex")
+#By microanatomy
+plot_list[[5]] <- VlnPlot(so.harmony, pt.size = 0, features = "PC_1", group.by = "microanatomical_site")+
+    theme(legend.position="none")+ ggtitle("microanatomical site")
+#By surgical procedure
+#plot_list[[6]] <- VlnPlot(so.harmony, pt.size = .1, features = "harmony_1", group.by = "surgical_procedure")
+#By disease status
+#plot_list[[7]] <- VlnPlot(so.harmony, pt.size = .1, features = "harmony_1", group.by = "disease_status")
+#By anatomical site
+#plot_list[[8]] <- VlnPlot(so.harmony, pt.size = .1, features = "harmony_1", group.by = "anatomical_site")
+#By time to freezing
+#plot_list[[9]] <- VlnPlot(so.harmony, pt.size = .1, features = "harmony_1", group.by = "time_to_freezing")
+#By sequencing date
+plot_list[[6]] <- VlnPlot(so.harmony, pt.size = 0, features = "PC_1", group.by = "sequencing_date")+
+    theme(legend.position="none")+ ggtitle("sequencing date")
+#By ethnicity
+#plot_list[[11]] <- VlnPlot(so.harmony, pt.size = .1, features = "harmony_1", group.by = "ethnicity")
+
+
+title <- ggdraw() + draw_label("PC1 Metafeatures after integration", fontface='bold', size = 16)
+p <- plot_grid(plotlist = plot_list, ncol = 2) 
+p <- plot_grid(title, p, ncol=1, rel_heights=c(0.05, 1))
+
+
+p
+
+
+```
+
+```{r}
+ggsave(paste0(directory, "/Integration_Figures.dir/Vln_PCA_Metafeatures.", ini$file_type), 
+       p, device = ini$file_format, width = 10, height = 12, bg = "white")
+```
+
+Plot metafeatures on Vln plot of PC2
+
+```{r, fig.height=10, fig.width=12}
+plot_list <- list()
+
+#By sample
+plot_list[[1]] <- VlnPlot(object = so.harmony, features = "PC_2", group.by = "orig.ident", pt.size = 0) +
+    theme(legend.position="none")+
+    ggtitle("orig.ident")
+#By patient
+plot_list[[2]] <- VlnPlot(so.harmony, pt.size = 0, features = "PC_2", group.by = "patient")+
+    theme(legend.position="none")+ggtitle("patient")
+#By age
+plot_list[[3]] <- VlnPlot(so.harmony, pt.size = 0, features = "PC_2", group.by = "age")+
+    theme(legend.position="none") +ggtitle("age")
+#By sex
+plot_list[[4]] <- VlnPlot(so.harmony, pt.size = 0, features = "PC_2", group.by = "sex")+
+    theme(legend.position="none")+ ggtitle("sex")
+#By microanatomy
+plot_list[[5]] <- VlnPlot(so.harmony, pt.size = 0, features = "PC_2", group.by = "microanatomical_site")+
+    theme(legend.position="none")+ ggtitle("microanatomical site")
+#By surgical procedure
+#plot_list[[6]] <- VlnPlot(so.harmony, pt.size = .1, features = "harmony_1", group.by = "surgical_procedure")
+#By disease status
+#plot_list[[7]] <- VlnPlot(so.harmony, pt.size = .1, features = "harmony_1", group.by = "disease_status")
+#By anatomical site
+#plot_list[[8]] <- VlnPlot(so.harmony, pt.size = .1, features = "harmony_1", group.by = "anatomical_site")
+#By time to freezing
+#plot_list[[9]] <- VlnPlot(so.harmony, pt.size = .1, features = "harmony_1", group.by = "time_to_freezing")
+#By sequencing date
+plot_list[[6]] <- VlnPlot(so.harmony, pt.size = 0, features = "PC_2", group.by = "sequencing_date")+
+    theme(legend.position="none")+ ggtitle("sequencing date")
+#By ethnicity
+#plot_list[[11]] <- VlnPlot(so.harmony, pt.size = .1, features = "harmony_1", group.by = "ethnicity")
+
+
+title <- ggdraw() + draw_label("PC1 Metafeatures after integration", fontface='bold', size = 16)
+p <- plot_grid(plotlist = plot_list, ncol = 2) 
+p <- plot_grid(title, p, ncol=1, rel_heights=c(0.05, 1))
+
+
+p
+
+
+```
+
+Check genes driving the first four PCs. 
+
+
+```{r, fig.width=10, fig.height=10}
+DimHeatmap(so.harmony, dims = 1:4, cells = 500, balanced = TRUE, reduction = pca_name, ncol =2)
+
+```
+
+
+Check distribution by metadata elements on UMAP following integration
+
+```{r, by donor, fig.height=26, fig.width=6}
+plot_list <- list()
+
+#By sample
+#plot_list[[1]] <- DimPlot(so.harmony, reduction = "harmony.umap", pt.size = .1, group.by = "orig.ident", shuffle = TRUE)+
+#    scale_colour_viridis_d()+
+#    ggtitle("sample")
+#By patient
+plot_list[[1]] <- DimPlot(so.harmony, reduction = "harmony.umap", pt.size = .1, group.by = "patient", shuffle = TRUE)
+#By age
+plot_list[[2]] <- DimPlot(so.harmony, reduction = "harmony.umap", pt.size = .1, group.by = "age", shuffle = TRUE)
+#By sex
+plot_list[[3]] <- DimPlot(so.harmony, reduction = "harmony.umap", pt.size = .1, group.by = "sex", shuffle = TRUE)
+#By microanatomy
+plot_list[[4]] <- DimPlot(so.harmony, reduction = "harmony.umap", pt.size = .1, group.by = "microanatomical_site", shuffle = TRUE)
+#By surgical procedure
+#plot_list[[6]] <- DimPlot(so.harmony, reduction = "harmony.umap", pt.size = .1, group.by = "surgical_procedure")
+#By disease status
+#plot_list[[7]] <- DimPlot(so.harmony, reduction = "harmony.umap", pt.size = .1, group.by = "disease_status")
+#By anatomical site
+#plot_list[[8]] <- DimPlot(so.harmony, reduction = "harmony.umap", pt.size = .1, group.by = "anatomical_site")
+#By time to freezing
+#plot_list[[9]] <- DimPlot(so.harmony, reduction = "harmony.umap", pt.size = .1, group.by = "time_to_freezing")
+#By sequencing date
+plot_list[[5]] <- DimPlot(so.harmony, reduction = "harmony.umap", pt.size = .1, group.by = "sequencing_date")
+#By ethnicity
+#plot_list[[11]] <- DimPlot(so.harmony, reduction = "harmony.umap", pt.size = .1, group.by = "ethnicity")
+
+title <- ggdraw() + draw_label("Metafeatures on UMAP after harmony integration", fontface='bold', size = 12)
+p <- plot_grid(plotlist = plot_list, ncol = 1) 
+p <- plot_grid(title, p, ncol=1, rel_heights=c(0.05, 1))
+
+
+p
+```
+
+Very quick annotation
+
+```{r, fig.height=10, fig.width=8}
+
+plot_updated_markers <- function (so, resolution){
+    p <- DotPlot(so.harmony, 
+             features =c("COL1A1", "COL1A2", "COL3A1", "DCN",
+              "HMCN1", "NEGR1", "DCLK1", "KAZN", "BICC1", "PRICKLE1",
+              "CLU", "COMP", "MMP3", "NOVA1", "CILP", "FBLN1", "PRG4",
+              "TRDN", "TTN", "NEB", "TNNT1", "LGR5", "ATP2A2",
+              "PECAM1", "PTPRB", "FLT1", "VWF",
+              "PTPRC", "F13A1", "CD163", "MRC1", "MSR1",
+              "PLIN1", "AQP7", "ADIPOQ",
+              "NOTCH3", "PDGFRB", "MYO1B",
+              "TNNT3", "MYH1", "MYH3",
+              "CD247", "SKAP1", "THEMIS",
+              "MMRN1", "PROX1", "PKHD1L1",
+              "PAX7",
+              "KIT", "CPA3", "IL18R1",
+              "MS4A1", "CD37", "BLNK",
+              "IL1RAPL2", "XKR4", "NRXN1",
+                "ASPM", "DIAPH3", "TOP2A"),
+             assay = ini$normalisation_assay) + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle(paste0("Updated markers resolution ", resolution)) + 
+    coord_flip()
+    
+    p
+}
+plot_updated_markers(so.harmony, 0.1)
+
+```
+
+```{r}
+
+ggsave(paste0(directory, "/Marker_dotplots/dotplot_updated_general_markers_", resolution, ".", ini$file_type), 
+       device = ini$file_type, width = 10, height = 16, 
+       bg = "white")
+
+```
+
+
+```{r}
+sessionInfo()
+```
 

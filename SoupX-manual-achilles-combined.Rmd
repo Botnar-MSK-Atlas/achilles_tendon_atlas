@@ -1,0 +1,1324 @@
+---
+title: "SoupX detection of ambient RNA"
+author: "Carla Cohen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# SoupX workflow  
+
+This script detects and visualises Ambient RNA using soupX in single-nuc data. 
+It follows the Ambient-doublet workflow  
+This specific script analyses the SSP dataset and uses the soupX manual method  
+The working directory is  
+/project/tendonhca/ccohen/chromium/analysis/20231006_SSP  
+
+The inputs of the workflow are:  
+* Single Cell experiment objects with ambient RNA detected by decontX, and doublets removed
+* Single cell experiment objects with no filtering (raw)  
+* soup.yml supplies parameters including date that the Ambient-doublet script was run  
+
+The steps in the workflow are:  
+
+1. Set up
+- Create directories and read in parameters from yaml file  
+- Read in filtered sce objects from ambient-doublet workflow, and raw sce from QC-Filter  (makes lists of sce_raw and sce_filter_manual)  
+
+2. Write functions  
+2.1 Choose parameters  
+- Do the function "choose_celltype" which performs the following steps:  
+	- create_so: create so list  
+	- plot_clustering: plot clustering at 3 resolutions  
+	- set_resolution: set the clustering resolution  
+	- plot_annotation: annotation dotplots for 6 gene sets  
+	- plot_markers: plot marker genes on UMAP  
+	This returns a seurat object  
+
+2.2. Estimate ambient RNA contamination  
+- run_soupX: set up the soup channel  
+- estimate_all_cells: estimate which cells should express the markers. Plot graphs for all the cell types to choose which one to use, and change the max contamination parameter as needed.  
+- calc_contamination: perform the contamination calculation using previously chosen cell type and max contamination.   
+
+2.3. Visualise outputs  
+- Do the function "visualise_ouptus" to visualise the outputs of the soupX correction with the following steps:  
+	- create_so_scale: add new assays to the so and scale the data 
+	- plot_ambient_correction: plot the ambient correction of selected genes  
+	- plot_corrected_features: plot the correction of key genes  
+	- plot_dotplots: plot dotplots to compare RNA, decontX and soupX assays  
+
+2.4. Save objects  
+- Save so and sce objects    
+
+3. Run functions on each sample.  
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+## 1. Set up and read in sce objects 
+
+#### Load packages, read in yml file, create output directory 
+
+```{r, include=FALSE}
+
+library(yaml)
+library(tidyverse)
+library(cowplot)
+library(scater)
+library(viridis)
+library(Seurat)
+library(celda)
+library(scater)
+library(SoupX)
+
+# Read in the yml file
+ini <- read_yaml("soupX.yml")
+
+# make a new output folder for each run, with the date & time in the directory name
+date <- Sys.Date() %>% str_replace_all("-", "")
+time <- format(Sys.time(), "%X") %>% str_replace_all(":", "-") %>%
+    str_sub(1, 5)
+directory <- paste0(date,"_", time, "_SoupX.dir")
+dir.create(directory, showWarnings = FALSE)
+
+
+```
+
+```{r}
+# Print the parameters used
+ini
+```
+
+
+#### Read in the filtered and raw sce
+
+Raw objects are sce objects with the raw kallisto output (no filtering) from the QC-filter pipeline
+
+Filtered objects are from the end of the Ambient-doublet pipeline which have had MAD and threshold filtering done, and decontX counts and doublets removed (optionally).  
+
+```{r}
+
+# get directory according to whether ambient RNA (decontX) and doublets were filtered
+if (ini$decontX_filter == TRUE && ini$doublet_filter == TRUE){
+    open_name <- "ambient_doublet_filter"
+    print(open_name)
+} else if (ini$decontX_filter == FALSE && ini$doublet_filter == TRUE) {
+    open_name <- "ambient_calc_doublet_filter"
+    print(open_name)
+} else if (ini$decontX_filter == TRUE && ini$doublet_filter == FALSE){
+    open_name <- "ambient_filtered_doublet_calculated"
+    print(open_name)
+} else if (ini$decontX_filter == FALSE && ini$doublet_filter == FALSE){
+    open_name <- "ambient_doublet_calculated"
+    print(open_name)
+}
+
+
+# make a named vector of filtered sample files
+
+file_list_filtered <- list.files(paste0(ini$ambient_doublet, "_Ambient-doublet.dir/RDS_objects.dir/", open_name, "/"), 
+                                 pattern="_SingleCellExp.rds")
+
+names(file_list_filtered) <- str_replace(file_list_filtered, paste0("_", open_name, "_SingleCellExp.rds"), "")
+
+# make a named vector of raw sample files
+file_list_raw <- list.files(paste0(ini$qc_filter, "_QC-Filter.dir/RDS_objects.dir/raw/"), 
+                                 pattern="_SingleCellExp.rds")
+
+names(file_list_raw) <- str_replace(file_list_raw, "_raw_SingleCellExp.rds", "")
+
+
+
+```
+
+
+Read in the sce objects  
+
+```{r, echo=FALSE}
+
+#Make a new list for the sce objects
+sce_filter_manual <- list()
+sce_raw <- list()
+
+# generate a list of sce objects
+for (i in 1:length(file_list_filtered)){
+    
+    sce_filter_manual[[i]] <- readRDS(paste0(ini$ambient_doublet, "_Ambient-doublet.dir/RDS_objects.dir/", open_name, "/",
+                                                file_list_filtered[i]))
+    
+    sce_raw[[i]] <- readRDS(paste0(ini$qc_filter, "_QC-Filter.dir/RDS_objects.dir/raw/",
+                                 file_list_raw[i]))
+  
+}
+
+names(sce_filter_manual) <- names(file_list_filtered)
+names(sce_raw) <- names(file_list_raw)
+```
+
+Update rownames, which must be identical in the raw and filtered objects
+
+```{r}
+for (i in 1:length(file_list_filtered)){
+    rownames(sce_raw[[i]])  <- rownames(sce_filter_manual[[i]])
+}
+```
+
+### 2.1 Choose parameters  
+
+Here the package soupX is used to detect contaminating ambient RNA.  
+The ouputs of soupX is an adjusted count matrix that has a better signal-to-noise ratio for marker gene expression  
+
+SoupX requires pre-calculated clusters which should be present in our filtered objects. 
+It requires a sample-specific background (empty counts matrix).  
+It requires a list of contaminating genes and the cells where those genes are expressed  
+
+
+#### Perform manual contamination estimation 
+
+This method uses lists of genes specific to one cell population that you think is causing ambient RNA contamination  
+
+First set up functions to run the analysis on each sample.  
+
+```{r}
+# gene lists 
+
+general_markers <- c("COL1A1", "COL1A2", "COL3A1", "DCN",
+              "NEGR1", "DCLK1", "VCAN", "KAZN",
+              "PTPRC", "F13A1", "CD163", "MRC1", "MSR1",
+              "COMP", "NOX4", "RGS6", "THBS4",
+              "PLIN1", "PLIN4", "AQP7", "ADIPOQ",
+              "PRG4", "ITGB8", "FN1", "CLU", "CRTAC1",
+              "PECAM1", "PTPRB", "FLT1", "VWF",
+              "TNC", "DELEC1", "COL6A3", "COL5A2",
+              "POSTN", "ADAM12", "NAV3", "SDK1",
+              "IL1R2", "RTN1", "HLA-DRA", "AOAH",
+              "NOTCH3", "PDGFRB", "MYO1B", "SYNPO2",
+              "APOE", "LYZ", "SPP1", "ALCAM",
+              "NEBL", "SYT1", "PLCB4", "MECOM",
+              "MYH11", "RCAN2", "PDE3A", "SORBS2",
+              "KIT", "CPA3", "IL18R1",
+              "MMRN1", "PROX1", "KDR", "FLT4",
+              "CD247", "SKAP1", "THEMIS", "IL7R",
+              "CLEC4C", "IL3RA", "CUX2", "PDE4B",
+              "IL1RAPL2", "XKR4", "NRXN1", "CADM2",
+              "LRP1B", "SORBS1", "PDE3B", "LAMA4",
+              "FLT3", "TOX", "CLNK", "WDFY4",
+              "TRDN", "TTN", "NEB", "DES", "ACTN2",
+              "TNNC2", "TNNI2", "TNNT3", "ACTN3",
+              "TNNC1", "TNNI1", "TNNT1", "ATP2A2",
+              "COL22A1")
+adipocyte_markers <- c("ADIPOQ", "PLIN1", "PLIN4", "GPAM", "AQP7")
+macrophage_markers <- c("CD163", "CD163L1", "CD14", "CD68", "MRC1", "MSR1")
+fibroblast_markers <- c("COL1A1", "COL1A2", "COL3A1", "DCN")
+VEC_markers <- c("VWF", "PTPRB", "FLT1")
+mural_markers <- c("NOTCH3", "PDGFRB", "MYO1B")
+#muscle_markers <- c("TRDN", "DES", "ACTN2", "TNNT1", "ATP2A2", "LGR5", "NEK10")
+muscle_markers <- c("TRDN", "DES", "ACTN2", "TNNT1", "ATP2A2", "LGR5", "NEK10", "TNNC2", "TNNI2", "TNNT3", "TNNC1", "TNNI1")
+satellite_markers <- c("PAX7", "CALCR", "CDH4", "CLCN5", "CTNND2", "GREM1")
+
+```
+
+### Annotation
+Annotate the samples in order to select which clusering resolution and genes to use for the soupX manual method. 
+
+```{r, warning = FALSE}
+
+# create a Seurat object
+create_so <- function(sce){
+    
+    so <- CreateSeuratObject(counts = counts(sce), 
+                   project = mainExpName(sce), 
+                   assay = "RNA", 
+                   meta.data = as.data.frame(colData(sce)))
+
+    so <- so %>% 
+           NormalizeData() %>%
+           FindVariableFeatures() %>% 
+           ScaleData() %>%
+           RunPCA()%>%
+           FindNeighbors(dims = 1:20) %>%
+           RunUMAP(dims = 1:20) 
+    
+    # Perform clustering at res = 0.1
+        so <- FindClusters(so, resolution = c(0.1, 0.2, 0.3))
+
+    return(so)
+}
+
+#so_test <- create_so(test_sce)
+
+#so_test
+
+```
+#### Clustering 
+Plot the clustering at resolution 0.1, 0.2, 0.3 to set the clustering resolution to use
+
+```{r, fig.width = 12, fig.height=4}
+plot_clustering <- function (so){
+    p1 <- DimPlot(so, group.by = "RNA_snn_res.0.1")
+    p2 <- DimPlot(so, group.by = "RNA_snn_res.0.2")
+    p3 <- DimPlot(so, group.by = "RNA_snn_res.0.3")
+    p <- plot_grid(p1, p2, p3, nrow = 1)
+    title <- ggdraw() + draw_label(so@project.name, fontface='bold', size = 16)
+    p <- plot_grid(plot_grid(title, p, ncol=1, rel_heights=c(0.05, 1)))
+    ggsave(paste0(directory, "/SoupX_figures/Clustering/", so@project.name, "_clustering.", ini$file_type), 
+        device = ini$file_type, width = 12, height = 4, bg = "white")
+    return(p)
+    
+}
+
+# plot_clustering(so_test)
+
+```
+
+#### Resolution  
+Set the resolution for this sample
+```{r}
+set_resolution <- function (so, res){
+    resolution <- res
+    Idents(so) <- paste0("RNA_snn_res.", res)
+    return(so)
+}
+
+# so_test <- set_resolution (so_test, 0.1)
+
+```
+
+#### Annotation  
+Annotation using general markers
+
+```{r, fig.width=10, fig.height=16, message = FALSE}
+
+plot_annotation <- function(so){
+    
+    p_fibroblast <- DotPlot(so, 
+                 features = fibroblast_markers) + 
+        scale_colour_viridis(direction = -1) +
+        ggtitle("Fibroblast markers") + 
+        coord_flip()
+    
+    p_macrophage <- DotPlot(so, 
+                 features = macrophage_markers) + 
+        scale_colour_viridis(direction = -1) +
+        ggtitle("Macrophage markers") + 
+        coord_flip()
+    
+    p_VEC <- DotPlot(so, 
+                 features = VEC_markers) + 
+        scale_colour_viridis(direction = -1) +
+        ggtitle("VEC markers") + 
+        coord_flip()
+    
+    p_mural <- DotPlot(so, 
+                 features = mural_markers) + 
+        scale_colour_viridis(direction = -1) +
+        ggtitle("Mural markers") + 
+        coord_flip()
+    
+    p_adipocyte <- DotPlot(so, 
+                 features = adipocyte_markers) + 
+        scale_colour_viridis(direction = -1) +
+        ggtitle("Adipocyte markers") + 
+        coord_flip()
+    
+    p_muscle <- DotPlot(so, 
+                 features = muscle_markers) + 
+        scale_colour_viridis(direction = -1) +
+        ggtitle("Muscle markers") + 
+        coord_flip()
+    
+    p_satellite <- DotPlot(so, 
+                 features = satellite_markers) + 
+        scale_colour_viridis(direction = -1) +
+        ggtitle("Satellite markers") + 
+        coord_flip()
+    
+    p <- plot_grid(p_fibroblast, p_macrophage, p_adipocyte, p_VEC, p_mural, p_muscle, p_satellite, ncol = 3)
+    title <- ggdraw() + draw_label(so@project.name, fontface='bold', size = 16)
+    p <- plot_grid(title, p, ncol=1, rel_heights=c(0.05, 1))
+    ggsave(paste0(directory, "/SoupX_figures/Annotation/", so@project.name, "_annotation.", ini$file_type), 
+        device = ini$file_type, width = 16, height = 12, bg = "white")
+    # return(p)
+}
+
+# plot_annotation(so_test)
+```
+
+### Plot marker genes on UMAP  
+
+```{r, fig.height=20, fig.width=12}
+
+plot_markers <- function(sce, celltype, genelist){
+    gene_list <- list()
+    for (gene in genelist){
+        gene_list[[gene]] <- plotReducedDim(sce, 
+                                            dimred = "umap", 
+                                            colour_by = gene)+
+            ggtitle(gene)
+    }
+    p <- plot_grid(plotlist = gene_list, nrow = 1 )+
+        ggtitle(mainExpName(sce))
+    title <- ggdraw() + 
+        draw_label(celltype, 
+                          fontface='bold', size = 12)
+    p <- plot_grid(title, p, ncol=1, rel_heights=c(0.1, 1))
+    return(p)
+}
+
+plot_all_markers <- function (sce){
+    p1 <- plot_markers(sce, "Fibroblast", fibroblast_markers)
+    p2 <- plot_markers(sce, "Macrophage", macrophage_markers)
+    p3 <- plot_markers(sce, "Adipocyte", adipocyte_markers)
+    p4 <- plot_markers(sce, "VEC", VEC_markers)
+    p5 <- plot_markers(sce, "Mural", mural_markers)
+    p6 <- plot_markers(sce, "Muscle", muscle_markers[1:6])
+
+    p_final <- plot_grid(p1, p2, p3, p4, p5, p6, nrow = 6)    
+    title_final <- ggdraw() + draw_label(mainExpName(sce), fontface='bold', size = 24)
+    p_final <- plot_grid(title_final, p_final, ncol=1, rel_heights=c(0.05, 1))
+    ggsave(paste0(directory, "/SoupX_figures/Feature_plots/", mainExpName(sce), "_feature_plots.", ini$file_type), 
+        device = ini$file_type, width = 12, height = 20, bg = "white")
+    # return(p_final)
+}
+
+# plot_all_markers(sce_test)
+```
+
+
+Make a big function do run all the above steps, saving plots along the way. 
+
+```{r}
+choose_celltype <- function (sce, sce_raw, resolution){
+    so <- create_so(sce)
+    plot_clustering(so)
+    so <- set_resolution (so, resolution)
+    plot_annotation(so)
+    plot_all_markers(sce)
+    return(so) 
+}
+
+# sce_test <- choose_celltype(sce_test, sce_raw_test, 0.1)
+```
+
+## 2.2 Estimate ambient RNA contamination  
+
+#### Perform soupX
+
+Set the resolution for this sample in the SCE object
+```{r}
+set_resolution_sce <- function(so, sce){
+    colData(sce)$seurat_clusters <- Idents(so)
+    return(sce)
+}
+#sce_test <- set_resolution_sce(so_test, sce_test)
+```
+
+Make a soup channel and profile the soup  
+Add metadata and UMAP to the soup channel
+
+```{r, message = FALSE}
+
+run_soupX <- function(so, sce, sce_raw){
+    #create the soup channel
+    soup.channel <- SoupChannel(counts(sce_raw), counts(sce))
+    # add metadata (seurat clusters) to the soup channel
+    soup.channel  <- setClusters(soup.channel, so$seurat_clusters)
+    # add dim reduction to the soup channel
+    soup.channel  <- setDR(soup.channel, reducedDim(sce, "umap"))
+    return(soup.channel)
+}
+
+# soup.channel.test <- run_soupX(so_test, sce_test_list[[1]], sce_raw_test_list[[1]])
+
+# soup.channel_sample <- run_soupX(so_sample, sce_sample, sce_raw_sample)
+
+```
+
+### Estimate cells  
+Estimate which cells should not express the list of markers. This function performs this step on all five marker lists so you can see which is best for this particular dataset/sample  
+Play around with the maximum contamination number to get the right cells (which you can do based on expression of these markers on the feature plots above).
+The function automatically uses your clustering information, but you can choose NOT to use this by adding "clusters = F".  
+
+```{r, fig.width=12, fig.height=8}
+
+
+estimate_cells <- function(soup_channel, celltype, genelist, max_contam){
+    useToEst <- estimateNonExpressingCells(soup_channel, 
+                                           nonExpressedGeneList = list(IG = genelist), 
+                                           maximumContamination = max_contam)  
+    p <- plotMarkerMap(soup_channel, 
+                       geneSet = genelist, 
+                       useToEst = useToEst)+
+        ggtitle(celltype)
+    return(p)
+}
+
+estimate_all_cells <- function (sce, max_contam){
+    p1 <- estimate_cells(soup.channel_sample, "Fibroblast", fibroblast_markers, max_contam)
+    p2 <- estimate_cells(soup.channel_sample, "Macrophage", macrophage_markers, max_contam)
+    p3 <- estimate_cells(soup.channel_sample, "Adipocyte", adipocyte_markers, max_contam)
+    p4 <- estimate_cells(soup.channel_sample, "VEC", VEC_markers, max_contam)
+    p5 <- estimate_cells(soup.channel_sample, "Mural", mural_markers, max_contam)
+    p6 <- estimate_cells(soup.channel_sample, "Muscle", muscle_markers, max_contam)
+    p7 <- estimate_cells(soup.channel_sample, "Satellite", satellite_markers, max_contam)
+    p_final <- plot_grid(p1, p2, p3, p4, p5, p6,p7, nrow = 3)    
+    title_final <- ggdraw() + draw_label(paste(mainExpName(sce), "max_contam =", max_contam), fontface='bold', size = 24)
+    p_final <- plot_grid(title_final, p_final, ncol=1, rel_heights=c(0.05, 1))
+    ggsave(paste0(directory, "/SoupX_figures/Estimate_cells/", mainExpName(sce), "_estimate_cells_", max_contam, ".", ini$file_type), 
+        device = ini$file_type, width = 12, height = 12, bg = "white")
+    #return(p_final)
+}
+
+# estimate_all_cells(sce_sample, 3) # choose which cells to use for estimation 
+
+```
+
+### Calculate contamination fraction & export matrix of adjusted counts, add back to SCE object
+
+Each time the function is called, pick the appropriate gene list and maximum contamination value
+Round output to integer to avoid problems in downstream analysis e.g. scVI  
+```{r}
+calc_contamination <- function(sce, soupchannel, genelist, max_contam){
+    
+    useToEst <- estimateNonExpressingCells(soupchannel, 
+                                           nonExpressedGeneList = list(IG = genelist), 
+                                           maximumContamination = max_contam)  
+    
+    soupchannel <- calculateContaminationFraction(soupchannel, 
+                                                   list(IG = genelist), 
+                                                   useToEst = useToEst, 
+                                                   forceAccept = T)
+    adj.matrix <- adjustCounts(soupchannel, roundToInt = T)
+    assay(sce, "soupX") <- adj.matrix
+    return(sce)
+    
+}
+
+# sce_sample <- calc_contamination(sce_sample, soup.channel_sample, adipocyte_markers, 6)
+
+```
+## 2.3 Visualise outputs 
+#### Add new assays to seurat objects, scale data
+
+```{r, warning=FALSE}
+
+create_so_scale <- function(sce, so){
+                               
+    # add the decontX counts to so
+    so[["decontXcounts"]] <- CreateAssayObject(
+        counts = decontXcounts(sce))
+    
+    # add the soupX counts to so
+    so[["soupX"]] <- CreateAssayObject(
+        counts = assays(sce)$soupX)
+
+    DefaultAssay(object = so) <- "RNA"
+    
+    so <- so %>% 
+               NormalizeData() %>%
+               FindVariableFeatures() %>% 
+               ScaleData()
+    
+    DefaultAssay(object = so) <- "soupX"
+    
+    so <- so %>% 
+               NormalizeData() %>%
+               FindVariableFeatures() %>% 
+               ScaleData()
+    
+    DefaultAssay(object = so) <- "decontXcounts"
+    
+    so <- so %>% 
+               NormalizeData() %>%
+               FindVariableFeatures() %>% 
+               ScaleData()
+    
+    return(so)
+}
+
+# so_sample <- create_so_scale(sce_sample, so_sample)
+```
+
+
+#### Check the ambient correction of key genes
+
+```{r, fig.height=8, fig.width=12}
+plot_ambient_correction <- function (soupchannel, sce, celltype, genelist){
+    plot_list <- list()
+    for (gene in genelist){
+        plot_list[[gene]] <- plotChangeMap(soupchannel, assays(sce)$soupX, gene) + 
+            ggtitle(gene)
+    }
+    p <- plot_grid(plotlist = plot_list, nrow = 2 )+
+        ggtitle(mainExpName(sce))
+    title <- ggdraw() + 
+        draw_label(mainExpName(sce), 
+                          fontface='bold', size = 12)
+    p <- plot_grid(title, p, ncol=1, rel_heights=c(0.1, 1))
+    
+    ggsave(paste0(directory, "/SoupX_figures/Corrected_genes/", 
+                  mainExpName(sce), "_corrected_", celltype, ".", ini$file_type),
+        device = ini$file_type, width = 12, height = 8, bg = "white")
+    
+    #return(p)
+}
+
+# plot_ambient_correction(soup.channel_sample, sce_sample, "Adipocyte", adipocyte_markers)
+```
+
+### Featureplots to compare ambient RNA detection methods
+
+```{r, message = FALSE, fig.width=10, fig.height=12}
+featurelist <- c("VWF", "ADIPOQ", "COL1A2", "CD163", "NOTCH3", "TRDN")
+
+plot_corrected_features <- function (so, celltype){
+    
+    DefaultAssay(so) <- "RNA"
+    p_RNA <- FeaturePlot(so, 
+             features = featurelist, ncol = 1) 
+    
+    DefaultAssay(so) <- "decontXcounts"
+    p_decontX <- FeaturePlot(so, 
+             features = featurelist, ncol = 1) 
+    
+    DefaultAssay(so) <- "soupX"
+    p_soupX <- FeaturePlot(so, 
+             features = featurelist, ncol = 1) 
+
+    p <- plot_grid(p_RNA, p_decontX, p_soupX, ncol = 3, labels = c("RNA", "decontX", "soupX"))
+    title <- ggdraw() + draw_label(paste(so@project.name, celltype), fontface='bold', size = 16)
+    p <- plot_grid(title, p, ncol=1, rel_heights=c(0.05, 1))
+    ggsave(paste0(directory, "/SoupX_figures/Corrected_features/", 
+                  so@project.name, "_", celltype, ".", ini$file_type), 
+        device = ini$file_type, width = 10, height = 12, bg = "white")
+    #return(p)
+    
+}
+# plot_corrected_features(so_sample)
+
+```
+
+### Dotplots to compare ambient RNA detection methods
+
+```{r, fig.width=16, fig.height=8, message = FALSE, warning=FALSE}
+
+plot_dotplots <- function (so, celltype){
+
+    DefaultAssay(so) <- "RNA"
+    p_RNA <- DotPlot(so, 
+             features = general_markers) + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle("RNA assay") + 
+    coord_flip()
+    
+    DefaultAssay(so) <- "decontXcounts"
+    p_decontX <- DotPlot(so, 
+             features = general_markers) + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle("decontX assay") + 
+    coord_flip()
+    
+    DefaultAssay(so) <- "soupX"
+    p_soupX <- DotPlot(so, 
+             features = general_markers) + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle("soupX assay") + 
+    coord_flip()
+
+    p <- plot_grid(p_RNA, p_decontX, p_soupX, ncol = 3)
+    title <- ggdraw() + draw_label(paste(so@project.name, celltype), fontface='bold', size = 16)
+    p <- plot_grid(title, p, ncol=1, rel_heights=c(0.05, 1))
+    ggsave(paste0(directory, "/SoupX_figures/Dotplots/", 
+                  so@project.name, "_", celltype, ".", ini$file_type), 
+        device = ini$file_type, width = 16, height = 14, bg = "white")
+    # return(p)
+}
+
+#plot_dotplots(so_sample)
+```
+
+### Which genes contribute most to the soup?
+
+```{r, fig.width=12, fig.height=10, warning=FALSE, message = FALSE}
+
+dir.create(paste0(directory, "/SoupX_figures/Highest_ambient_genes/"))
+dir.create(paste0(directory, "/SoupX_figures/SoupX_umap/"))
+
+contributing_genes <- function(so, celltype){
+    
+    # calculate highest contributing genes
+    subtraction <- so@assays$RNA@counts - so@assays$soupX@counts
+    subtraction_colmeans <- colMeans(subtraction) ## average ambient reads per cell
+    subtraction_rowmeans <- rowMeans(subtraction) ## average ambient reads per feature
+    ## fraction of ambient reads, for each feature, per sample
+    subtraction_fraction <- sweep(subtraction, 2, colSums(so@assays$RNA@counts), '/')
+    subtraction_fraction_rowsums <- rowSums(subtraction_fraction) ## genes
+    subtraction_fraction_colsums <- colSums(subtraction_fraction) ## cells
+    
+    highest_contributors_ambiencereads <- sort(subtraction_rowmeans, decreasing = T)[1:50] ## the highest contributors (in absolute number of reads)
+    
+    # dotplots of highest contributing genes
+    DefaultAssay(so) <- "RNA"
+    p_RNA <- DotPlot(so, 
+             features = rev(names(highest_contributors_ambiencereads))) + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle("RNA assay") +
+    coord_flip()
+    
+    DefaultAssay(so) <- "soupX"
+    p_soupX <- DotPlot(so, 
+             features = rev(names(highest_contributors_ambiencereads))) + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle("soupX assay") + 
+    coord_flip()
+    
+    p <- plot_grid(p_RNA, p_soupX, ncol = 2)
+    title <- ggdraw() + draw_label(paste(so@project.name, celltype), fontface='bold', size = 16)
+    p <- plot_grid(title, p, ncol=1, rel_heights=c(0.05, 1))
+    
+    ggsave(paste0(directory, "/SoupX_figures/Highest_ambient_genes/", 
+                  so@project.name, "_", celltype, ".", ini$file_type), p, 
+        device = ini$file_type, width = 16, height = 14, bg = "white")
+
+    # add soupX fraction to seurat object
+    #soupX_fraction <- subtraction_fraction_colsums # the ambient score for each cell
+    #metadata <- so[[]]
+    #metadata <- cbind(metadata, soupX_fraction)
+    #so <- AddMetaData(so, metadata)
+    so <- AddMetaData(so, subtraction_fraction_colsums, col.name = "soupX_fraction")
+    print(head(so[[]]))
+    
+    # plot umap coloured by soupX ambinent score, decontX score, cluster
+    p3 <- DimPlot(so)
+    p1 <- FeaturePlot(so, features = "soupX_fraction")
+    p2 <- FeaturePlot(so, features = "decontX_contamination")
+    # plot VlnPlot of soupX fraction
+    p4 <- VlnPlot(so, features = "soupX_fraction")
+    p <- plot_grid(p1, p2, p3, p4)
+    title <- ggdraw() + draw_label(paste(so@project.name, celltype), fontface='bold', size = 16)
+    p <- plot_grid(title, p, ncol=1, rel_heights=c(0.05, 1))
+    
+    ggsave(paste0(directory, "/SoupX_figures/SoupX_umap/", 
+                  so@project.name, "_", celltype, ".", ini$file_type), p, 
+        device = ini$file_type, width = 16, height = 14, bg = "white")
+    return(so)
+    
+}
+
+```
+
+
+Put all the visualisation functions together 
+
+```{r}
+visualise_outputs <- function (sce, so, celltype, markers){
+    so <- create_so_scale(sce, so)
+    plot_ambient_correction(soup.channel_sample, sce, celltype, markers)
+    plot_corrected_features(so, celltype)
+    plot_dotplots(so, celltype)
+    so <- contributing_genes(so, celltype)
+    return(so)
+}
+
+# so_sample <- visualise_outputs(sce_sample, so_sample, "Adipocyte", adipocyte_markers)
+```
+
+## 2.4 Save the objects  
+Save the sce and seurat objects
+
+```{r, warning=FALSE}
+
+dir.create(paste0(directory, "/RDS_objects.dir/"))
+dir.create(paste0(directory, "/RDS_objects.dir/Seurat/"))
+dir.create(paste0(directory, "/RDS_objects.dir/SingleCellExp/"))
+
+save_objects <- function (so, sce){
+    saveRDS(so, 
+            paste0(directory, "/RDS_objects.dir/Seurat/", 
+                   so@project.name,
+                   "_filtered_soupX_SeuratObject.rds")) 
+   saveRDS(sce, 
+            paste0(directory, "/RDS_objects.dir/SingleCellExp/",
+                   mainExpName(sce), 
+                   "_filtered_soupX_SingleCellExp.rds")) 
+    
+}
+   
+# save_objects(so_sample, sce_sample)
+
+```
+
+## 3. Run the function on each sample. 
+Run the functions on each sample individually, so that a unique resolution, gene list and maxcontamination can be chosen
+
+```{r}
+names(file_list_filtered)
+```
+
+
+### MSK0785-Ach-Enth
+
+```{r}
+sce_sample <- sce_filter_manual[["MSK0785-Ach-Enth"]]
+sce_raw_sample <- sce_raw[["MSK0785-Ach-Enth"]]
+
+so_sample <- choose_celltype(sce_sample, sce_raw_sample, 0.2) # change resolution as required
+soup.channel_sample <- run_soupX(so_sample, sce_sample, sce_raw_sample)
+estimate_all_cells(sce_sample, 3) # change maxcontamination as required
+sce_sample <- calc_contamination(sce_sample, soup.channel_sample, adipocyte_markers, 3) # change markers and max contamination as required
+so_sample <- visualise_outputs(sce_sample, so_sample, "Adipocyte", adipocyte_markers) # change cell type and markers as required
+save_objects(so_sample, sce_sample)
+
+# fibroblasts - can't get it to select cells
+# macrophages 28.84%, OK still a bit undercorrected
+# adipocyte 36.12% works better
+# VEC 62.54%
+
+# save the parameters used
+soupX_parameters <- data.frame(
+     "Sample" = mainExpName(sce_sample),
+     "Resolution" = 0.2,
+     "Max contamination" = 3,
+     "Gene list" = "Adipocyte",
+     "Estimated contamination" = 36.12)
+```
+
+
+
+### MSK0785-Ach-MB
+
+```{r}
+sce_sample <- sce_filter_manual[["MSK0785-Ach-MB"]]
+sce_raw_sample <- sce_raw[["MSK0785-Ach-MB"]]
+
+so_sample <- choose_celltype(sce_sample, sce_raw_sample, 0.2) # change resolution as required
+soup.channel_sample <- run_soupX(so_sample, sce_sample, sce_raw_sample)
+estimate_all_cells(sce_sample, 1) # change maxcontamination as required
+sce_sample <- calc_contamination(sce_sample, soup.channel_sample, fibroblast_markers, 1) # change markers and max contamination as required
+so_sample <- visualise_outputs(sce_sample, so_sample, "Fibroblast", fibroblast_markers) # change cell type and markers as required
+save_objects(so_sample, sce_sample)
+
+# fibroblast 48.54% , 1 looks ok, use this
+# macrophage 49.9% 1 same
+# adipocyte 29.03 % 3 undercorrected
+
+# save the parameters used
+new_row <- data.frame(
+     "Sample" = mainExpName(sce_sample),
+     "Resolution" = 0.2,
+     "Max contamination" = 1,
+     "Gene list" = "Fibroblast",
+     "Estimated contamination" = 48.54)
+soupX_parameters <- rbind(soupX_parameters, new_row)
+```
+
+### MSK0785-Ach-MTJ
+
+```{r}
+sce_sample <- sce_filter_manual[["MSK0785-Ach-MTJ"]]
+sce_raw_sample <- sce_raw[["MSK0785-Ach-MTJ"]]
+
+so_sample <- choose_celltype(sce_sample, sce_raw_sample, 0.2) # change resolution as required
+soup.channel_sample <- run_soupX(so_sample, sce_sample, sce_raw_sample)
+estimate_all_cells(sce_sample, 3) # change maxcontamination as required
+sce_sample <- calc_contamination(sce_sample, soup.channel_sample, adipocyte_markers, 3) # change markers and max contamination as required
+so_sample <- visualise_outputs(sce_sample, so_sample, "Adipocyte", adipocyte_markers) # change cell type and markers as required
+save_objects(so_sample, sce_sample)
+
+# fibroblast  8.51% corrects fib well but not muscle
+# macrophage 3 15.50% better but still not muscle
+# adipocyte 3 31.23% better, use this one
+
+# save the parameters used
+new_row <- data.frame(
+     "Sample" = mainExpName(sce_sample),
+     "Resolution" = 0.2,
+     "Max contamination" = 3,
+     "Gene list" = "Adipocyte",
+     "Estimated contamination" = 31.23)
+soupX_parameters <- rbind(soupX_parameters, new_row)
+```
+
+### MSK0785-Ach-muscle
+
+```{r}
+sce_sample <- sce_filter_manual[["MSK0785-Ach-muscle"]]
+sce_raw_sample <- sce_raw[["MSK0785-Ach-muscle"]]
+
+so_sample <- choose_celltype(sce_sample, sce_raw_sample, 0.2) # change resolution as required
+soup.channel_sample <- run_soupX(so_sample, sce_sample, sce_raw_sample)
+estimate_all_cells(sce_sample, 15) # change maxcontamination as required
+sce_sample <- calc_contamination(sce_sample, soup.channel_sample, VEC_markers, 15) # change markers and max contamination as required
+so_sample <- visualise_outputs(sce_sample, so_sample, "VEC", VEC_markers) # change cell type and markers as required
+save_objects(so_sample, sce_sample)
+
+# fibroblast 3 15.30% overcorrects muscle genes
+# macrophage 6 37.59 % overcorrects muscle genes
+# adipocyte 6 25.87% overcorrects muscle genes
+# muscle markers 50.43% too high
+# mural 50.21% too high
+# satellite can't identify cells
+# VEC 15, 28.72% overcorrects muscle genes
+
+# save the parameters used
+new_row <- data.frame(
+     "Sample" = mainExpName(sce_sample),
+     "Resolution" = 0.2,
+     "Max contamination" = 6,
+     "Gene list" = "Macrophage",
+     "Estimated contamination" = 37.59)
+soupX_parameters <- rbind(soupX_parameters, new_row)
+```
+
+
+### MSK1250-Ach-Enth
+
+```{r}
+sce_sample <- sce_filter_manual[["MSK1250-Ach-Enth"]]
+sce_raw_sample <- sce_raw[["MSK1250-Ach-Enth"]]
+
+so_sample <- choose_celltype(sce_sample, sce_raw_sample, 0.3) # change resolution as required
+soup.channel_sample <- run_soupX(so_sample, sce_sample, sce_raw_sample)
+estimate_all_cells(sce_sample, 6) # change maxcontamination as required
+sce_sample <- calc_contamination(sce_sample, soup.channel_sample, macrophage_markers, 6) # change markers and max contamination as required
+so_sample <- visualise_outputs(sce_sample, so_sample, "Macrophage", macrophage_markers) # change cell type and markers as required
+save_objects(so_sample, sce_sample)
+
+# fibroblast 3 29.89% ?overcorrected
+# macrophage 6 20.85 % better
+# adipocyte 6 22.31 same
+
+# save the parameters used
+new_row <- data.frame(
+     "Sample" = mainExpName(sce_sample),
+     "Resolution" = 0.3,
+     "Max contamination" = 6,
+     "Gene list" = "Macrophage",
+     "Estimated contamination" = 20.85)
+soupX_parameters <- rbind(soupX_parameters, new_row)
+```
+
+### MSK1250-Ach-MB2
+
+```{r}
+sce_sample <- sce_filter_manual[["MSK1250-Ach-MB2"]]
+sce_raw_sample <- sce_raw[["MSK1250-Ach-MB2"]]
+
+so_sample <- choose_celltype(sce_sample, sce_raw_sample, 0.2) # change resolution as required
+soup.channel_sample <- run_soupX(so_sample, sce_sample, sce_raw_sample)
+estimate_all_cells(sce_sample, 1) # change maxcontamination as required
+sce_sample <- calc_contamination(sce_sample, soup.channel_sample, muscle_markers, 1) # change markers and max contamination as required
+so_sample <- visualise_outputs(sce_sample, so_sample, "Muscle", muscle_markers) # change cell type and markers as required
+save_objects(so_sample, sce_sample)
+
+# fibroblast 3 29.63% OK
+# macrophage 6 74.78% Too high
+# adipocyte not a separate cluster
+# mural can't find cells
+# VEC 6 42.37% overcorrecting
+# muscle 1 9.76% best to use
+
+
+# save the parameters used
+new_row <- data.frame(
+     "Sample" = mainExpName(sce_sample),
+     "Resolution" = 0.3,
+     "Max contamination" = 3,
+     "Gene list" = "Muscle",
+     "Estimated contamination" = 9.76)
+soupX_parameters <- rbind(soupX_parameters, new_row)
+```
+
+### MSK1250-Ach-MTJ
+
+```{r}
+sce_sample <- sce_filter_manual[["MSK1250-Ach-MTJ"]]
+sce_raw_sample <- sce_raw[["MSK1250-Ach-MTJ"]]
+
+so_sample <- choose_celltype(sce_sample, sce_raw_sample, 0.3) # change resolution as required
+soup.channel_sample <- run_soupX(so_sample, sce_sample, sce_raw_sample)
+estimate_all_cells(sce_sample, 6) # change maxcontamination as required
+sce_sample <- calc_contamination(sce_sample, soup.channel_sample, macrophage_markers, 6) # change markers and max contamination as required
+so_sample <- visualise_outputs(sce_sample, so_sample, "Macrophage", macrophage_markers) # change cell type and markers as required
+save_objects(so_sample, sce_sample)
+
+# fibroblast 3 10.41% undercorrects muscle genes
+# muscle 1 39.84% corrects muscl, overcorrects fib genes
+# macrophage 6 16.2% better
+# adipocyte 6 19.67% OK
+# mural 
+# VEC 
+
+
+# save the parameters used
+new_row <- data.frame(
+     "Sample" = mainExpName(sce_sample),
+     "Resolution" = 0.3,
+     "Max contamination" = 6,
+     "Gene list" = "Adipocyte",
+     "Estimated contamination" = 19.67)
+soupX_parameters <- rbind(soupX_parameters, new_row)
+```
+
+### MSK1250-ACH-muscle
+
+```{r}
+sce_sample <- sce_filter_manual[["MSK1250-ACH-muscle"]]
+sce_raw_sample <- sce_raw[["MSK1250-ACH-muscle"]]
+
+so_sample <- choose_celltype(sce_sample, sce_raw_sample, 0.1) # change resolution as required
+soup.channel_sample <- run_soupX(so_sample, sce_sample, sce_raw_sample)
+estimate_all_cells(sce_sample, 6) # change maxcontamination as required
+sce_sample <- calc_contamination(sce_sample, soup.channel_sample, fibroblast_markers, 3) # change markers and max contamination as required
+so_sample <- visualise_outputs(sce_sample, so_sample, "Fibroblast", fibroblast_markers) # change cell type and markers as required
+save_objects(so_sample, sce_sample)
+
+# fibroblast 3 16.67% best one
+# muscle can't identify cells
+# macrophage 6 25.59% over/undercorrects muscle. Better but still lose some TNN expression
+# adipocyte 6 53.23% better
+# mural can't identify cells
+# VEC 12 17.32% v similar to fibroblast
+# satellite can't identify cells
+
+
+# save the parameters used
+new_row <- data.frame(
+     "Sample" = mainExpName(sce_sample),
+     "Resolution" = 0.3,
+     "Max contamination" = 3,
+     "Gene list" = "Fibroblast",
+     "Estimated contamination" = 16.67)
+soupX_parameters <- rbind(soupX_parameters, new_row)
+```
+
+### MSK1284-Ach-Enth
+
+```{r}
+sce_sample <- sce_filter_manual[["MSK1284-Ach-Enth"]]
+sce_raw_sample <- sce_raw[["MSK1284-Ach-Enth"]]
+
+so_sample <- choose_celltype(sce_sample, sce_raw_sample, 0.2) # change resolution as required
+soup.channel_sample <- run_soupX(so_sample, sce_sample, sce_raw_sample)
+estimate_all_cells(sce_sample, 6) # change maxcontamination as required
+sce_sample <- calc_contamination(sce_sample, soup.channel_sample, fibroblast_markers, 6) # change markers and max contamination as required
+so_sample <- visualise_outputs(sce_sample, so_sample, "Fibroblast", fibroblast_markers) # change cell type and markers as required
+save_objects(so_sample, sce_sample)
+
+# macrophage 64.45% overcorrected
+# fibroblast 58.56% still a bit overcorrected in FB
+# macrophage & fibroblast in same cluster
+# adipocyte 66.38% more overcorrected
+# mural > 1
+# VEC > 1
+# save the parameters used
+new_row <- data.frame(
+     "Sample" = mainExpName(sce_sample),
+     "Resolution" = 0.2,
+     "Max contamination" = 6,
+     "Gene list" = "Fibroblast",
+     "Estimated contamination" = 64.45)
+soupX_parameters <- rbind(soupX_parameters, new_row)
+
+```
+
+### MSK1556-Ach-Enth
+
+```{r}
+sce_sample <- sce_filter_manual[["MSK1556-Ach-Enth"]]
+sce_raw_sample <- sce_raw[["MSK1556-Ach-Enth"]]
+
+so_sample <- choose_celltype(sce_sample, sce_raw_sample, 0.2) # change resolution as required
+soup.channel_sample <- run_soupX(so_sample, sce_sample, sce_raw_sample)
+estimate_all_cells(sce_sample, 6) # change maxcontamination as required
+sce_sample <- calc_contamination(sce_sample, soup.channel_sample, adipocyte_markers, 3) # change markers and max contamination as required
+so_sample <- visualise_outputs(sce_sample, so_sample, "Adipocyte", adipocyte_markers) # change cell type and markers as required
+save_objects(so_sample, sce_sample)
+
+# adipocyte 6 20.30% pretty good
+# macrophage 6 16.37 less good than adipocyte
+# VEC 29.75%  # overcorrected, gets rid of collagens
+# fibroblast 3 13.99% less good
+
+# save the parameters used
+new_row <- data.frame(
+     "Sample" = mainExpName(sce_sample),
+     "Resolution" = 0.2,
+     "Max contamination" = 6,
+     "Gene list" = "Adipocyte",
+     "Estimated contamination" = 20.30)
+soupX_parameters <- rbind(soupX_parameters, new_row)
+```
+
+
+### MSK1556-Ach-MB
+
+```{r}
+sce_sample <- sce_filter_manual[["MSK1556-Ach-MB"]]
+sce_raw_sample <- sce_raw[["MSK1556-Ach-MB"]]
+
+so_sample <- choose_celltype(sce_sample, sce_raw_sample, 0.2) # change resolution as required
+soup.channel_sample <- run_soupX(so_sample, sce_sample, sce_raw_sample)
+estimate_all_cells(sce_sample, 6) # change maxcontamination as required
+sce_sample <- calc_contamination(sce_sample, soup.channel_sample, adipocyte_markers, 6) # change markers and max contamination as required
+so_sample <- visualise_outputs(sce_sample, so_sample, "Adipocyte", adipocyte_markers) # change cell type and markers as required
+save_objects(so_sample, sce_sample)
+
+# adipocyte 6 22.01% ? overcorrected? Or better?
+# macrophage 6 13.46% undercorrected
+# VEC 12 40.76% overcorrected
+# fibroblast 1 15.5% but there are no non-expressing cells. Dotplot ok
+# mural 6 87%
+
+# save the parameters used
+new_row <- data.frame(
+     "Sample" = mainExpName(sce_sample),
+     "Resolution" = 0.2,
+     "Max contamination" = 6,
+     "Gene list" = "Adipocyte",
+     "Estimated contamination" = 22.01)
+soupX_parameters <- rbind(soupX_parameters, new_row)
+```
+### MSK1556-Ach-MTJ
+
+```{r}
+sce_sample <- sce_filter_manual[["MSK1556-Ach-MTJ"]]
+sce_raw_sample <- sce_raw[["MSK1556-Ach-MTJ"]]
+
+so_sample <- choose_celltype(sce_sample, sce_raw_sample, 0.1) # change resolution as required
+soup.channel_sample <- run_soupX(so_sample, sce_sample, sce_raw_sample)
+estimate_all_cells(sce_sample,16) # change maxcontamination as required
+sce_sample <- calc_contamination(sce_sample, soup.channel_sample, VEC_markers, 16) # change markers and max contamination as required
+so_sample <- visualise_outputs(sce_sample, so_sample, "VEC", VEC_markers) # change cell type and markers as required
+save_objects(so_sample, sce_sample)
+
+# fibroblast 1 5.04% overcorrects muscle genes
+# adipocyte 9 43.7% overcorrected
+# macrophage 23.07% overcorrects muscle genes
+# muscle 2 40.81% overcorrected
+# VEC 16 29.72% overcorrects muscle
+# satellite - can't select cells
+
+# save the parameters used
+new_row <- data.frame(
+     "Sample" = mainExpName(sce_sample),
+     "Resolution" = 0.1,
+     "Max contamination" = 9,
+     "Gene list" = "Macrophage",
+     "Estimated contamination" = 23.07)
+soupX_parameters <- rbind(soupX_parameters, new_row)
+```
+
+### MSK1556-ACH-muscle
+
+```{r}
+sce_sample <- sce_filter_manual[["MSK1556-ACH-muscle"]]
+sce_raw_sample <- sce_raw[["MSK1556-ACH-muscle"]]
+
+so_sample <- choose_celltype(sce_sample, sce_raw_sample, 0.1) # change resolution as required
+soup.channel_sample <- run_soupX(so_sample, sce_sample, sce_raw_sample)
+estimate_all_cells(sce_sample,6) # change maxcontamination as required
+sce_sample <- calc_contamination(sce_sample, soup.channel_sample, fibroblast_markers, 6) # change markers and max contamination as required
+so_sample <- visualise_outputs(sce_sample, so_sample, "Fibroblast", fibroblast_markers) # change cell type and markers as required
+save_objects(so_sample, sce_sample)
+
+# macrophage 6 29.3% pretty good, overcorrects one muscle gene
+# adipocyte 6 39.57% overcorrects muscle
+# fibroblast 6 14.56% undercorrects in muscle but best to use
+# muscle can't identify cells
+
+
+
+# save the parameters used
+new_row <- data.frame(
+     "Sample" = mainExpName(sce_sample),
+     "Resolution" = 0.1,
+     "Max contamination" =6,
+     "Gene list" = "Fibroblast",
+     "Estimated contamination" = 14.56)
+soupX_parameters <- rbind(soupX_parameters, new_row)
+```
+
+### MSK1687-ACH-Enth
+
+```{r}
+sce_sample <- sce_filter_manual[["MSK1687-ACH-Enth"]]
+sce_raw_sample <- sce_raw[["MSK1687-ACH-Enth"]]
+
+so_sample <- choose_celltype(sce_sample, sce_raw_sample, 0.1) # change resolution as required
+soup.channel_sample <- run_soupX(so_sample, sce_sample, sce_raw_sample)
+estimate_all_cells(sce_sample,6) # change maxcontamination as required
+sce_sample <- calc_contamination(sce_sample, soup.channel_sample, adipocyte_markers, 6) # change markers and max contamination as required
+so_sample <- visualise_outputs(sce_sample, so_sample, "Adipocyte", adipocyte_markers) # change cell type and markers as required
+save_objects(so_sample, sce_sample)
+
+# macrophage 
+# adipocyte 6 23.62% looks good
+# fibroblast
+
+
+
+# save the parameters used
+new_row <- data.frame(
+     "Sample" = mainExpName(sce_sample),
+     "Resolution" = 0.1,
+     "Max contamination" =6,
+     "Gene list" = "Adipocyte",
+     "Estimated contamination" = 23.62)
+soupX_parameters <- rbind(soupX_parameters, new_row)
+```
+### MSK1687-ACH-MB
+
+```{r}
+sce_sample <- sce_filter_manual[["MSK1687-ACH-MB"]]
+sce_raw_sample <- sce_raw[["MSK1687-ACH-MB"]]
+
+so_sample <- choose_celltype(sce_sample, sce_raw_sample, 0.1) # change resolution as required
+soup.channel_sample <- run_soupX(so_sample, sce_sample, sce_raw_sample)
+estimate_all_cells(sce_sample,6) # change maxcontamination as required
+sce_sample <- calc_contamination(sce_sample, soup.channel_sample, adipocyte_markers,6) # change markers and max contamination as required
+so_sample <- visualise_outputs(sce_sample, so_sample, "Adipocyte", adipocyte_markers) # change cell type and markers as required
+save_objects(so_sample, sce_sample)
+
+# macrophage 6 13.16% almost identical to adipocyte
+# adipocyte 6 16.9% pretty good
+# fibroblast 1 12.41% also similar
+
+
+
+# save the parameters used
+new_row <- data.frame(
+     "Sample" = mainExpName(sce_sample),
+     "Resolution" = 0.1,
+     "Max contamination" =6,
+     "Gene list" = "Adipocyte",
+     "Estimated contamination" = 16.9)
+soupX_parameters <- rbind(soupX_parameters, new_row)
+```
+
+### MSK1687-ACH-MTJ
+
+```{r}
+sce_sample <- sce_filter_manual[["MSK1687-ACH-MTJ"]]
+sce_raw_sample <- sce_raw[["MSK1687-ACH-MTJ"]]
+
+so_sample <- choose_celltype(sce_sample, sce_raw_sample, 0.1) # change resolution as required
+soup.channel_sample <- run_soupX(so_sample, sce_sample, sce_raw_sample)
+estimate_all_cells(sce_sample,6) # change maxcontamination as required
+sce_sample <- calc_contamination(sce_sample, soup.channel_sample, adipocyte_markers, 6) # change markers and max contamination as required
+so_sample <- visualise_outputs(sce_sample, so_sample, "Adipocyte", adipocyte_markers) # change cell type and markers as required
+save_objects(so_sample, sce_sample)
+
+# 6 adipocyte, mural, muscle
+# adipocyte 6 20.31% good
+# muscle 6 10.77%  less good
+# Mural 61%
+# fibroblast 13.32%  less good
+
+# save the parameters used
+new_row <- data.frame(
+     "Sample" = mainExpName(sce_sample),
+     "Resolution" = 0.1,
+     "Max contamination" =6,
+     "Gene list" = "Adipocyte",
+     "Estimated contamination" = 20.31)
+soupX_parameters <- rbind(soupX_parameters, new_row)
+```
+
+### MSK1691-ACH-Enth
+
+```{r}
+sce_sample <- sce_filter_manual[["MSK1691-ACH-Enth"]]
+sce_raw_sample <- sce_raw[["MSK1691-ACH-Enth"]]
+
+so_sample <- choose_celltype(sce_sample, sce_raw_sample, 0.1) # change resolution as required
+soup.channel_sample <- run_soupX(so_sample, sce_sample, sce_raw_sample)
+estimate_all_cells(sce_sample,6) # change maxcontamination as required
+sce_sample <- calc_contamination(sce_sample, soup.channel_sample, macrophage_markers, 6) # change markers and max contamination as required
+so_sample <- visualise_outputs(sce_sample, so_sample, "Macrophage", macrophage_markers) # change cell type and markers as required
+save_objects(so_sample, sce_sample)
+
+# 6 adipocyte, mural, muscle, macrophage
+# adipocyte 6 9.13% undercorrected
+# mural 58.68
+# muscle 37.01% overcorrected
+# macrophage 19.00% looks good
+# fibroblast 1 14.52%
+
+# save the parameters used
+new_row <- data.frame(
+     "Sample" = mainExpName(sce_sample),
+     "Resolution" = 0.1,
+     "Max contamination" =6,
+     "Gene list" = "Macrophage",
+     "Estimated contamination" = 19.00)
+soupX_parameters <- rbind(soupX_parameters, new_row)
+```
+
+### MSK1691-ACH-MB
+
+```{r}
+sce_sample <- sce_filter_manual[["MSK1691-ACH-MB"]]
+sce_raw_sample <- sce_raw[["MSK1691-ACH-MB"]]
+
+so_sample <- choose_celltype(sce_sample, sce_raw_sample, 0.1) # change resolution as required
+soup.channel_sample <- run_soupX(so_sample, sce_sample, sce_raw_sample)
+estimate_all_cells(sce_sample,6) # change maxcontamination as required
+sce_sample <- calc_contamination(sce_sample, soup.channel_sample, adipocyte_markers, 6) # change markers and max contamination as required
+so_sample <- visualise_outputs(sce_sample, so_sample, "Adipocyte", adipocyte_markers) # change cell type and markers as required
+save_objects(so_sample, sce_sample)
+
+# macrophage 6 20.29% OK - a couple of highly ambient genes overcorrected
+# adipocyte 6 11.29% undercorrected in collagens a bit but muscle ok
+# fibroblast 3 18.82%  v similar to mphage
+# VEC 9 29.13% a bit overcorrected in muscle
+# mural 83%
+# muscle can't find cells
+
+
+
+
+# save the parameters used
+new_row <- data.frame(
+     "Sample" = mainExpName(sce_sample),
+     "Resolution" = 0.1,
+     "Max contamination" =6,
+     "Gene list" = "Adipocyte",
+     "Estimated contamination" = 11.29)
+soupX_parameters <- rbind(soupX_parameters, new_row)
+```
+
+### MSK1691-ACH-MTJ
+
+```{r}
+sce_sample <- sce_filter_manual[["MSK1691-ACH-MTJ"]]
+sce_raw_sample <- sce_raw[["MSK1691-ACH-MTJ"]]
+
+so_sample <- choose_celltype(sce_sample, sce_raw_sample, 0.1) # change resolution as required
+soup.channel_sample <- run_soupX(so_sample, sce_sample, sce_raw_sample)
+estimate_all_cells(sce_sample,3) # change maxcontamination as required
+sce_sample <- calc_contamination(sce_sample, soup.channel_sample, muscle_markers, 3) # change markers and max contamination as required
+so_sample <- visualise_outputs(sce_sample, so_sample, "Muscle", muscle_markers) # change cell type and markers as required
+save_objects(so_sample, sce_sample)
+
+# macrophage 6 16.45% OK
+# adipocyte 6 10.00% too low
+# muscle 3 24.39% better
+# fibroblast can't estimate cells
+# VEC 31.72% 
+
+# save the parameters used
+new_row <- data.frame(
+     "Sample" = mainExpName(sce_sample),
+     "Resolution" = 0.1,
+     "Max contamination" =3,
+     "Gene list" = "Muscle",
+     "Estimated contamination" = 24.39)
+soupX_parameters <- rbind(soupX_parameters, new_row)
+```
+# Save the parameters table
+```{r}
+write.table(soupX_parameters, paste0(directory, "/soupX_parameters.txt", sep = "\t"), quote = FALSE, col.names = TRUE, row.names = FALSE)
+```
+

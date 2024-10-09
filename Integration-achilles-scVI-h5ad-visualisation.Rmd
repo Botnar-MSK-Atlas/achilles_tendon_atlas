@@ -1,0 +1,852 @@
+---
+title: "Integration-achilles-scvi-visualisation"
+author: "Carla Cohen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+Having got the SCVI integration to run, this script reads in the object and performs visualisaion to assess the success of the integration. 
+
+Set up and read in the yml file. 
+
+```{r setup, load packages, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+library(Seurat)
+library(tidyverse)
+library(cowplot)
+library(clustree)
+library(yaml)
+library(viridis)
+library(lisi)
+library(reticulate)
+# use reticulate to access numpy
+reticulate::use_condaenv(condaenv = "integration-env", conda = "/project/ancestryhca/ccohen/mamba_installation/conda/condabin/conda", required = F)
+np <- import("numpy")
+
+# make a new output folder for each run, with the date & time in the directory name
+date <- Sys.Date() %>% str_replace_all("-", "")
+time <- format(Sys.time(), "%X") %>% str_replace_all(":", "-") %>%
+    str_sub(1, 5)
+directory <- paste0(date,"_", time, "_Integration-scvi-visualisation.dir")
+dir.create(directory, showWarnings = FALSE)
+
+#need to update yml file as appropriate
+ini <- read_yaml("integration-vis.yml")
+
+```
+
+
+### Parameters
+Extract some names that depend on the normalisation method performed
+
+```{r}
+if (ini$normalisation_method == "SCTransform"){
+        
+        # save the reduction names
+        pca_name <- "sct.pca"
+        umap_name <- "sct.umap"
+        
+        # save the resolution prefix
+        res_prefix <- "SCT_snn_res."
+        
+    } else if (ini$normalisation_method == "SCTransformv2"){
+    
+    # save the reduction names
+     pca_name <- "sctv2.pca"
+     umap_name <- "sctv2.umap"
+     
+     # save the resolution prefix
+     res_prefix <- "SCTv2_snn_res."
+    
+    } else if (ini$normalisation_method == "LogNormalise"){
+    
+     # save the reduction names
+     pca_name <- "lognorm.pca"
+     umap_name <- "lognorm.umap"
+     
+     # save the resolution prefix
+     res_prefix <- "RNA_snn_res."
+     
+    # Some prefixes change if decontX is used for normalisation
+    if (ini$normalisation_assay == "decontXcounts"){
+        res_prefix <- "decontXcounts_snn_res."
+    }
+    if (ini$normalisation_assay == "soupX"){
+        res_prefix <- "soupX_snn_res."
+    }    
+}
+ 
+print(pca_name)
+print(umap_name)
+print(res_prefix)
+```
+
+
+### Add scvi embeddings to existing Seurat object
+
+Read in the merged and Harmony integrated Seurat objects
+```{r}
+so.scvi <- readRDS(paste0(ini$harmony_integration_date, "/RDS_objects.dir/Achilles_harmony_SeuratObject.rds"))
+so.merge <- readRDS(paste0(ini$harmony_integration_date, "/RDS_objects.dir/Achilles_merge_SeuratObject.rds"))
+```
+
+Import the scVI embeddings and add as a new embedding to the object. 
+
+See the vignette:
+https://cran.r-project.org/package=RcppCNPy/vignettes/UsingReticulate.pdf
+```{r}
+
+
+scVI_embeddings <- np$load(paste0(ini$scVI_integration_date, "/scVI_embeddings.npy"))
+
+scVI_obs <- read.table(paste0(ini$scVI_integration_date, "/Achilles_scVI_obs.txt"), sep = "\t", header = TRUE, row.names = 1)
+
+# check the barcodes match
+table(rownames(scVI_obs) %in% colnames(so.scvi))
+
+# add rownames to the matrix
+rownames(scVI_embeddings) <- rownames(scVI_obs)
+
+# add the new embeddings to the subsetted object
+so.scvi[["X_scVI"]] <- CreateDimReducObject(embeddings = scVI_embeddings, key = "scVI_", assay = "RNA")
+
+so.scvi
+
+```
+
+### Perform clustering using the scVI embeddings
+
+```{r}
+# re-calculate neighbours using the scVI embeddings
+so.scvi <- FindNeighbors(so.scvi, reduction = "X_scVI", dims = 1:ini$n_dims, graph.name = c("X_scVI_nn", "X_scVI_snn"))
+
+# cluster at multiple resolutions
+so.scvi <- FindClusters(so.scvi, resolution = seq(0.1, 0.6, 0.1), graph.name = "X_scVI_snn")
+
+# recalculate the UMAP using scVI embedidngs
+so.scvi <- RunUMAP(so.scvi, reduction = "X_scVI", dims = 1:ini$n_dims, reduction.name = "umap.scvi")
+```
+
+We want to use the PCA and UMAP that was calculated on the SCVI embeddings. 
+
+```{r, fig.width=10, fig.height=8}
+Idents(so.scvi) <- "sample"
+DimPlot(
+  so.scvi,
+  reduction = "umap.scvi",
+  shuffle=TRUE
+)
+dir.create(paste0(directory, "/Integration_Figures.dir/"))
+ggsave(paste0(directory, "/Integration_Figures.dir/UMAP_SCVI.", ini$file_type), 
+       device = ini$file_format, width = 10, height = 8, bg = "white")
+```
+
+#### QC to check how well the integration has worked
+
+For additional QC run Integration-QC-achilles.Rmd. 
+
+Compare Elbow plot from the merged vs integrated data
+
+```{r, fig.width=10, fig.height=4}
+p1 <- ElbowPlot(so.merge, ndims = 50, reduction = pca_name) + ggtitle ("Elbow plot merged")
+p2 <- ElbowPlot(so.scvi, ndims = 50, reduction = pca_name) + ggtitle ("Elbow plot integrated")
+p <- plot_grid(p1,p2)
+p
+```
+
+```{r}
+ggsave(paste0(directory, "/Integration_Figures.dir/Elbowplot_merged_vs_integrated.", ini$file_type), 
+       p, device = ini$file_format, width = 10, height = 4, bg = "white")
+```
+
+#Calculate lisi score/other metrics
+
+Compute LISI : https://github.com/immunogenomics/LISI 
+
+Compute integration LISI and cell-type LISI for merged and integrated objects
+iLISI - effective number of datasets in a neighbourhood - want this to equal number of batches
+cLISI - want this to equal 1 - number of cell types in neighbourhood i.e. different cell types should form distinct clusters
+So when comparing merged and integrated data, iLISI should go up and cLISI should go down. 
+
+
+```{r}
+
+iLISI_merged <- lisi::compute_lisi(Embeddings(so.merge, reduction = umap_name), 
+                               so.merge[[]], "orig.ident")
+
+cat("Merged - iLISI mean and range")
+cat("\n")
+iLISI_merged_mean <- mean(iLISI_merged$orig.ident)   # 2.63 (12 would be perfect if equal number of cells in each dataset)
+iLISI_merged_mean
+range(iLISI_merged$orig.ident)
+
+# For cLISI, need to give the clusters not the sample name
+cLISI_clusters <- paste0(ini$doublets_assay, "_snn_res.", ini$resolution)
+cLISI_clusters
+cLISI_merged <- lisi::compute_lisi(Embeddings(so.merge, reduction = umap_name), 
+                               so.merge[[]],
+                               label_colnames = cLISI_clusters)
+cat("Merged - cLISI mean and range")
+cat("\n")
+LISI_column_name <- colnames(cLISI_merged)
+cLISI_merged_mean <- mean(cLISI_merged %>% pull(LISI_column_name))   # result would be 1 if each cluster is really unique
+cLISI_merged_mean
+range(cLISI_merged %>% pull(LISI_column_name))
+
+iLISI_integrated <- lisi::compute_lisi(Embeddings(so.scvi, reduction = "umap.scvi"), 
+                               so.scvi[[]], "orig.ident")
+
+cat("Integrated - iLISI mean and range")
+cat("\n")
+iLISI_integrated_mean <- mean(iLISI_integrated$orig.ident)   # 2.63 (12 would be perfect if equal number of cells in each dataset)
+iLISI_integrated_mean
+range(iLISI_integrated$orig.ident)
+
+# For cLISI, need to give the clusters not the sample name
+cLISI_integrated <- lisi::compute_lisi(Embeddings(so.scvi, reduction = "umap.scvi"), 
+                               so.scvi[[]],
+                               "X_scVI_snn_res.0.1")
+cat("Integrated - cLISI mean and range")
+cat("\n")
+cLISI_integrated_mean <- mean(cLISI_integrated$X_scVI_snn_res.0.1)   # result would be 1 if each cluster is really unique
+cLISI_integrated_mean
+range(cLISI_integrated$X_scVI_snn_res.0.1)
+
+```
+
+Plot the LISI scores
+
+```{r}
+# prepare the data by ranking the outputs
+iLISI_merged <- cbind(iLISI_merged, rank(iLISI_merged$orig.ident))
+colnames(iLISI_merged) <- c("orig.ident", "rank")
+cLISI_merged_values <- cLISI_merged[LISI_column_name] %>% pull() %>% rank()
+cLISI_merged <- cbind(cLISI_merged, cLISI_merged_values)
+colnames(cLISI_merged) <- c("cluster_res", "rank")
+iLISI_integrated <- cbind(iLISI_integrated, rank(iLISI_integrated$orig.ident))
+colnames(iLISI_integrated) <- c("orig.ident", "rank")
+cLISI_integrated <- cbind(cLISI_integrated, rank(cLISI_integrated$X_scVI_snn_res.0.1))
+colnames(cLISI_integrated) <- c("X_scVI_snn_res.0.3", "rank")
+```
+
+```{r, fig.width=10, fig.height=8}
+
+
+p1 <- ggplot(data = iLISI_merged, aes(x = orig.ident, y = rank)) +
+          geom_point() +
+          labs(title = paste0("Merged iLISI score: mean = ", format(iLISI_merged_mean, digits = 4)),
+               x = "iLISI score",
+               y = "Rank")+
+    #xlim(c(0, 8))+
+    theme_cowplot()
+
+p2 <- ggplot(data = cLISI_merged, aes(x = cluster_res, y = rank)) +
+          geom_point() +
+          labs(title = paste0("Merged cLISI score: mean = ", format(cLISI_merged_mean, digits = 4)),
+               x = "cLISI score",
+               y = "Rank")+
+    #xlim(c(0, 8))+
+    theme_cowplot()
+
+p3 <- ggplot(data = iLISI_integrated, aes(x = orig.ident, y = rank)) +
+          geom_point() +
+          labs(title = paste0("Integrated iLISI score: mean = ", format(iLISI_integrated_mean, digits = 4)),
+               x = "iLISI score",
+               y = "Rank")+
+    #xlim(c(0, 8))+
+    theme_cowplot()
+
+p4 <- ggplot(data = cLISI_integrated, aes(x = X_scVI_snn_res.0.3, y = rank)) +
+          geom_point() +
+          labs(title = paste0("Integrated cLISI score: mean = ", format(cLISI_integrated_mean, digits = 4)),
+               x = "cLISI score",
+               y = "Rank")+
+    #xlim(c(0, 8))+
+    theme_cowplot()
+
+p <- plot_grid(p1, p2, p3, p4)
+p
+
+
+```
+```{r}
+ggsave(paste0(directory, "/Integration_Figures.dir/LISI_results.", ini$file_type), 
+       p, device = ini$file_format, width = 12, height = 8, bg = "white")
+
+
+```
+
+## Clustree
+Plot the clustree to determine the most appropriate resolution to use
+
+```{r, fig.height= 10, fig.width=10}
+
+p <- clustree(so.scvi, prefix = "X_scVI_snn_res.", 
+              node_colour = "sc3_stability", 
+              #layout = "sugiyama"
+              ) + 
+        ggtitle("Clustree")
+    
+p
+
+```
+
+
+```{r, include=FALSE}
+#save the plot
+ggsave(paste0(directory, "/Integration_Figures.dir/Clustree_plot.", ini$file_type), 
+       p, device = ini$file_format, width = 10, height = 10, bg = "white")
+
+
+```
+
+Plot UMAPs at multiple clustering resolutions
+
+```{r, fig.width=10, fig.height=15}
+
+resolutionList <- grep("X_scVI_snn_res", colnames(so.scvi@meta.data), value = TRUE)
+
+plot_list <- list()
+
+for (resolution in resolutionList){
+      plot_list [[resolution]] <- DimPlot(object = so.scvi, label = TRUE, reduction = "umap.scvi", group.by = resolution, shuffle = TRUE)+
+          #scale_colour_viridis_d()
+          theme(legend.position="none")
+      }
+
+title <- ggdraw() + draw_label("UMAPs of clustering resolutions 0.1-1", fontface='bold', size = 24)
+p <- plot_grid(plotlist = plot_list, ncol = 2) 
+p <- plot_grid(title, p, ncol=1, rel_heights=c(0.05, 1))
+
+
+p
+
+
+```
+
+```{r, include=FALSE}
+ggsave(paste0(directory, "/Integration_Figures.dir/UMAP_compare_resolutions.", ini$file_type), 
+       p, device = ini$file_format, width = 10, height = 15, bg = "white")
+```
+
+### Compare harmony and scVI integrations
+
+```{r, fig.height=5, fig.width=12}
+p1 <- DimPlot(object = so.scvi, label = TRUE, reduction = "lognorm.umap", group.by = "soupX_snn_res.0.1", shuffle = TRUE)+
+    ggtitle("Harmony res 0.1")
+p2 <- DimPlot(object = so.scvi, label = TRUE, reduction = "umap.scvi", group.by = "X_scVI_snn_res.0.1", shuffle = TRUE)+
+    ggtitle ("scVI res 0.1")
+plot_grid(p1, p2)
+ggsave(paste0(directory, "/Integration_Figures.dir/UMAP_compare_harmony_scVI_0.1.", ini$file_type), 
+       device = ini$file_format, width = 10, height = 5, bg = "white")
+#colnames(so.scvi[[]])
+```
+
+
+
+Select a resolution and set seurat clusters to that resolution 
+
+```{r} 
+
+so.scvi[["seurat_clusters"]] <- so.scvi[[paste0("X_scVI_snn_res.", ini$integrated_resolution)]]
+Idents(so.scvi) <- so.scvi$seurat_clusters
+
+```
+
+## Save objects 
+Save Seurat objects
+```{r}
+dir.create(paste0(directory, "/RDS_objects.dir/"))
+
+#saveRDS(so.merge, paste0(directory, "/RDS_objects.dir/Achilles_merge_SeuratObject.rds"))
+saveRDS(so.scvi, paste0(directory, "/RDS_objects.dir/Achilles_harmony_scvi_SeuratObject.rds"))
+
+```
+### Visualise QC metrics 
+
+```{r, message = FALSE, fig.width=10, fig.height=18}
+p1 <- VlnPlot(so.scvi, features = "sum", assay = "RNA", pt.size = 0)+
+    scale_y_log10() +
+    scale_fill_viridis_d()+
+    theme(legend.position="none")+
+    theme_cowplot()+
+    ggtitle("nCounts")
+
+p2 <- VlnPlot(so.scvi, features = "detected", assay = "RNA", pt.size = 0)+
+    scale_y_log10() +
+    scale_fill_viridis_d()+
+    theme(legend.position="none")+
+    theme_cowplot()+
+    ggtitle("nFeatures")
+
+p3 <- VlnPlot(so.scvi, features = "subsets_mito_percent", assay = "RNA", pt.size = 0)+
+    scale_fill_viridis_d()+
+    theme(legend.position="none")+
+    theme_cowplot()+
+    ggtitle("Percent mitochondrial reads")
+
+p4 <- VlnPlot(so.scvi, features = "decontX_contamination", assay = "RNA", pt.size = 0)+
+    scale_fill_viridis_d()+
+    theme(legend.position="none")+
+    theme_cowplot()+
+    ggtitle("decontX score")
+
+p4 <- VlnPlot(so.scvi, features = "soupX_fraction", assay = "RNA", pt.size = 0)+
+    scale_fill_viridis_d()+
+    theme(legend.position="none")+
+    theme_cowplot()+
+    ggtitle("soupX fraction")
+
+p <- plot_grid(p1, p2, p3, p4, p5, ncol = 1)
+p
+
+```
+```{r, include=FALSE}
+#save the plot
+ggsave(paste0(directory, "/Integration_Figures.dir/QC_metrics_across_clusters.", ini$file_type), 
+       p, device = ini$file_type, width = 10, height = 18, bg = "white")
+
+
+```
+
+
+Plot QC metrics on UMAP
+
+```{r, fig.height=6, fig.width=16, message = FALSE}
+p1<- FeaturePlot(so.scvi, features = "sum", reduction = "umap.scvi")+ggtitle ("nCounts")+
+    scale_color_continuous(type = "viridis", limits = c(0,10000))
+p2<- FeaturePlot(so.scvi, features = "detected", reduction = "umap.scvi") + ggtitle("nFeatures")+
+    scale_color_continuous(type = "viridis", limits = c(0,5000))
+p3<- FeaturePlot(so.scvi, features = "subsets_mito_percent", reduction = "umap.scvi") + ggtitle ("Percent mito reads")+
+    scale_color_continuous(type = "viridis")
+p <- plot_grid(p1, p2, p3, nrow = 1)
+p
+
+```
+
+```{r, include=FALSE}
+#save the plot
+ggsave(paste0(directory, "/Integration_Figures.dir/UMAP_scvi_QC_metrics.", ini$file_type), 
+       p, device = ini$file_type, width = 10, height = 3, bg = "white")
+
+
+```
+
+Plot ambient RNA and doublets on UMAP
+
+```{r, fig.height=12, fig.width=12, message = FALSE}
+p1<- FeaturePlot(so.scvi, features = "decontX_contamination", reduction = "umap.scvi")+
+    scale_colour_gradientn(colours = viridis(256, option = "D"), name = "decontX score")+
+        ggtitle("decontX_contamination")
+
+p2<- FeaturePlot(so.scvi, features = "soupX_fraction", reduction = "umap.scvi")+
+    scale_colour_gradientn(colours = viridis(256, option = "D"), name = "soupX_fraction")+
+        ggtitle("soupX fraction")
+
+p3 <- DimPlot(so.scvi, reduction = "umap.scvi", group.by = "scDblFinder.class", shuffle = TRUE) +
+    scale_colour_viridis_d(begin = 0, end = 0.75)+
+        ggtitle("doublet status")
+
+p <- plot_grid(p1, p2, p3)
+p
+
+
+
+
+```
+
+```{r, include=FALSE}
+#save the plot
+ggsave(paste0(directory, "/Integration_Figures.dir/UMAP_scvi_decontX_doublets.", ini$file_type), 
+       p, device = ini$file_type, width = 12, height = 12, bg = "white")
+
+
+```
+
+
+## Integration visualisation
+Visualization of merged and integrated data via UMAP split by sample
+
+```{r, fig.width = 8, fig.height=12}
+p1 <- DimPlot(so.merge, reduction = umap_name, pt.size = .1, group.by = "orig.ident", shuffle = TRUE) +
+    ggtitle("Merged")
+p2 <- DimPlot(so.scvi, reduction = "umap.scvi", pt.size = .1, group.by = "orig.ident", shuffle = TRUE)+ 
+    ggtitle ("scvi Integration")
+p <- plot_grid (p1, p2, ncol = 1)
+p
+
+```
+
+```{r, include=FALSE}
+#save the plot
+ggsave(paste0(directory, "/Integration_Figures.dir/UMAP_merged_vs_scvi.", ini$file_type), 
+       p, device = ini$file_format, width = 8, height = 12, bg = "white")
+
+
+```
+
+Visualization of integrated data via UMAP at chosen resolution
+
+```{r, fig.height=6, fig.width=7}
+p <- DimPlot(so.scvi, reduction = "umap.scvi", pt.size = .1)+ 
+    ggtitle (paste0("scvi Integration Clustering at resolution = ", ini$integrated_resolution))
+p
+
+
+```
+
+```{r, include=FALSE}
+#save the plot
+ggsave(paste0(directory, "/Integration_Figures.dir/UMAP_scvi_clustering_res_", ini$integrated_resolution, ".", ini$file_type), 
+       p, device = ini$file_format, width = 10, height = 10, bg = "white")
+
+
+```
+
+
+
+UMAP of integrated data by sample with each sample on a separate plot
+
+```{r, fig.width=14, fig.height=24}
+
+p <- DimPlot(so.scvi, reduction = "umap.scvi", split.by = "orig.ident", ncol = 3)+
+    #scale_colour_viridis_d()+
+    theme(panel.background = element_rect(colour = "black", linewidth = 1))
+
+p
+```
+
+```{r, include=FALSE}
+#save the plot
+ggsave(paste0(directory, "/Integration_Figures.dir/UMAP_scvi_by_orig.ident.", ini$file_type), 
+       p, device = ini$file_format, width = 14, height = 20, bg = "white")
+
+
+```
+
+Just plot the Enthesis samples, to check how MSK1284 compares to the others. It is missing some cell types but this may be because it is only enthesis, the other microanatomies are not present.
+
+```{r, fig.width=14, fig.height=10}
+so.enth <- subset(so.scvi, microanatomical_site == "Enth")
+p <- DimPlot(so.enth, reduction = "umap.scvi", split.by = "orig.ident", ncol = 3)+
+    #scale_colour_viridis_d()+
+    theme(panel.background = element_rect(colour = "black", linewidth = 1))
+
+p
+```
+
+```{r}
+ggsave(paste0(directory, "/Integration_Figures.dir/UMAP_scvi_Enthesis.", ini$file_type), 
+       p, device = ini$file_format, width = 14, height = 10, bg = "white")
+
+```
+
+
+UMAP of integrated data by patient with each patient on a separate plot
+
+```{r, fig.width=14, fig.height=10}
+
+p <- DimPlot(so.scvi, reduction = "umap.scvi", split.by = "patient", ncol = 3)+
+    #scale_colour_viridis_d()+
+    theme(panel.background = element_rect(colour = "black", linewidth = 1))
+
+p
+```
+
+
+
+```{r, include=FALSE}
+#save the plot
+ggsave(paste0(directory, "/Integration_Figures.dir/UMAP_scvi_by_patient.", ini$file_type), 
+       p, device = ini$file_format, width = 14, height = 10, bg = "white")
+
+
+```
+
+Plot UMAP of microanatomical site on separate plots
+
+```{r, fig.width = 10, fig.height = 10, message = FALSE}
+
+p <- DimPlot(so.scvi, reduction = "umap.scvi", pt.size = .1, split.by = "microanatomical_site", ncol = 2)+
+    #scale_colour_viridis_d()+
+    theme(panel.background = element_rect(colour = "black", linewidth = 1))
+    ggtitle("microanatomical site")
+p
+```
+
+```{r, include=FALSE}
+#save the plot
+ggsave(paste0(directory, "/Integration_Figures.dir/UMAP_scvi_by_microanatomy.", ini$file_type), 
+       p, device = ini$file_type, width = 10, height = 10, bg = "white")
+
+
+```
+
+
+Plot UMAP of sequencing batch on separate plots
+
+```{r, fig.width = 10, fig.height = 4, message = FALSE}
+
+p <- DimPlot(so.scvi, reduction = "umap.scvi", pt.size = .1, split.by = "sequencing_date", ncol = 3)+
+    theme(panel.background = element_rect(colour = "black", linewidth = 1))
+    ggtitle("sequencing date")
+p
+```
+
+```{r, include=FALSE}
+#save the plot
+ggsave(paste0(directory, "/Integration_Figures.dir/UMAP_scvi_by_sequencing_date.", ini$file_type), 
+       p, device = ini$file_type, width = 10, height = 4, bg = "white")
+
+
+```
+
+
+## QC on integrated object
+
+Compare PCA plot from the merged vs integrated data by orig.ident
+
+```{r, fig.width = 14, fig.height=6}
+
+p1 <- DimPlot(so.merge, reduction = pca_name, group.by = "orig.ident", shuffle = TRUE) +
+    #scale_colour_viridis_d()+
+        ggtitle ("PCA plot merged")
+p2 <- DimPlot(so.scvi, reduction = "X_scVI", group.by = "orig.ident", shuffle = TRUE) + 
+    #scale_colour_viridis_d()+
+    ggtitle ("PCA plot integrated")
+
+p <- plot_grid(p1,p2, nrow = 1)
+p
+
+
+```
+
+
+```{r}
+ggsave(paste0(directory, "/Integration_Figures.dir/PCA_merged_vs_integrated.", ini$file_type), 
+       p, device = ini$file_format, width = 14, height = 6, bg = "white")
+```
+
+PCA by other variables
+
+```{r, fig.width = 10, fig.height=10}
+
+p1 <- DimPlot(so.scvi, reduction = pca_name, group.by = "patient", shuffle = TRUE)
+p2 <- DimPlot(so.scvi, reduction = pca_name, group.by = "sequencing_date", shuffle = TRUE) 
+p3 <- DimPlot(so.scvi, reduction = pca_name, group.by = "age", shuffle = TRUE) 
+p4 <- DimPlot(so.scvi, reduction = pca_name, group.by = "sex", shuffle = TRUE) 
+p5 <- DimPlot(so.scvi, reduction = pca_name, group.by = "microanatomical_site", shuffle = TRUE) 
+p <- plot_grid(p1,p2,p3, p4, p5, ncol = 2)
+p
+
+
+```
+```{r}
+ggsave(paste0(directory, "/Integration_Figures.dir/PCA_Metafeatures.", ini$file_type), 
+       p, device = ini$file_format, width = 10, height = 10, bg = "white")
+```
+PCA3-4 by other variables
+
+```{r, fig.width = 10, fig.height=10}
+
+p1 <- DimPlot(so.scvi, reduction = pca_name, group.by = "patient", shuffle = TRUE, dims = c(3, 4))
+p2 <- DimPlot(so.scvi, reduction = pca_name, group.by = "sequencing_date", shuffle = TRUE, dims = c(3, 4)) 
+p3 <- DimPlot(so.scvi, reduction = pca_name, group.by = "age", shuffle = TRUE, dims = c(3, 4)) 
+p4 <- DimPlot(so.scvi, reduction = pca_name, group.by = "sex", shuffle = TRUE, dims = c(3, 4)) 
+p5 <- DimPlot(so.scvi, reduction = pca_name, group.by = "microanatomical_site", shuffle = TRUE, dims = c(3, 4)) 
+p <- plot_grid(p1,p2,p3, p4, p5, ncol = 2)
+p
+
+```
+
+Plot metafeatures on Vln plot of PC1
+
+```{r, fig.height=10, fig.width=12}
+plot_list <- list()
+
+#By sample
+plot_list[[1]] <- VlnPlot(object = so.scvi, features = "PC_1", group.by = "orig.ident", pt.size = 0) +
+    theme(legend.position="none")+
+    ggtitle("orig.ident")
+#By patient
+plot_list[[2]] <- VlnPlot(so.scvi, pt.size = 0, features = "PC_1", group.by = "patient")+
+    theme(legend.position="none")+ggtitle("patient")
+#By age
+plot_list[[3]] <- VlnPlot(so.scvi, pt.size = 0, features = "PC_1", group.by = "age")+
+    theme(legend.position="none") +ggtitle("age")
+#By sex
+plot_list[[4]] <- VlnPlot(so.scvi, pt.size = 0, features = "PC_1", group.by = "sex")+
+    theme(legend.position="none")+ ggtitle("sex")
+#By microanatomy
+plot_list[[5]] <- VlnPlot(so.scvi, pt.size = 0, features = "PC_1", group.by = "microanatomical_site")+
+    theme(legend.position="none")+ ggtitle("microanatomical site")
+#By surgical procedure
+#plot_list[[6]] <- VlnPlot(so.scvi, pt.size = .1, features = "PC_1", group.by = "surgical_procedure")
+#By disease status
+#plot_list[[7]] <- VlnPlot(so.scvi, pt.size = .1, features = "PC_1", group.by = "disease_status")
+#By anatomical site
+#plot_list[[8]] <- VlnPlot(so.scvi, pt.size = .1, features = "PC_1", group.by = "anatomical_site")
+#By time to freezing
+#plot_list[[9]] <- VlnPlot(so.scvi, pt.size = .1, features = "PC_1", group.by = "time_to_freezing")
+#By sequencing date
+plot_list[[6]] <- VlnPlot(so.scvi, pt.size = 0, features = "PC_1", group.by = "sequencing_date")+
+    theme(legend.position="none")+ ggtitle("sequencing date")
+#By ethnicity
+#plot_list[[11]] <- VlnPlot(so.scvi, pt.size = .1, features = "PC_1", group.by = "ethnicity")
+
+
+title <- ggdraw() + draw_label("PC1 Metafeatures after integration", fontface='bold', size = 16)
+p <- plot_grid(plotlist = plot_list, ncol = 2) 
+p <- plot_grid(title, p, ncol=1, rel_heights=c(0.05, 1))
+
+
+p
+
+
+```
+
+```{r}
+ggsave(paste0(directory, "/Integration_Figures.dir/Vln_PCA_Metafeatures.", ini$file_type), 
+       p, device = ini$file_format, width = 10, height = 12, bg = "white")
+```
+
+Plot metafeatures on Vln plot of PC2
+
+```{r, fig.height=10, fig.width=12}
+plot_list <- list()
+
+#By sample
+plot_list[[1]] <- VlnPlot(object = so.scvi, features = "PC_2", group.by = "orig.ident", pt.size = 0) +
+    theme(legend.position="none")+
+    ggtitle("orig.ident")
+#By patient
+plot_list[[2]] <- VlnPlot(so.scvi, pt.size = 0, features = "PC_2", group.by = "patient")+
+    theme(legend.position="none")+ggtitle("patient")
+#By age
+plot_list[[3]] <- VlnPlot(so.scvi, pt.size = 0, features = "PC_2", group.by = "age")+
+    theme(legend.position="none") +ggtitle("age")
+#By sex
+plot_list[[4]] <- VlnPlot(so.scvi, pt.size = 0, features = "PC_2", group.by = "sex")+
+    theme(legend.position="none")+ ggtitle("sex")
+#By microanatomy
+plot_list[[5]] <- VlnPlot(so.scvi, pt.size = 0, features = "PC_2", group.by = "microanatomical_site")+
+    theme(legend.position="none")+ ggtitle("microanatomical site")
+#By surgical procedure
+#plot_list[[6]] <- VlnPlot(so.scvi, pt.size = .1, features = "PC_2", group.by = "surgical_procedure")
+#By disease status
+#plot_list[[7]] <- VlnPlot(so.scvi, pt.size = .1, features = "PC_2", group.by = "disease_status")
+#By anatomical site
+#plot_list[[8]] <- VlnPlot(so.scvi, pt.size = .1, features = "PC_2", group.by = "anatomical_site")
+#By time to freezing
+#plot_list[[9]] <- VlnPlot(so.scvi, pt.size = .1, features = "PC_2", group.by = "time_to_freezing")
+#By sequencing date
+plot_list[[6]] <- VlnPlot(so.scvi, pt.size = 0, features = "PC_2", group.by = "sequencing_date")+
+    theme(legend.position="none")+ ggtitle("sequencing date")
+#By ethnicity
+#plot_list[[11]] <- VlnPlot(so.scvi, pt.size = .1, features = "PC_2", group.by = "ethnicity")
+
+
+title <- ggdraw() + draw_label("PC2 Metafeatures after integration", fontface='bold', size = 16)
+p <- plot_grid(plotlist = plot_list, ncol = 2) 
+p <- plot_grid(title, p, ncol=1, rel_heights=c(0.05, 1))
+
+
+p
+
+
+```
+
+Check genes driving the first four PCs. 
+
+
+```{r, fig.width=10, fig.height=10}
+DimHeatmap(so.scvi, dims = 1:4, cells = 500, balanced = TRUE, reduction = pca_name, ncol =2)
+
+```
+
+
+
+Check distribution by metadata elements on UMAP following integration
+
+```{r, by donor, fig.height=26, fig.width=6}
+plot_list <- list()
+
+#By sample
+#plot_list[[1]] <- DimPlot(so.scvi, reduction = "umap.scvi", pt.size = .1, group.by = "orig.ident", shuffle = TRUE)+
+#    scale_colour_viridis_d()+
+#    ggtitle("sample")
+#By patient
+plot_list[[1]] <- DimPlot(so.scvi, reduction = "umap.scvi", pt.size = .1, group.by = "patient", shuffle = TRUE)
+#By age
+plot_list[[2]] <- DimPlot(so.scvi, reduction = "umap.scvi", pt.size = .1, group.by = "age", shuffle = TRUE)
+#By sex
+plot_list[[3]] <- DimPlot(so.scvi, reduction = "umap.scvi", pt.size = .1, group.by = "sex", shuffle = TRUE)
+#By microanatomy
+plot_list[[4]] <- DimPlot(so.scvi, reduction = "umap.scvi", pt.size = .1, group.by = "microanatomical_site", shuffle = TRUE)
+#By surgical procedure
+#plot_list[[6]] <- DimPlot(so.scvi, reduction = "umap.scvi", pt.size = .1, group.by = "surgical_procedure")
+#By disease status
+#plot_list[[7]] <- DimPlot(so.scvi, reduction = "umap.scvi", pt.size = .1, group.by = "disease_status")
+#By anatomical site
+#plot_list[[8]] <- DimPlot(so.scvi, reduction = "umap.scvi", pt.size = .1, group.by = "anatomical_site")
+#By time to freezing
+#plot_list[[9]] <- DimPlot(so.scvi, reduction = "umap.scvi", pt.size = .1, group.by = "time_to_freezing")
+#By sequencing date
+plot_list[[5]] <- DimPlot(so.scvi, reduction = "umap.scvi", pt.size = .1, group.by = "sequencing_date")
+#By ethnicity
+#plot_list[[11]] <- DimPlot(so.scvi, reduction = "umap.scvi", pt.size = .1, group.by = "ethnicity")
+
+title <- ggdraw() + draw_label("Metafeatures on UMAP after scvi integration", fontface='bold', size = 12)
+p <- plot_grid(plotlist = plot_list, ncol = 1) 
+p <- plot_grid(title, p, ncol=1, rel_heights=c(0.05, 1))
+
+
+p
+```
+
+Very quick annotation
+
+```{r, fig.height=10, fig.width=8}
+Idents(so.scvi) <- so.scvi$X_scVI_snn_res.0.2
+plot_updated_markers <- function (so, resolution){
+    p <- DotPlot(so, 
+             features =c("COL1A1", "COL1A2", "COL3A1", "DCN",
+              "HMCN1", "NEGR1", "DCLK1", "KAZN", "BICC1", "PRICKLE1",
+              "CLU", "COMP", "MMP3", "NOVA1", "CILP", "FBLN1", "PRG4",
+              "TRDN", "TTN", "NEB", "TNNT1", "LGR5", "ATP2A2",
+              "PECAM1", "PTPRB", "FLT1", "VWF",
+              "PTPRC", "F13A1", "CD163", "MRC1", "MSR1",
+              "PLIN1", "AQP7", "ADIPOQ",
+              "NOTCH3", "PDGFRB", "MYO1B",
+              "TNNT3", "MYH1", "MYH3",
+              "CD247", "SKAP1", "THEMIS",
+              "MMRN1", "PROX1", "PKHD1L1",
+              "PAX7",
+              "KIT", "CPA3", "IL18R1",
+              "MS4A1", "CD37", "BLNK",
+              "IL1RAPL2", "XKR4", "NRXN1",
+                "ASPM", "DIAPH3", "TOP2A"),
+             assay = ini$normalisation_assay) + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle(paste0("Updated markers resolution ", resolution)) + 
+    coord_flip()
+    
+    p
+}
+plot_updated_markers(so.scvi, 0.1)
+
+```
+
+```{r}
+
+ggsave(paste0(directory, "/Marker_dotplots/dotplot_updated_general_markers_", resolution, ".", ini$file_type), 
+       device = ini$file_type, width = 10, height = 16, 
+       bg = "white")
+
+```
+
+
+```{r}
+sessionInfo()
+```

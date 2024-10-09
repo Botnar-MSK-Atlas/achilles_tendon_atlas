@@ -233,10 +233,11 @@ sce_filter_manual.manual <- sce_filter_manual[c("MSK0785-Ach-Enth", "MSK1284-Ach
 
 
 ```{r, fig.height=8, fig.width=12}
-#this example  uses a list of markers that are specifically expressed in adipocytes
+#this example  uses a list of markers that are specifically expressed in adipocytemarkers
+# NB Have tested other markers in script SoupX-manual-achilles-combined.Rmd
 
 adipocytemarkers <- c("ADIPOQ", "PLIN1", "PLIN4", "GPAM", "AQP7")
-    
+
 p_list <- list()
 for (i in 1:length(soup.channel.manual)){
     plot_list <- list()
@@ -563,6 +564,32 @@ for(i in 1:length(so_soupX)){
 ### Dotplots to compare ambient RNA detection methods
 
 ```{r, fig.width=16, fig.height=8, message = FALSE, warning=FALSE}
+# update the gene lists to check ambient contamination post-correction
+general_markers <- c("COL1A1", "COL1A2", "COL3A1", "DCN",
+              "NEGR1", "DCLK1", "VCAN", "KAZN",
+              "PTPRC", "F13A1", "CD163", "MRC1", "MSR1",
+              "COMP", "NOX4", "RGS6", "THBS4",
+              "PLIN1", "PLIN4", "AQP7", "ADIPOQ",
+              "PRG4", "ITGB8", "FN1", "CLU", "CRTAC1",
+              "PECAM1", "PTPRB", "FLT1", "VWF",
+              "TNC", "DELEC1", "COL6A3", "COL5A2",
+              "POSTN", "ADAM12", "NAV3", "SDK1",
+              "IL1R2", "RTN1", "HLA-DRA", "AOAH",
+              "NOTCH3", "PDGFRB", "MYO1B", "SYNPO2",
+              "APOE", "LYZ", "SPP1", "ALCAM",
+              "NEBL", "SYT1", "PLCB4", "MECOM",
+              "MYH11", "RCAN2", "PDE3A", "SORBS2",
+              "KIT", "CPA3", "IL18R1",
+              "MMRN1", "PROX1", "KDR", "FLT4",
+              "CD247", "SKAP1", "THEMIS", "IL7R",
+              "CLEC4C", "IL3RA", "CUX2", "PDE4B",
+              "IL1RAPL2", "XKR4", "NRXN1", "CADM2",
+              "LRP1B", "SORBS1", "PDE3B", "LAMA4",
+              "FLT3", "TOX", "CLNK", "WDFY4",
+              "TRDN", "TTN", "NEB", "DES", "ACTN2",
+              "TNNC2", "TNNI2", "TNNT3", "ACTN3",
+              "TNNC1", "TNNI1", "TNNT1", "ATP2A2",
+              "COL22A1")
 
 plot_list <- list()
 
@@ -573,21 +600,21 @@ for(i in 1:length(so_soupX)){
     
     DefaultAssay(so_soupX[[i]]) <- "RNA"
     p_RNA <- DotPlot(so_soupX[[i]], 
-             features = geneName) + 
+             features = general_markers) + 
     scale_colour_viridis(direction = -1) +
     ggtitle("RNA assay") + 
     coord_flip()
     
     DefaultAssay(so_soupX[[i]]) <- "decontXcounts"
     p_decontX <- DotPlot(so_soupX[[i]], 
-             features = geneName) + 
+             features = general_markers) + 
     scale_colour_viridis(direction = -1) +
     ggtitle("decontX assay") + 
     coord_flip()
     
     DefaultAssay(so_soupX[[i]]) <- "soupX"
     p_soupX <- DotPlot(so_soupX[[i]], 
-             features = geneName) + 
+             features = general_markers) + 
     scale_colour_viridis(direction = -1) +
     ggtitle("soupX assay") + 
     coord_flip()
@@ -602,9 +629,6 @@ for(i in 1:length(so_soupX)){
 plot_list[[i]]
 ```
 
-
-
-
 ```{r, include=FALSE}
 #save the plots
 dir.create(paste0(directory, "/SoupX_figures/Dotplots/"))
@@ -612,11 +636,82 @@ dir.create(paste0(directory, "/SoupX_figures/Dotplots/"))
 for(i in 1:length(so_soupX)){
     ggsave(paste0(directory, "/SoupX_figures/Dotplots/", 
                   so_soupX[[i]]@project.name, ".", ini$file_type), 
-       plot = plot_list[[i]], device = ini$file_type, width = 16, height = 8, bg = "white")
+       plot = plot_list[[i]], device = ini$file_type, width = 16, height = 14, bg = "white")
 }
 
 
 ```
+
+# Which genes contribute most to the soup?
+
+Calculate most highly soupy genes  
+Calculate soupX fraction per cell  
+Plot dotplot and umap  
+
+```{r}
+
+dir.create(paste0(directory, "/SoupX_figures/Highest_ambient_genes/"))
+dir.create(paste0(directory, "/SoupX_figures/SoupX_umap/"))
+
+contributing_genes <- function(so){
+    
+   # subtract the soupX counts from the total counts
+    subtraction <- so@assays$RNA@counts - so@assays$soupX@counts
+    subtraction_colmeans <- colMeans(subtraction) ## average ambient reads per cell
+    subtraction_rowmeans <- rowMeans(subtraction) ## average ambient reads per feature
+    ## fraction of ambient reads, for each feature, per sample
+    subtraction_fraction <- sweep(subtraction, 2, colSums(so@assays$RNA@counts), '/')
+    subtraction_fraction_rowsums <- rowSums(subtraction_fraction) ## genes
+    subtraction_fraction_colsums <- colSums(subtraction_fraction) ## cells
+    highest_contributors_ambiencereads <- sort(subtraction_rowmeans, decreasing = T)[1:50] ## the highest contributors (in absolute number of reads)
+    Idents(so) <- "seurat_clusters"
+    DefaultAssay(so) <- "RNA"
+    p_RNA <- DotPlot(so, 
+             features = rev(names(highest_contributors_ambiencereads))) + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle("RNA assay") +
+    coord_flip()
+
+    DefaultAssay(so) <- "soupX"
+    p_soupX <- DotPlot(so, 
+             features = rev(names(highest_contributors_ambiencereads))) + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle("soupX assay") + 
+    coord_flip()
+    p_soupX
+    
+    p <- plot_grid(p_RNA, p_soupX, ncol = 2)
+    title <- ggdraw() + draw_label(so_soupX[[i]]@project.name, fontface='bold', size = 16)
+    plot_list[[i]] <- plot_grid(title, p, ncol=1, rel_heights=c(0.05, 1))
+    
+    ggsave(paste0(directory, "/SoupX_figures/Highest_ambient_genes/", 
+                  so@project.name, ".png"), p, 
+        device = ini$file_type, width = 16, height = 14, bg = "white")
+
+    # add soupX fraction to seurat object
+    so <- AddMetaData(so, subtraction_fraction_colsums, col.name = "soupX_fraction")
+    #print(head(so[[]]))
+    
+    # plot umap coloured by soupX ambinent score, decontX score, cluster
+    p3 <- DimPlot(so)
+    p1 <- FeaturePlot(so, features = "soupX_fraction")
+    p2 <- FeaturePlot(so, features = "decontX_contamination")
+    # plot VlnPlot of soupX fraction
+    p4 <- VlnPlot(so, features = "soupX_fraction")
+    p <- plot_grid(p1, p2, p3, p4)
+    title <- ggdraw() + draw_label(so@project.name, fontface='bold', size = 16)
+    p <- plot_grid(title, p, ncol=1, rel_heights=c(0.05, 1))
+    
+    ggsave(paste0(directory, "/SoupX_figures/SoupX_umap/", 
+                  so@project.name, ".png"), p, 
+        device = ini$file_type, width = 16, height = 14, bg = "white")
+    return(so)
+    
+}
+
+so_soupX <- lapply(so_soupX, contributing_genes)
+```
+
 
 Save the sce and seurat objects
 
