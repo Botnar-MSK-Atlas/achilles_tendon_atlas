@@ -30,7 +30,7 @@ library(scales)
 library(readxl)
 
 # set the resolution for the script
-resolution <- 0.4
+resolution <- 0.25
 
 # make a new output folder for each run, with the date & time in the directory name
 date <- Sys.Date() %>% str_replace_all("-", "")
@@ -51,9 +51,9 @@ so.fibroblasts <- readRDS("20241008_14-55_Subset_fibroblasts.dir/RDS_objects.dir
 ```
 
 
-# Resolution 0.4
+# Resolution 0.25
 
-Annotation at resolution 0.4
+Annotation at resolution 0.25
 
 Select a resolution and set seurat clusters to that resolution 
 
@@ -91,10 +91,9 @@ p
 
 > Take home from microanatomy
 
-Cluster 1, 2, 3, 6 are found across the tendon. 
-Cluster 4 is MTJ/muscle specific. 
-Cluster 5 is Enth specific
-Cluster 7 is MTJ specific
+Cluster 1, 2 and 5 are found across the tendon. 
+Cluster 4 is Enth specific. 
+Cluster 3 and 6 are specific to MTJ and muscle
 
 ### UMAP split by patient
 
@@ -142,8 +141,8 @@ ggplot(cell_numbers, aes(x = cluster, y = frequency))+
 ggsave(paste0(directory, "/Annotation_figures/Number_cells_per_cluster_", resolution, ".png"), 
        width = 6, height = 4, bg = "white")
 ```
-> Clusters 1 and 2 are dominant. 
-> The other minor clusters may have more specific functions or may be artefacts. NB cluster 8 only has ~100 cells so might be hard to annotate. 
+> Clusters 1 and 2 are clearly dominant. 
+> The other minor clusters may have more specific functions or may be artefacts. NB cluster 6 only has ~100 cells so might be hard to annotate. 
 
 ### FindMarkers
 
@@ -280,10 +279,10 @@ for (i in unique(mouse_achilles$subpopulation)){
 plot_grid(plotlist = plot_list, ncol = 4)
 ggsave(paste0(directory, "/Marker_dotplots/De_Michelli_top50.png"), width = 20, height = 20, bg = "white")
 ```
-> Cluster 8 similar to pericytes
-> Cluster 1/5 similar to "tendon fibroblasts 1"
-> Cluster 2/3/4 similar to "tendon fibroblasts 2"
-> Limited interpretation as to the function of FB 1 & 2
+> 
+>
+>
+
 
 
 ## 2. Kendal et al 2020. 
@@ -448,22 +447,7 @@ plot_grid(plotlist = plot_list, ncol = 4)
 ggsave(paste0(directory, "/Marker_dotplots/Fu_top50.png"), width = 20, height = 20, bg = "white")
 ```
 
-TC1 - no great match, maybe 3/4
-TC2, no great match, maybe 2/3/4
-TC3, kind of matches 2/3/4
-TC4, matches cluster 1. "Attachment cells to the tendon-to-bone junction"
-TC5, no great match, maybe 3/4
-TC6, maybe cluster 4
-TC7 no great match
-TC8, kind of matches cluster 5. Pre-hypertrophic chondrocytes. Hoorah. 
-TC9 matches cluster 5, hypertrophic chondrocytes. 
-TC10 osteocytes?? 
 
-Support cluster 5 as chondrocytes
-TC4 matches cluster 1
-Other clusters don’t match. 
-So is cluster 1 enriched at enthesis?
-No, it is present throughout the tendon.
 
 
 ## 7. Karlsen et al 2023 
@@ -493,8 +477,8 @@ plot_dotplot(so.fibroblasts, mtj_markers_broad, "Karlsen_MTJ_broad_markers", res
 ```
 
 > All clusters express the FB markers
-> Cluster 1 is the "tenocyte" marker (COMP/MKX)
-> Cluster 8 looks like myonuclei (TTN)
+> Cluster 2 is the "tenocyte" marker (COMP/MKX)
+> Cluster 6 looks like myonuclei (TTN)
 
 
 MTJ myonuclei top genes: SORBS2, BICD1, COL22A1, NCAM1, MED12L and ABLIM1
@@ -506,7 +490,7 @@ MTJ_myonuclei <- c("SORBS2", "BICD1", "MED12L", "ABLIM1",
 plot_dotplot(so.fibroblasts, MTJ_myonuclei, "Karlsen_MTJ_myonuclei", resolution)
 ```
 
-> Cluster 7 looks like it might have a small proportion of myonuclei in it. 
+> Cluster 6 looks like it might have a small proportion of myonuclei in it. 
 
 Five tendon fibroblast subclusters are described but their DE genes are not really shown. Combinations of DCN, COL1A2, COL3A1, TCF7L2, FAP, PDGFRA, MKX and COMP (Fig S1D)
 ```{r}
@@ -515,13 +499,8 @@ DotPlot(so.fibroblasts, assay = "soupX", cols = c("white", "blue"),
         features = rev(MTJ_fibten))+coord_flip()
 ```
 
->Overall looks similar (encouraging)
->FibTen_Sub1 – similar to cluster 4 (MTJ/muscle-specific)
->FibTen_Sub 2/4 – similar to cluster 2/3
->FibTen_Sub 3/5 – similar to cluster 1/5/7
->Cluster 6 & 8 don’t match well. 
+>
 
-This is reassuring because the cluster 4 is the one that is specific to MTJ/muscle and is the most similar to the most abundant fibroblasts in the MTJ paper. 
 
 Other MTJ-specific tenocyte markers mentioned in the discussion (also protein level validated from their other paper)
 CILP, ITGA10, THBS4, HMCN1, LAMA2. COL22A1. 
@@ -532,7 +511,7 @@ plot_dotplot(so.fibroblasts, MTJ_other, "Karlsen_MTJ_other", resolution)
 ```
 
 
-The authors conclude that FibTen_Sub3 (similar to cluster 1/5/7) is likely to have a specialised function, reponsible for the maintenance of the tendon side of the MTJ. However, I see these throughout the length of the tendon. 
+The authors conclude that FibTen_Sub3 (similar to cluster 2/4) is likely to have a specialised function, reponsible for the maintenance of the tendon side of the MTJ. However, I see these throughout the length of the tendon. 
 
 ## 8. Zhang et al 2023
 
@@ -657,13 +636,7 @@ p <- plot_grid(title, p, ncol=1, rel_heights=c(0.05, 1))
 ggsave(paste0(directory, "/Marker_dotplots/Quads_FB_dotplots_", resolution, ".png"), width = 14, height = 16)
 p
 ```
-> FBLN1+ healthy similar to cluster 1
-> ADAM12+ rupture – not seen in Achilles (healthy)
-> ABCA10+ similar to cluster 6 (nerve associated?)
-> NR4A1+ not seen here…wrong resolution?
-> Dividing cells & nervous system cells don’t match from top genes
-
-Have asked Jolet for more markers. 
+> 
 
 Load the object and run FindAllMarkers()
 
@@ -913,7 +886,7 @@ lai_myonuclei <- c("TNNT1", "MYH7", "MYH7B", "TNNC1", "TNNI1", "ATP2A2",
                    "TNNT3", "MYH1", "MYH2", "TNNC2", "TNNI2", "ATP2A1")
 plot_dotplot(so.fibroblasts, lai_myonuclei, "Lai_myonuclei", resolution)
 ```
-> Indicates there might be myonuclei in cluster 8
+> Indicates there might be myonuclei in clusters 3 & 6
 
 Upload data from Table S10e which is DE genes from the different myonuclei subsets. 
 See figure 2C and Extended data Figure 5. 
@@ -940,7 +913,7 @@ plot_grid(plotlist = plot_list, ncol = 4)
 ggsave(paste0(directory, "/Marker_dotplots/Lai_myonuclei_top50.png"), width = 20, height = 20, bg = "white")
 
 ```
-> Cluster 8 does indeed look like myonuclei, they are not particular to any of these subtypes perhaps because there are not many cells in cluster 8.
+> Cluster 6 does indeed look like myonuclei, they are not particular to any of these subtypes perhaps because there are not many cells in cluster 6.
 
 ```{r, fig.height=10, fig.width=14}
 # Plot type I and type II
@@ -976,7 +949,7 @@ plot_grid(plotlist = plot_list, ncol = 4)
 ggsave(paste0(directory, "/Marker_dotplots/Lai_modules_top50.png"), width = 20, height = 20, bg = "white")
 
 ```
-> Again confirms that cluster 8 are probably myonuclei but can't get any more detail than that.  Most similar to modules 1 (type I) and 3 (type II)
+> Not particularly helpful 
 
 ### Plot top 50 genes of stromal cells
 
@@ -1005,7 +978,7 @@ plot_grid(plotlist = plot_list, ncol = 3)
 ggsave(paste0(directory, "/Marker_dotplots/Lai_stromal_broad_top50.png"), width = 20, height = 20, bg = "white")
 
 ```
-> Cluster 4 looking like FAP!
+> Cluster 3 looks like FAP
 
 
 Finer annotation
@@ -1032,7 +1005,7 @@ plot_grid(plotlist = plot_list, ncol = 3)
 ggsave(paste0(directory, "/Marker_dotplots/Lai_stromal_fine_top50.png"), width = 20, height = 20, bg = "white")
 
 ```
-> Nothing more useful from these subsets.  
+> 
 
 ### FAP markers from literature
 
@@ -1118,9 +1091,8 @@ ggsave(paste0(directory, "/Marker_dotplots/Buechler_dotplots_", resolution, ".pn
 p
 ```
 
-> These markeres don't seem particularly informative. 
-> Cluster 7 expresses COL3A1, COL1A1, COL1A2 which are in PI16 and and COL15A1 FB but they don't expressed the key named markers
-> COMP is expressed in cluster 1 but no other markers
+> These markeres don't seem particularly informative. Cluster 3 seems to have most of the markers. 
+> COMP is expressed in cluster 2
 
 Another way they classify is more general:
 Universal FB: 
@@ -1229,7 +1201,7 @@ FeaturePlot(so.fibroblasts,
 
 ```
 
-> Looking like cluster 4 parenchymal, cluster 5 neurial and cluster 1/7 COMP+
+> Looking like cluster 3 parenchymal, cluster 5 neurial and cluster 2 COMP+
 
 Human universal fibroblast gene module. Comes from a set of normal pancreas fibroblasts. 
 
@@ -1368,8 +1340,7 @@ ggsave(paste0(directory, "/Marker_dotplots/Gao_top50_universal.png"), width = 20
 
 ```
 
-Cluster 4 similar to c03(universal COL15A1 FB progenitors), found across most normal tissues tested (not synovium)
-
+>
 
 Fibroblast activation signature
 From Table S2C. 
@@ -1387,7 +1358,7 @@ activation_markers <- c("BGN", "CALU", "COL4A1", "COL4A2", "COL5A2", "FBXO32", "
 plot_dotplot(so.fibroblasts, activation_markers, "Gao_Activation", resolution, fig_height = 12)
 ```
 
-Not particularly enriched in a cluster. 
+> No particularly obvious activation signature  
 
 
 # Cell types
@@ -1591,7 +1562,9 @@ plot_muscle_markers(so.fibroblasts, resolution)
 
 ```
 
-> Cluster 8 express some muscle markers but there are not enough cells to distinguish fast and slow twitch.  
+
+> Cluster 6 fibroblasts do express some muscle markers (general and slow-twitch)
+> Cluster 3 expresses the TNNs ?soup?
 
 Where are the muscle markers?
 
@@ -1600,8 +1573,7 @@ FeaturePlot(so.fibroblasts, reduction = "umap", features = c("TNNT1", "TNNI1", "
             ncol = 4)
 ```
 
-> Some of the muscle genes are expressed throughout the MTJ/muscle regions
-
+> Some of the muscle genes are v specific cor cluster 6, while otherw are also in cluster 3. 
 
 ### Schwann cells
 
@@ -1732,8 +1704,8 @@ p
 
 ```
 
-> The cellxgene adipose schwann cell markers match well for cluster 6 but not any of the other marker lists. 
-> consistent with them having some kind of "wrapping" function
+> The cellxgene adipose schwann cell markers match well for cluster 5 but not any of the other marker lists. 
+> consistent wiht them having some kind of "wrapping" function
 
 
 ### Fibro-adipogenic progenitors
@@ -1767,16 +1739,12 @@ cluster_markers
 
 ```
 
-Cluster 1 - tendon FBLN+ adventitial fibroblasts, like Quads, FBLN+. COMP+ from pan-FB paper
-Cluster 2 - tendon adventitial fibroblasts, like tendon, muscle.
-Cluster 3 - tendon-specific, no great matches with other papers. 
-Cluster 4 - MTJ/muscle COL15A1+ parenchymal fibroblasts. FAP? 
-Cluster 5 - enthesis. Chondrocytes
-Cluster 6 - tendon nerve-associated fibroblasts
-Cluster 7 - MTJ/muscle-specific FB
-Cluster 8 - Myonuclei
-
-
+Cluster 1 - tendon FBLN+ adventitial fibroblasts
+Cluster 2 - tendon COMP+ adventitial fibroblasts, like tendon, muscle. COMP+ from pan-FB paper, Hamstring MKX, Auads FBLN1. 
+Cluster 3 - MTJ/muscle COL15A1+ parenchymal fibroblasts
+Cluster 4 - enthesis. Chondrocytes
+Cluster 5 - tendon nerve-associated fibroblasts
+Cluster 6 - Skeletal muscle
 
 ## How to name the clusters?
 
@@ -1800,81 +1768,59 @@ for (i in levels(Idents(so.fibroblasts))){
 }
 ```
 
-
-Clusters 2 and 3 are very similar. Find markers that distinguish these two clusters specifically. 
+Clusters 1 and 3 are very similar. Find markers that distinguish these two clusters specifically. 
 
 ```{r}
-markers_2v3 <- FindMarkers(so.fibroblasts, assay = "soupX", ident.1 = "2", ident.2 = "3", 
+markers_1v3 <- FindMarkers(so.fibroblasts, assay = "soupX", ident.1 = "1", ident.2 = "3", 
                            only.pos = TRUE, min.pct = 0.25)
-top_markers_2v3 <- markers_2v3 %>% 
+top_markers_1v3 <- markers_1v3 %>% 
         slice_max(n=20, order_by = abs(avg_log2FC)) %>% rownames()
-top_markers_2v3
+top_markers_1v3
 ```
 ```{r}
-FeaturePlot(so.fibroblasts, top_markers_2v3[1:9], reduction = "umap", label = TRUE)
-ggsave(paste0(directory, "/Feature_Plots/Cluster_2v3.png"), width = 10, height = 10, bg = "white")
+FeaturePlot(so.fibroblasts, top_markers_1v3[1:9], reduction = "umap", label = TRUE)
+ggsave(paste0(directory, "/Feature_Plots/Cluster_1v3.png"), width = 10, height = 10, bg = "white")
 DotPlot(so.fibroblasts, 
-             features = top_markers_2v3[1:9],
-             assay = "soupX") + 
-    scale_colour_viridis(direction = -1) +
-    ggtitle("Cluster_2v3") + 
-    theme(plot.title = element_text(size = 14, face = "bold"))+
-    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+coord_flip()
-    ggsave(paste0(directory, "/Top_9_Dotplots/Cluster_2v3.png"), width = 7, height =7, bg = "white")
-```
-
-> FBN1, CREB5, PRG4 mark cluster 2. 
-
-```{r}
-markers_3v2 <- FindMarkers(so.fibroblasts, assay = "soupX", ident.1 = "3", ident.2 = "2", 
-                           only.pos = TRUE, min.pct = 0.25)
-top_markers_3v2 <- markers_3v2 %>% 
-        slice_max(n=20, order_by = abs(avg_log2FC)) %>% rownames()
-top_markers_3v2
-```
-```{r}
-FeaturePlot(so.fibroblasts, top_markers_3v2[1:9], reduction = "umap", label = TRUE)
-ggsave(paste0(directory, "/Feature_Plots/Cluster_3v2.png"), width = 10, height = 10, bg = "white")
-DotPlot(so.fibroblasts, 
-             features = top_markers_3v2[1:9],
-             assay = "soupX") + 
-    scale_colour_viridis(direction = -1) +
-    ggtitle("Cluster_3v2") + 
-    theme(plot.title = element_text(size = 14, face = "bold"))+
-    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+coord_flip()
-    ggsave(paste0(directory, "/Top_9_Dotplots/Cluster_3v2.png"), width = 7, height =7, bg = "white")
-```
-
-> NRP1, EPHA3, C7, C7
-
-
-What about FBLN1 and COMP and COL15A1?
-FBLN is not in the scaled data
-COMP and COL15A1 are pretty good. 
-```{r}
-FeaturePlot(so.fibroblasts, c("FBLN1", "COMP", "COL15A1"), reduction = "umap", label = TRUE)
-ggsave(paste0(directory, "/Feature_Plots/Putative_markers.png"), width = 10, height = 3.5, bg = "white")
-DotPlot(so.fibroblasts, 
-             features = c("FBLN1", "COMP", "COL15A1"),
+             features = top_markers_1v3[1:9],
              assay = "soupX") + 
     scale_colour_viridis(direction = -1) +
     ggtitle("Cluster_1v3") + 
     theme(plot.title = element_text(size = 14, face = "bold"))+
     theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+coord_flip()
-    ggsave(paste0(directory, "/Marker_dotplots/Putative_markers.png"), width = 7, height =7, bg = "white")
-
+    ggsave(paste0(directory, "/Top_9_Dotplots/Cluster_1v3.png"), width = 7, height =7, bg = "white")
 ```
+
+> TEX41 marks cluster 1
+
+```{r}
+markers_3v1 <- FindMarkers(so.fibroblasts, assay = "soupX", ident.1 = "3", ident.2 = "1", 
+                           only.pos = TRUE, min.pct = 0.25)
+top_markers_3v1 <- markers_3v1 %>% 
+        slice_max(n=20, order_by = abs(avg_log2FC)) %>% rownames()
+top_markers_3v1
+```
+```{r}
+FeaturePlot(so.fibroblasts, top_markers_3v1[1:9], reduction = "umap", label = TRUE)
+ggsave(paste0(directory, "/Feature_Plots/Cluster_3v1.png"), width = 10, height = 10, bg = "white")
+DotPlot(so.fibroblasts, 
+             features = top_markers_3v1[1:9],
+             assay = "soupX") + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle("Cluster_3v1") + 
+    theme(plot.title = element_text(size = 14, face = "bold"))+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+coord_flip()
+    ggsave(paste0(directory, "/Top_9_Dotplots/Cluster_3v1.png"), width = 7, height =7, bg = "white")
+```
+> many more markers in 3 but absent from 1. So it's like cluster 3 has all cluster 1 markers but some additional ones. 
 
 ### Summary dotplot
 
 ```{r, fig.width=10, fig.height=6}
-summary_features <- c("COMP", "CDH13", "MMP3", "ANGPTL7", "MYBL1", # cluster 1
-                      "PRG4", "FBN1", "SCARA5", "CREB5", # 2
-                      "C6", "C7", "NRP1", "PPFIA2", "NAV3", "EPHA3", # 3 etc
-                      "COL15A1", "LRRTM4", "GREB1L", "COL4A1", "ARHGAP24", "COL4A2", 
-                      "GPC6", "FN1", "KCNQ5", "ACAN", 
-                      "SLC22A3", "PLCB4", "TENM2", "ITGA6", 
-                      "COL3A1", "THBS4", "PIEZO2", "RGS6", "SLC8A1", "MYL2", 
+summary_features <- c("DCLK1", "KAZN", "SCARA5", "FBN1", "PLCB1", "TEX41", # cluster 1
+                      "MMP3", "ANGPTL7", "COMP", "THBS4", "MYBL1", "CDH13", "FBLN1", "MKX", # 2
+                      "LRRTM4", "GREB1L", "COL4A1", "COL4A2", "ARHGAP24", "ACTA1", "PDGFRA", "ABCA10", "COL15A1", # 3 etc
+                      "GPC6", "FN1", "KCNQ5", "ACAN", "SDK2", "SLC25A27",
+                      "SLC22A3", "PLCB4", "TENM2", "ITGA6",
                       "NEB", "TTN", "MYBPC1", "TRDN")
 
 DotPlot(so.fibroblasts, features = summary_features, assay = "soupX") + 
@@ -1894,16 +1840,12 @@ ggsave(paste0(directory, "/Marker_dotplots/Annotation_markers.png"), width = 10,
 Make a new column with some preliminary identities
 
 Rename the identities
-1 - COMP+ adventitial tendon fibroblasts
-2 - PRG4+ adventitial tendon fibroblasts
-3 - C6+C7+ tendon fibroblasts
-4 - COL15A1+ universal fibroblasts
-5 - Chondrocytes
-6 - ITGA6+ nerve-associated fibroblasts
-7 - THBS4+ MTJ-specific fibroblasts
-8 - Skeletal muscle cells  
-
-
+1 - DCLK1+ adventitial tendon fibroblast
+2 - COMP+ adventitial tendon fibroblast
+3 - COL15A1+ MTJ/muscle parenchymal fibroblast
+4 - Chondrocytes
+5 - ITGA6+ nerve-associated tendon fibroblasts
+6 - Skeletal muscle cells
 
 
 
@@ -1911,17 +1853,15 @@ Rename the identities
 ```{r}
 
 so.fibroblasts <- RenameIdents(so.fibroblasts, 
-                   `1` = "COMP+ adventitial tendon fibroblasts",
-                    `2` = "PRG4+ adventitial tendon fibroblasts",
-                   `3` = "C6+C7+ tendon fibroblasts", 
-                   `4` = "COL15A1+ universal fibroblasts",
-                   `5` = "Chondrocytes",
-                   `6` = "ITGA6+ nerve-associated fibroblasts", 
-                   `7` = "THBS4+ MTJ-specific fibroblasts", 
-                   `8` = "Skeletal muscle cells")
+                   `1` = "DCLK1+ adventitial tendon fibroblasts",
+                    `2` = "COMP+ adventitial tendon fibroblasts",
+                   `3` = "COL15A1+ universal fibroblasts", 
+                   `4` = "Chondrocytes",
+                   `5` = "ITGA6+ nerve-associated fibroblasts",
+                   `6` = "Skeletal muscle cells")
 
 # add column to metadata
-so.fibroblasts$cell_annotation_fibroblasts_0.4 <- Idents(so.fibroblasts)
+so.fibroblasts$cell_annotation_fibroblasts_0.25 <- Idents(so.fibroblasts)
 
 Idents(so.fibroblasts) %>% unique()
 ```
