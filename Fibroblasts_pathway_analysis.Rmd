@@ -28,15 +28,14 @@ library(msigdbr)
 library(clusterProfiler)
 library(gprofiler2)
 
+options(bitmapType='cairo') # required to get the gost graph to render
+
 # make a new output folder for each run, with the date & time in the directory name
 date <- Sys.Date() %>% str_replace_all("-", "")
 time <- format(Sys.time(), "%X") %>% str_replace_all(":", "-") %>%
     str_sub(1, 5)
 directory <- paste0(date,"_", time, "_Pathway_analysis_fibroblasts.dir")
 dir.create(directory, showWarnings = FALSE)
-# dir.create(paste0(directory, "/Marker_dotplots/"))
-# dir.create(paste0(directory, "/Annotation_figures/"))
-
 
 ```
 
@@ -47,57 +46,23 @@ so.fibroblasts <- readRDS("20241008_14-55_Subset_fibroblasts.dir/RDS_objects.dir
 ```
 
 
-# Resolution 0.25
+### Choose resolution
 
 Select a resolution and set seurat clusters to that resolution 
 
 ```{r} 
+set_resolution <- function(so, resolution){
+    so[["seurat_clusters"]] <- so[[paste0("leiden_X_scVI_snn_res.", resolution)]]
+    Idents(so) <- so$seurat_clusters
+    print(resolution)
+    print(levels(Idents(so)))
+    return(so)
+}
+# so.test <- set_resolution(so.fibroblasts, 0.25)
 
-resolution <- 0.25
-so.fibroblasts[["seurat_clusters"]] <- so.fibroblasts[[paste0("leiden_X_scVI_snn_res.", resolution)]]
-Idents(so.fibroblasts) <- so.fibroblasts$seurat_clusters
-levels(Idents(so.fibroblasts))
 ```
 
 ## 1. Pseudobulk and use enricher from clusterProfiler
-
-First perform pseudobulk at cluster level. Create a list of df where each component is the pseudobulk expression in each cluster. 
-
-```{r}
-
-# 1. counts matrix - sample level
-
-#Aggregation of counts to sample level per cell type
-cts <- AggregateExpression(so.fibroblasts, 
-                    group.by = "seurat_clusters",
-                    assays = 'soupX',
-                    slot = "counts",
-                    return.seurat = FALSE)
-
-# transpose & convert to df
-cts.t <- as.data.frame(t(cts$soupX))
-
-# split data.frame into a list of df for each cell type
-cts.split <- split.data.frame(cts.t,
-                 f = rownames(cts.t))
-
-# create a list of df for each cell type
-counts_list <- list()
-for (i in 1:length(names(cts.split))){
-    counts_list[[i]] <- t(cts.split[[i]]) %>% as.data.frame()
-    colnames(counts_list[[i]]) <- "counts"
-}
-
-names(counts_list) <- names(cts.split)
-
-# get the top 200 genes for each cluster
-gene_list <- list()
-for (i in 1:length(names(cts.split))){
-    gene_list[[i]] <- counts_list[[i]] %>% dplyr::arrange(desc(counts)) %>% slice_head(n = 200)
-}
-head(gene_list[[1]])
-names(gene_list) <- names(counts_list)
-```
 
 Create a set of background genes expressed in the tendon & muscle samples
 
@@ -117,8 +82,7 @@ expressed_genes_all <- names(v[v>9])
 length(expressed_genes_all) #28665 genes
 
 ```
-
-### Make GO reference list
+Make GO reference list
 ```{r}
 #import GO:BP pathway gene list
 GOBP_reference <- msigdbr(species = "Homo sapiens", category = "C5", subcategory = "GO:BP") %>% 
@@ -130,85 +94,158 @@ GOBP_reference$gs_name <- tolower(GOBP_reference$gs_name)
 GOBP_reference$gs_name <- gsub("(^|[[:space:]])([[:alpha:]])", "\\1\\U\\2", GOBP_reference$gs_name, perl=TRUE)
 ```
 
-### Run Pathway analysis
-GOBP database is used  
-Use the "enricher" function from clusterProfiler.  
+Perform pseudobulk at cluster level. Create a list of df where each component is the pseudobulk expression in each cluster. 
 
 ```{r}
-dir.create(paste0(directory, "/Pathway_analysis_pseudobulk"))
-results <- list()
+
+run_pseudobulk <- function(so){
+    # 1. counts matrix - sample level
+
+    #Aggregation of counts to sample level per cell type
+    cts <- AggregateExpression(so, 
+                        group.by = "seurat_clusters",
+                        assays = 'soupX',
+                        slot = "counts",
+                        return.seurat = FALSE)
     
-for(i in 1:length(gene_list)){
-    current_cluster <- names(gene_list[i])
-    results[[i]] <- enricher(rownames(gene_list[[i]]), TERM2GENE = GOBP_reference, universe = expressed_genes_all)
-    saveRDS(results[[i]], 
-            paste0(directory, "/Pathway_analysis_pseudobulk/Cluster_", current_cluster, ".RDS"))    
+    # transpose & convert to df
+    cts.t <- as.data.frame(t(cts$soupX))
+    
+    # split data.frame into a list of df for each cell type
+    cts.split <- split.data.frame(cts.t,
+                     f = rownames(cts.t))
+    
+    # create a list of df for each cell type
+    counts_list <- list()
+    for (i in 1:length(names(cts.split))){
+        counts_list[[i]] <- t(cts.split[[i]]) %>% as.data.frame()
+        colnames(counts_list[[i]]) <- "counts"
+    }
+    
+    names(counts_list) <- names(cts.split)
+    
+    # get the top 200 genes for each cluster
+    gene_list <- list()
+    for (i in 1:length(names(cts.split))){
+        gene_list[[i]] <- counts_list[[i]] %>% dplyr::arrange(desc(counts)) %>% slice_head(n = 200)
+    }
+    head(gene_list[[1]])
+    names(gene_list) <- names(counts_list)
+    
+    return(list(gene_list, counts_list))
+}
+
+# genes_counts <- run_pseudobulk(so.test)
+```
+
+Run Pathway analysis using GOBP with "enricher" function from clusterProfiler. 
+
+```{r}
+run_enricher <- function (gene_list, resolution){
+    dir.create(paste0(directory, "/Pseudobulk_", resolution))
+    results <- list()
+    
+    for(i in 1:length(gene_list[[1]])){
+        current_cluster <- names(gene_list[[1]][i])
+        results[[i]] <- enricher(rownames(gene_list[[1]][[i]]), TERM2GENE = GOBP_reference, universe = expressed_genes_all)
+        saveRDS(results[[i]], 
+                paste0(directory, "/Pseudobulk_", resolution, "/Cluster_", current_cluster, ".RDS"))    
+            
+    }
         
-}
+    names(results) <- names(gene_list[[2]])  
+    return(results)
     
-names(results) <- names(counts_list)
-
-```
-
-Visualise reults of pathway analysis
-
-```{r}
-for (i in 1:length(results)){
-    dotplot(results[[i]])
-    ggsave(paste0(directory, "/Pathway_analysis_pseudobulk/Cluster_", i, ".png"))
+    for (i in 1:length(results)){
+        dotplot(results[[i]])
+        ggsave(paste0(directory, "/Pseudobulk_", resolution, "/Cluster_", i, ".png"))
+    }
 }
 
-
+# enricher.results <- run_enricher(genes_counts, 0.25)
 ```
-Alternative dotplot
+
+
+Visualise the results
+Make this generic for any type of analysis.  
+Use analysis = "Pseudobulk", 
+
 
 ```{r, fig.width=8, fig.height=7}
-
-# group the results together
-res <- list()
-for (i in 1:length(results)){
-        res[[i]] <- results[[i]]@result
-        res[[i]]$cluster <- i
-        
-        res[[i]] <- res[[i]] %>% 
-            filter(p.adjust < 0.05) %>% 
-            arrange(desc(p.adjust))
+visualise_enricher <- function (results, resolution, so, analysis){
+    # plot each fibroblast subset
+    for (i in 1:length(results)){
+        n_results <- results[[i]]@result %>% filter (p.adjust <0.05) %>% nrow()
+        if (n_results > 0){
+            dotplot(results[[i]])
+            ggsave(paste0(directory, "/", analysis, "_", resolution, "/Cluster_", i, ".png"))
     }
-res <- bind_rows(res)
+        }
+            
+    # Alternative grouped dotplot
+    # group the results together
+    res <- list()
+    for (i in 1:length(results)){
+            res[[i]] <- results[[i]]@result
+            res[[i]]$cluster <- i
+            
+            res[[i]] <- res[[i]] %>% 
+                filter(p.adjust < 0.05) %>% 
+                arrange(desc(p.adjust))
+        }
+    res <- bind_rows(res)
+    
+    # make cluster a factor
+    res$cluster <- factor(res$cluster, levels = levels(Idents(so)))
+    
+    # filter the results
+    filtered_res <- res %>% 
+                mutate(new_col = -log10(p.adjust)) %>% 
+                group_by(cluster) %>% 
+                slice_min(order_by = p.adjust, n = 10) %>% 
+                select(ID, GeneRatio, p.adjust, Count, cluster, new_col)
+    
+    # make IDs a factor
+    pathways <- as.data.frame(sort(table(filtered_res$ID)))
+    colnames(pathways) <- c("ID", "pathway_freq")
+    filtered_res <- filtered_res %>% 
+        left_join(pathways) %>%
+        group_by(pathway_freq) %>%
+        arrange(cluster)
+    filtered_res$ID <- factor(filtered_res$ID, levels = rev(unique(filtered_res$ID)))    
+    
+    # plot
+    ggplot(filtered_res, aes(x = cluster, y = ID, size = Count, colour = new_col)) +
+                geom_point()+
+                #scale_colour_viridis()+
+                theme_bw()+
+                theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))+
+                theme(axis.title.x = element_blank())+
+                theme(axis.title.y = element_blank())+
+                labs(colour = "-log10(p.adj)")+
+                scale_y_discrete(position = "right")
+    # save        
+    ggsave (paste0(directory, "/", analysis, "_", resolution, "/Combined_dotplot.png"), 
+                    width = 8, height = 7)
+      
+}
+      
+# visualise_enricher(enricher.results.2, 0.4, so.test, "Findmarkers_enricher")
+```
 
-# make cluster a factor
-res$cluster <- factor(res$cluster, levels = c("1", "2", "3", "4", "5", "6"))
 
-# filter the results
-filtered_res <- res %>% 
-            mutate(new_col = -log10(p.adjust)) %>% 
-            group_by(cluster) %>% 
-            slice_min(order_by = p.adjust, n = 10) %>% 
-            select(ID, GeneRatio, p.adjust, Count, cluster, new_col)
+Put all the functions together
+```{r}
+run_pseudobulk_enricher <- function (so, resolution){
+    so.test <- set_resolution(so.fibroblasts, resolution)
+    genes_counts <- run_pseudobulk(so.test)
+    enricher.results <- run_enricher(genes_counts, resolution)
+    visualise_enricher(enricher.results, resolution, so.test, "Pseudobulk")
+}
 
-# make IDs a factor
-pathways <- as.data.frame(sort(table(filtered_res$ID)))
-colnames(pathways) <- c("ID", "pathway_freq")
-filtered_res <- filtered_res %>% 
-    left_join(pathways) %>%
-    group_by(pathway_freq) %>%
-    arrange(cluster)
-filtered_res$ID <- factor(filtered_res$ID, levels = rev(unique(filtered_res$ID)))    
+run_pseudobulk_enricher(so.fibroblasts, 0.25)
+run_pseudobulk_enricher(so.fibroblasts, 0.4)
 
-# plot
-ggplot(filtered_res, aes(x = cluster, y = ID, size = Count, colour = new_col)) +
-            geom_point()+
-            #scale_colour_viridis()+
-            theme_bw()+
-            theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))+
-            theme(axis.title.x = element_blank())+
-            theme(axis.title.y = element_blank())+
-            labs(colour = "-log10(p.adj)")+
-            scale_y_discrete(position = "right")
-# save        
-ggsave (paste0(directory, "/Pathway_analysis_pseudobulk/Combined_dotplot.png"), 
-                width = 8, height = 7)
-        
 ```
 
 
@@ -217,236 +254,221 @@ ggsave (paste0(directory, "/Pathway_analysis_pseudobulk/Combined_dotplot.png"),
 Read in the markers calculated by the script "Fibroblasts_subset_recluster.Rmd" from 20241008_14-55_Subset_fibroblasts.dir
 
 ```{r, message = FALSE}
-markers <- read.table(paste0("20241008_14-55_Subset_fibroblasts.dir/Marker_lists/Markers_leiden_X_scVI_snn_res.", resolution, ".txt"), 
+
+get_markers <- function(resolution){
+    markers <- read.table(paste0("20241008_14-55_Subset_fibroblasts.dir/Marker_lists/Markers_leiden_X_scVI_snn_res.", resolution, ".txt"), 
                 sep = "\t")
+    top100_markers <- markers %>% group_by(cluster) %>% 
+        filter(abs(avg_log2FC)>0.2) %>% 
+        arrange(desc(abs(avg_log2FC))) %>% 
+        slice_head(n = 200)
+    return(top100_markers)
 
-```
-
-
-```{r}
-top100_markers <- markers %>% group_by(cluster) %>% 
-    filter(abs(avg_log2FC)>0.2) %>% 
-    arrange(desc(abs(avg_log2FC))) %>% 
-    slice_head(n = 100)
-top100_markers
-                
-```
-
-### Run Pathway analysis
-GOBP database is used  with enricher function
-
-```{r}
-dir.create(paste0(directory, "/Pathway_analysis_findmarkers"))
-results <- list()
-    
-for(i in 1:length(unique(top100_markers$cluster))){
-    #print(i)
-    genes <- top100_markers %>% filter(cluster == i) %>% pull(gene)
-    #print(head(genes))
-    
-    results[[i]] <- enricher(genes, TERM2GENE = GOBP_reference, universe = expressed_genes_all)
-    saveRDS(results[[i]], 
-            paste0(directory, "/Pathway_analysis_findmarkers/Cluster_", i, ".RDS"))    
-        
 }
-    
-names(results) <- names(counts_list)
-
+# top_markers <- get_markers(0.4)
 
 ```
 
-
-Visualise reults of pathway analysis
+Run Pathway analysis using GOBP database with enricher function
 
 ```{r}
-for (i in 1:length(results)){
-    dotplot(results[[i]])
-    ggsave(paste0(directory, "/Pathway_analysis_findmarkers/Cluster_", i, ".png"))
-}
-
-
-```
-
-Alternative dotplot
-
-```{r, fig.width=8, fig.height=7}
-
-# group the results together
-res <- list()
-for (i in 1:length(results)){
-        res[[i]] <- results[[i]]@result
-        res[[i]]$cluster <- i
+run_enricher_2 <- function(markers, resolution){
+    
+    dir.create(paste0(directory, "/Findmarkers_enricher_", resolution))
+    results <- list()
         
-        res[[i]] <- res[[i]] %>% 
-            filter(p.adjust < 0.05) %>% 
-            arrange(desc(p.adjust))
+    for(i in 1:length(unique(markers$cluster))){
+        #print(i)
+        genes <- markers %>% filter(cluster == i) %>% pull(gene)
+        #print(head(genes))
+        
+        results[[i]] <- enricher(genes, TERM2GENE = GOBP_reference, universe = expressed_genes_all)
+        saveRDS(results[[i]], 
+                paste0(directory, "/Findmarkers_enricher_", resolution, "/Cluster_", i, ".RDS"))    
+            
     }
-res <- bind_rows(res)
-
-# make cluster a factor
-res$cluster <- factor(res$cluster, levels = c("1", "2", "3", "4", "5", "6"))
-
-# filter the results
-filtered_res <- res %>% 
-            mutate(new_col = -log10(p.adjust)) %>% 
-            group_by(cluster) %>% 
-            slice_min(order_by = p.adjust, n = 10) %>% 
-            select(ID, GeneRatio, p.adjust, Count, cluster, new_col)
-
-# make IDs a factor
-pathways <- as.data.frame(sort(table(filtered_res$ID)))
-colnames(pathways) <- c("ID", "pathway_freq")
-filtered_res <- filtered_res %>% 
-    left_join(pathways) %>%
-    group_by(pathway_freq) %>%
-    arrange(cluster)
-filtered_res$ID <- factor(filtered_res$ID, levels = rev(unique(filtered_res$ID)))    
-
-# plot
-ggplot(filtered_res, aes(x = cluster, y = ID, size = Count, colour = new_col)) +
-            geom_point()+
-            #scale_colour_viridis()+
-            theme_bw()+
-            theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))+
-            theme(axis.title.x = element_blank())+
-            theme(axis.title.y = element_blank())+
-            labs(colour = "-log10(p.adj)")+
-            scale_y_discrete(position = "right")
-# save        
-ggsave (paste0(directory, "/Pathway_analysis_findmarkers/Combined_dotplot.png"), 
-                width = 8, height = 7)
         
+    # names(results) <- names(counts_list)
+    return(results)
+}
+# so.test <- set_resolution(so.fibroblasts, 0.4)
+# enricher.results.2 <- run_enricher_2(top_markers, 0.4)
+# visualise_enricher(enricher.results.2, 0.4, so.test, "Findmarkers_enricher")
 ```
+
+Make a combined function
+
+```{r}
+run_findmarkers_enricher <- function(so, resolution){
+    so.test <- set_resolution(so.fibroblasts, resolution)
+    top_markers <- get_markers(resolution)
+    enricher.results.2 <- run_enricher_2(top_markers, resolution)
+    visualise_enricher(enricher.results.2, resolution, so.test, "Findmarkers_enricher")
+}
+run_findmarkers_enricher(so.fibroblasts, 0.25)
+run_findmarkers_enricher(so.fibroblasts, 0.4)
+```
+
 
 ## Pathway analysis with gost (uses ranked list) on FindMarkers 
 This is how Jolet did it in the quads paper.  
 
-```{r}
-# create a list of genes for each cluster filtered by padj<0.05
-markers_list <- list()
-for (i in levels(Idents(so.fibroblasts))){
-    markers_list[[i]] <- markers %>% 
-        group_by(cluster) %>% 
-        arrange(desc(avg_log2FC)) %>% 
-        filter (p_val_adj < 0.05) %>%
-        filter(cluster == i) %>% 
-        pull (gene)
-}
+```{r, fig.width=10, fig.height=20}
 
-gostres <- gost(query = markers_list, 
-                organism = "hsapiens",
-                ordered_query = TRUE, 
-                significant = TRUE,
-                )
-
-dir.create(paste0(directory, "/Pathway_analysis_gost"))
-write.table(gostres$result[,1:13], paste0(directory, "/Pathway_analysis_gost/GOST_results.txt"), 
-            sep = "\t", quote = FALSE, col.names = TRUE, row.names = FALSE)
-
-```
-
-Plot using the gost function 
-
-```{r, fig.height=20, fig.width=10}
-
-options(bitmapType='cairo') # required to get the graph to render
-gostplot(gostres, capped = TRUE)
-```
-
-Plot GOBP results using custom dotplot
-
-```{r, fig.height=10, fig.width=8}
-# filter the results
-res <- gostres$result %>% 
-    filter(source == "GO:BP") %>%
-    mutate(new_col = -log10(p_value)) %>% 
-    group_by(query) %>% 
-    slice_min(order_by = p_value, n = 10)
-
-# make cluster a factor
-res$query <- factor(res$query, levels = c("1", "2", "3", "4", "5", "6"))
-
-# make term_name a factor
-pathways <- as.data.frame(sort(table(res$term_name)))
-colnames(pathways) <- c("term_name", "pathway_freq")
-res <- res %>% 
-    left_join(pathways) %>%
-    group_by(pathway_freq) %>%
-    arrange(query)
-res$term_name <- factor(res$term_name, levels = rev(unique(res$term_name)))    
-
-
-ggplot(res, aes(x = query, y = term_name, size = query_size, colour = p_value)) +
-            geom_point()+
-            #scale_colour_viridis()+
-            theme_bw()+
-            theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))+
-            theme(axis.title.x = element_blank())+
-            theme(axis.title.y = element_blank())+
-            labs(colour = "-log10(p.adj)")+
-            scale_y_discrete(position = "right")
-
-
-ggsave (paste0(directory, "/Pathway_analysis_gost/Combined_dotplot.png"), 
-                width = 8, height = 7)
-        
-```
-Do it again but this time with a custom bg
-
-
-```{r}
-gostres <- gost(query = markers_list, 
+run_gost <- function (resolution, background){
+    
+    # get the markers    
+    markers <- read.table(paste0("20241008_14-55_Subset_fibroblasts.dir/Marker_lists/Markers_leiden_X_scVI_snn_res.", resolution, ".txt"), 
+                sep = "\t")
+    
+    # create a list of genes for each cluster filtered by padj<0.05
+    markers_list <- list()
+    for (i in levels(Idents(so.fibroblasts))){
+        markers_list[[i]] <- markers %>% 
+            group_by(cluster) %>% 
+            arrange(desc(avg_log2FC)) %>% 
+            filter (p_val_adj < 0.05) %>%
+            filter(cluster == i) %>% 
+            slice_head(n = 200) %>%
+            pull (gene)
+    }
+    
+    # run gost
+    if (background == "universe"){
+        gostres <- gost(query = markers_list, 
+                    organism = "hsapiens",
+                    ordered_query = TRUE, 
+                    significant = TRUE,
+                    )
+    }else if (background == "custom"){
+        gostres <- gost(query = markers_list, 
                 organism = "hsapiens",
                 ordered_query = TRUE, 
                 significant = TRUE, 
                 domain_scope = "custom", 
                 custom_bg = expressed_genes_all
                 )
-write.table(gostres$result[,1:13], paste0(directory, "/Pathway_analysis_gost/GOST_results_custom_bg.txt"), 
-            sep = "\t", quote = FALSE, col.names = TRUE, row.names = FALSE)
+
+    }
+    
+    dir.create(paste0(directory, "/Pathway_analysis_gost"))
+    write.table(gostres$result[,1:13], paste0(directory, "/Pathway_analysis_gost/GOST_results_", resolution, "_", background, ".txt"), 
+                sep = "\t", quote = FALSE, col.names = TRUE, row.names = FALSE)
+
+    
+    return(gostres)
+    
+}
+
+gostres_out <- run_gost(0.4, "custom")
 
 ```
 
-
-Plot using custom dotplot
+Plot GOBP results using gostplot and custom dotplot
 
 ```{r, fig.height=10, fig.width=8}
-# filter the results
-res <- gostres$result %>% 
-    filter(source == "GO:BP") %>%
-    mutate(new_col = -log10(p_value)) %>% 
-    group_by(query) %>% 
-    slice_min(order_by = p_value, n = 10)
 
-# make cluster a factor
-res$query <- factor(res$query, levels = c("1", "2", "3", "4", "5", "6"))
+plot_gost <- function (results, resolution, background){
+    
+    # gostplot
+    gostplot(results, capped = TRUE, interactive = FALSE)
+    
+    # NB can't get publish_gostplot to save with the resolution & background in the filename
+    ggsave(paste0(directory, "/Pathway_analysis_gost/gostplot_", resolution, "_", background, ".png"), width = 10,  height = 20, bg = "white")
+  
+    # custom dotplot
+    
+    # filter the results
+    res <- results$result %>% 
+        filter(source == "GO:BP") %>%
+        mutate(new_col = -log10(p_value)) %>% 
+        group_by(query) %>% 
+        slice_min(order_by = p_value, n = 10)
+    
+    # make cluster a factor
+    res$query <- factor(res$query, levels = sort(unique(res$query)))
+    
+    # make term_name a factor
+    pathways <- as.data.frame(sort(table(res$term_name)))
+    colnames(pathways) <- c("term_name", "pathway_freq")
+    res <- res %>% 
+        left_join(pathways) %>%
+        group_by(pathway_freq) %>%
+        arrange(query)
+    res$term_name <- factor(res$term_name, levels = rev(unique(res$term_name)))    
+    
+    
+    ggplot(res, aes(x = query, y = term_name, size = query_size, colour = p_value)) +
+                geom_point()+
+                #scale_colour_viridis()+
+                theme_bw()+
+                theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))+
+                theme(axis.title.x = element_blank())+
+                theme(axis.title.y = element_blank())+
+                labs(colour = "-log10(p.adj)")+
+                scale_y_discrete(position = "right")+
+        ggtitle(paste0("Resolution ", resolution, ", ", background, " background"))
+    
+    
+    ggsave (paste0(directory, "/Pathway_analysis_gost/Combined_dotplot_", resolution, "_", background, ".png"), 
+                    width = 8, height = 7, bg = "white")
+}
+    
+plot_gost(gostres_out, 0.4, "custom")
 
-# make term_name a factor
-pathways <- as.data.frame(sort(table(res$term_name)))
-colnames(pathways) <- c("term_name", "pathway_freq")
-res <- res %>% 
-    left_join(pathways) %>%
-    group_by(pathway_freq) %>%
-    arrange(query)
-res$term_name <- factor(res$term_name, levels = rev(unique(res$term_name)))    
-
-
-ggplot(res, aes(x = query, y = term_name, size = query_size, colour = p_value)) +
-            geom_point()+
-            #scale_colour_viridis()+
-            theme_bw()+
-            theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))+
-            theme(axis.title.x = element_blank())+
-            theme(axis.title.y = element_blank())+
-            labs(colour = "-log10(p.adj)")+
-            scale_y_discrete(position = "right")
-
-
-ggsave (paste0(directory, "/Pathway_analysis_gost/Combined_dotplot_custom_bg.png"), 
-                width = 8, height = 7)
-        
 ```
 
+
+
+Make a combined function 
+```{r}
+run_gost_findmarkers <- function (resolution, background){
+    gostres_out <- run_gost(resolution, background)
+    plot_gost(gostres_out, resolution, background)
+}
+
+
+run_gost_findmarkers(0.25, "custom")
+run_gost_findmarkers(0.25, "universe")
+run_gost_findmarkers(0.4, "custom")
+run_gost_findmarkers(0.4, "universe")
+```
+### Comparison of gene sets
+
+What is the difference in gene sets between using findallmarkers and pseudobulk?
+
+Resolution 0.25
+```{r}
+so.test <- set_resolution(so.fibroblasts, 0.25)
+genes_counts <- run_pseudobulk(so.test)
+# top 200 genes per cluster from pseudobulk
+genes_counts[[1]]
+# top 200 genes per cluster from findallmarkers
+top_markers <- get_markers(0.25)
+top_markers <- split(top_markers, top_markers$cluster)
+
+for (i in seq(1: length(top_markers))){
+    print(paste0("Cluster ", i))
+    print(length(intersect(rownames(genes_counts[[1]][[i]]), top_markers[[i]]$gene)))
+}
+
+```
+
+Resolution 0.4
+```{r}
+so.test <- set_resolution(so.fibroblasts, 0.4)
+# top 200 genes per cluster from pseudobulk
+genes_counts <- run_pseudobulk(so.test)
+# top 200 genes per cluster from findallmarkers
+top_markers <- get_markers(0.4)
+top_markers <- split(top_markers, top_markers$cluster)
+
+for (i in seq(1: length(top_markers))){
+    print(paste0("Cluster ", i))
+    print(length(intersect(rownames(genes_counts[[1]][[i]]), top_markers[[i]]$gene)))
+}
+
+```
 ```{r}
 sessionInfo()
 ```

@@ -1,0 +1,726 @@
+---
+title: "Achilles final annotation"
+author: "Carla Cohen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+## Aim: To perform the final annotation for the Achilles datasets
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+
+```{r}
+library(tidyverse)
+library(Seurat)
+library(cowplot)
+library(yaml)
+library(viridis)
+library(svglite)
+
+# make a new output folder for each run, with the date & time in the directory name
+date <- Sys.Date() %>% str_replace_all("-", "")
+time <- format(Sys.time(), "%X") %>% str_replace_all(":", "-") %>%
+    str_sub(1, 5)
+directory <- paste0(date,"_", time, "_Final_annotation.dir")
+dir.create(directory, showWarnings = FALSE)
+dir.create(paste0(directory, "/UMAP/"))
+dir.create(paste0(directory, "/DotPlot/"))
+
+
+```
+
+Read in the Seurat object  
+Integrated with scVI
+Annotated at scVI res 0.2 and 0.3 but not 0.1!
+
+
+```{r}
+so <- readRDS("20240917_11-29_Annotation_update.dir/RDS_objects.dir/Achilles_integrated_annotated.rds")
+so
+
+```
+# Clean up metadata
+
+```{r}
+so$sum <- NULL # identical to nCount_RNA
+so$detected <- NULL # identical to nFeature_RNA
+so$seurat_clusters <- NULL # meaningless
+
+# remove all scDblfinder data as only singlets remain
+so$scDblFinder.class <- NULL
+so$scDblFinder.cluster <- NULL
+so$scDblFinder.cxds_score <- NULL
+so$scDblFinder.difficulty <- NULL
+so$scDblFinder.mostLikelyOrigin <- NULL
+so$scDblFinder.originAmbiguous <- NULL
+so$scDblFinder.score <- NULL
+so$scDblFinder.weighted <- NULL
+
+```
+
+Calculate soupX fraction per cell
+
+```{r}
+# subtract the soupX counts from the total counts
+subtraction <- so@assays$RNA@counts - so@assays$soupX@counts
+subtraction_colmeans <- colMeans(subtraction) ## average ambient reads per cell
+subtraction_rowmeans <- rowMeans(subtraction) ## average ambient reads per feature
+## fraction of ambient reads, for each feature, per sample
+subtraction_fraction <- sweep(subtraction, 2, colSums(so@assays$RNA@counts), '/')
+subtraction_fraction_colsums <- colSums(subtraction_fraction) ## cells
+
+# add soupX fraction to seurat object
+so <- AddMetaData(so, subtraction_fraction_colsums, col.name = "soupX_fraction")
+    #print(head(so[[]]))
+```
+
+
+# Resolution 0.1
+Mistakenly I saved the scVI annotation using the harmony label. 
+Re-add this annotation here.  
+```{r}
+Idents(so) <- so$leiden_X_scVI_snn_res.0.1
+```
+
+Also do some additional QC
+
+
+### How many cells are there per cluster?
+
+```{r}
+cell_numbers <- table(Idents(so)) %>% as.data.frame() 
+colnames(cell_numbers) <- c("cluster", "frequency")
+cell_numbers$cluster <- factor(cell_numbers$cluster, levels = sort(as.numeric(unique(cell_numbers$cluster))))
+cell_numbers <- cell_numbers %>% arrange(desc(frequency))
+cell_numbers
+
+ggplot(cell_numbers, aes(x = cluster, y = frequency))+
+    geom_bar(stat = "identity")+
+    theme_classic()
+#ggsave(paste0(directory, "/Cells_per_cluster_0.2.svg"), width = 7, height = 4)
+ggsave(paste0(directory, "/Cells_per_cluster_0.2.png"), width = 7, height = 4)
+```
+
+
+#### Plot decontX by cluster on Vln plot
+
+```{r, fig.width=10, fig.height=4}
+VlnPlot(so, features = "decontX_contamination", assay = "soupX", pt.size = 0.1)+
+    #scale_y_log10() +
+    scale_fill_viridis_d()+
+    theme(legend.position="none")+
+    theme_cowplot()+
+    ggtitle("decontX contamination")
+
+
+```
+No one cluster has a particularly high decontX score.  
+
+
+#### Plot soupX fraction per cluster
+
+```{r, fig.width=10, fig.height=4}
+VlnPlot(so, features = "soupX_fraction", assay = "soupX", pt.size = 0.1)+
+    #scale_y_log10() +
+    scale_fill_viridis_d()+
+    theme(legend.position="none")+
+    theme_cowplot()+
+    ggtitle("SoupX fraction")
+```
+
+
+#### Where are the ribosomal genes?
+
+```{r}
+#identify ribosomal genes starting RP
+ribo <- grep(pattern = "^RP[SL][[:digit:]]|^RP[[:digit:]]|^RPSA",
+                  rownames(so),
+                  value=TRUE,) #get list of non-ribosomal genes 
+so[["percent.ribo"]] <- PercentageFeatureSet(object = so, pattern = "^RP[SL][[:digit:]]|^RP[[:digit:]]|^RPSA")
+
+VlnPlot(so, features = "percent.ribo", assay = "soupX")+
+    #scale_y_log10() +
+    scale_fill_viridis_d()+
+    theme(legend.position="none")+
+    theme_cowplot()+
+    ggtitle("% ribosomal genes")
+```
+Cluster 14 has high ribosomal content compared to the other clusters. 
+
+#### Is this cluster from one individual?
+
+```{r}
+DimPlot(subset(so, idents = 14), reduction = "umap.scvi", group.by = "orig.ident")
+```
+Yes this cluster is from one individual only. 
+
+### Remove cluster 14 from the object
+
+```{r}
+so_0.1 <- subset(so, idents = 14, invert = TRUE)
+so_0.1
+Idents(so_0.1) %>% unique()
+```
+
+
+
+```{r, fig.width=10, fig.height=10}
+
+
+so_0.1 <- RenameIdents(so_0.1, 
+                           `1` = "Fibroblasts", 
+                           `2` = "Skeletal muscle cells", 
+                           `3` = "Vascular endothelial cells",
+                           `4` = "Macrophages", 
+                           `5` = "Adipocytes",
+                           `6` = "Mural cells", 
+                           `7` = "T cells", 
+                           `8` = "Lymphatic endothelial cells", 
+                           `9` = "Satellite cells", 
+                           `10` = "Granulocytes",
+                           `11` = "B cells", 
+                           `12` = "Nervous system cells",
+                           `13` = "B plasma cells"
+                           )
+
+# add these Idents as a column in the metadata as well
+so_0.1$cell_annotation_scVI_0.1 <- Idents(so_0.1)
+
+
+DimPlot(so_0.1, label = TRUE, repel = TRUE, shuffle = TRUE, reduction = "umap.scvi")
+ggsave(paste0(directory, "/UMAP/UMAP_0.1.png"), width = 12, height = 10)
+```
+
+
+# Resolution 0.2
+
+```{r, fig.width=10, fig.height=10}
+Idents(so) <- so$cell_annotation_scVI_0.2
+DimPlot(so, label = TRUE, repel = TRUE, shuffle = TRUE, reduction = "umap.scvi")
+```
+
+### How many cells are there per cluster?
+
+```{r}
+Idents(so) <- so$leiden_X_scVI_snn_res.0.2
+cell_numbers <- table(Idents(so)) %>% as.data.frame() 
+colnames(cell_numbers) <- c("cluster", "frequency")
+cell_numbers$cluster <- factor(cell_numbers$cluster, levels = sort(as.numeric(unique(cell_numbers$cluster))))
+cell_numbers <- cell_numbers %>% arrange(desc(frequency))
+cell_numbers
+
+ggplot(cell_numbers, aes(x = cluster, y = frequency))+
+    geom_bar(stat = "identity")+
+    theme_classic()
+#ggsave(paste0(directory, "/Cells_per_cluster_0.2.svg"), width = 7, height = 4)
+ggsave(paste0(directory, "/Cells_per_cluster_0.2.png"), width = 7, height = 4)
+```
+#### Plot decontX by cluster on Vln plot
+
+```{r, fig.width=10, fig.height=4}
+
+
+VlnPlot(so, features = "decontX_contamination", assay = "soupX", pt.size = 0.1)+
+    #scale_y_log10() +
+    scale_fill_viridis_d()+
+    theme(legend.position="none")+
+    theme_cowplot()+
+    ggtitle("decontX contamination")
+
+
+```
+#### Plot soupX fraction per cluster
+
+```{r, fig.width=10, fig.height=4}
+VlnPlot(so, features = "soupX_fraction", assay = "soupX", pt.size = 0.1)+
+    #scale_y_log10() +
+    scale_fill_viridis_d()+
+    theme(legend.position="none")+
+    theme_cowplot()+
+    ggtitle("SoupX fraction")
+```
+#### Where are the ribosomal genes?
+
+```{r}
+#identify ribosomal genes starting RP
+VlnPlot(so, features = "percent.ribo", assay = "soupX")+
+    #scale_y_log10() +
+    scale_fill_viridis_d()+
+    theme(legend.position="none")+
+    theme_cowplot()+
+    ggtitle("% ribosomal genes")
+```
+#### Is this cluster from one individual?
+
+```{r}
+DimPlot(subset(so, idents = 16), reduction = "umap.scvi", group.by = "orig.ident")
+```
+
+Cluster 16 is from one individual
+
+### Remove cluster 16 from the object
+
+```{r}
+so_0.2 <- subset(so, idents = 16, invert = TRUE)
+so_0.2
+Idents(so_0.2) %>% unique()
+```
+```{r, fig.width=10, fig.height=8}
+so_0.2 <- RenameIdents(so_0.2, 
+                           `1` = "Slow-twitch skeletal muscle cells", 
+                           `2` = "NEGR1+ Fibroblasts", 
+                           `3` = "ITGA10+ Fibroblasts",
+                           `4` = "Vascular endothelial cells", 
+                           `5` = "Macrophages", 
+                           `6` = "Fast-twitch skeletal muscle cells", 
+                           `7` = "Adipocytes", 
+                           `8` = "Mural cells", 
+                           `9` = "T cells",
+                           `10` = "Lymphatic endothelial cells", 
+                           `11` = "Satellite cells",
+                           `12` = "Granulocytes",
+                           `13` = "B cells",
+                           `14` = "Nervous system cells",
+                           `15` = "B plasma cells")
+
+# add these Idents as a column in the metadata as well
+so_0.2$cell_annotation_scVI_0.2 <- Idents(so_0.2)
+
+
+DimPlot(so_0.2, label = TRUE, repel = TRUE, shuffle = TRUE,reduction = "umap.scvi")
+ggsave(paste0(directory, "/UMAP/UMAP_0.2.png"), width = 12, height = 10)
+```
+
+Are the cell identities the same in the two resolutions?
+```{r}
+identical(colnames(so_0.1), colnames(so_0.2))
+```
+
+Let's make one object with both the annotations in. 
+
+```{r}
+
+so_0.1$cell_annotation_scVI_0.2 <- so_0.2$cell_annotation_scVI_0.2
+so <- so_0.1
+dir.create(paste0(directory, "/RDS_objects.dir"))
+saveRDS(so, paste0(directory, "/RDS_objects.dir/Achilles_integrated_annotated.rds"))
+```
+
+### Update the colours
+
+```{r}
+
+achilles.colours_0.1 <- c("#499999",  # Macrophages
+                      "#F28E2B",  # VEC
+                      "#4E79A7",  # Skeletal muscle
+                      "#F3C300",  # Adipocytes
+                      "#E68FAC",  # T cells
+                      "#8DB600",  # Nerve
+                      "#888888",  # LEC
+                      "#A1CAF1",  # Mural
+                      "#BE0032",  # Fibroblasts
+                      "#117733",  # Granulocytes
+                      "#332288",  # Satellite cells
+                      "#a0785a",  # B plasma cells
+                      "#661100"  # B cells
+                    )  
+
+names(achilles.colours_0.1) <- c("Macrophages", "Vascular endothelial cells",  "Skeletal muscle cells",  "Adipocytes", "T cells", "Nervous system cells", "Lymphatic endothelial cells", "Mural cells", "Fibroblasts", "Granulocytes", "Satellite cells", "B plasma cells",  "B cells")
+```
+
+Achilles UMAP resolution 0.1
+
+```{r, fig.width=10, fig.height=10}
+Idents(so) <- so$cell_annotation_scVI_0.1
+
+DimPlot(so, reduction = "harmony.umap", cols = achilles.colours_0.1, label = TRUE, shuffle = TRUE, repel = TRUE)+
+    theme(legend.position="none")+
+    xlab("UMAP_1")+
+    ylab("UMAP_2")
+ggsave(paste0(directory, "/UMAP/Achilles_UMAP_0.1.svg"), width = 12, height = 10)
+ggsave(paste0(directory, "/UMAP/Achilles_UMAP_0.1.png"), width = 12, height = 10)
+
+```
+
+
+```{r}
+
+achilles.colours_0.2 <- c("#499999",  # Macrophages
+                      "#F28E2B",  # VEC
+                      "#A55194",  # Fast-twitch skeletal muscle cells
+                      "#4E79A7",  # Slow-twitch skeletal muscle cells
+                      "#F3C300",  # Adipocytes
+                      "#E68FAC",  # T cells
+                      "#8DB600",  # Nerve
+                      "#888888",  # LEC
+                      "#A1CAF1",  # Mural
+                      "#E25822",  # NEGR1+ Fibroblasts
+                      "#BE0032",  # ITGA10+ Fibroblasts
+                      "#117733",  # Granulocytes
+                      "#332288",  # Satellite cells
+                      "#a0785a",  # B plasma cells
+                      "#661100"  # B cells
+                     )  
+
+
+names(achilles.colours_0.2) <- c("Macrophages", "Vascular endothelial cells",  "Fast-twitch skeletal muscle cells",  "Slow-twitch skeletal muscle cells", "Adipocytes", "T cells", "Nervous system cells", "Lymphatic endothelial cells", "Mural cells", "NEGR1+ Fibroblasts", "ITGA10+ Fibroblasts", "Granulocytes", "Satellite cells", "B plasma cells",  "B cells")
+```
+
+Achilles UMAP resolution 0.2
+
+```{r, fig.width=10, fig.height=10}
+Idents(so) <- so$cell_annotation_scVI_0.2
+unique(Idents(so))
+DimPlot(so, reduction = "harmony.umap", cols = achilles.colours_0.2, label = TRUE, shuffle = TRUE, repel = TRUE)+
+    theme(legend.position="none")+
+    xlab("UMAP_1")+
+    ylab("UMAP_2")
+ggsave(paste0(directory, "/UMAP/Achilles_UMAP_0.2.svg"), width = 12, height = 10)
+ggsave(paste0(directory, "/UMAP/Achilles_UMAP_0.2.png"), width = 12, height = 10)
+
+```
+
+
+
+## Markers
+
+Markers were calculated previously: 
+
+```{r}
+markers_0.1 <- read.table("20240916_17-29_Annotation.dir/Marker_lists/Markers_0.1.txt", sep = "\t", header = TRUE)
+markers_0.2 <- read.table("20240916_17-29_Annotation.dir/Marker_lists/Markers_0.2.txt", sep = "\t", header = TRUE)
+
+```
+
+
+Calculate the top 10 markers for each cluster by log2FC
+
+```{r}
+
+top10markers_0.1 <- markers_0.1 %>% 
+    group_by(cluster) %>% 
+    slice_max(n=10, order_by = abs(avg_log2FC))
+top10markers_0.2 <- markers_0.2 %>% 
+    group_by(cluster) %>% 
+    slice_max(n=10, order_by = abs(avg_log2FC))
+
+```
+
+
+### Heat map resolution 0.1
+
+```{r, fig.height=16, fig.width=12}
+Idents(so) <- so$cell_annotation_scVI_0.1
+DoHeatmap(subset(so, downsample = 500), # randomly select cells from each cluster, otherwise it's too big to plot
+               features = unique(top10markers_0.1$gene),
+               assay = "soupX") + 
+        scale_fill_viridis() + 
+        ggtitle("Heatmap of top 10 markers res 0.1")
+
+ggsave(paste0(directory, "/Heatmap_cell_labels_0.1.svg"), width = 12, height = 16)
+ggsave(paste0(directory, "/Heatmap_cell_labels._0.1.png"), width = 12, height = 16)
+```
+
+```{r, fig.height=16, fig.width=12}
+Idents(so) <- so$cell_annotation_scVI_0.2
+DoHeatmap(subset(so, downsample = 500), # randomly select cells from each cluster, otherwise it's too big to plot
+               features = unique(top10markers_0.2$gene),
+               assay = "soupX") + 
+        scale_fill_viridis() + 
+        ggtitle("Heatmap of top 10 markers res 0.2")
+
+ggsave(paste0(directory, "/Heatmap_cell_labels_0.2.svg"), width = 12, height = 16)
+ggsave(paste0(directory, "/Heatmap_cell_labels._0.2.png"), width = 12, height = 16)
+```
+
+### Annotation dotplot
+
+Resolution 0.1
+```{r,fig.height=8, fig.width=16, message = FALSE}
+Idents(so) <- so$cell_annotation_scVI_0.1
+annotation_markers <- c("COL1A1", "COL1A2", "COL3A1", "DCN", #fibroblasts
+              "HMCN1", "NEGR1", "DCLK1", "KAZN", "BICC1", "PRICKLE1", # fibroblasts
+              "CLU", "COMP", "MMP3", "NOVA1", "CILP", "FBLN1", "PRG4", # fibroblasts
+              "F13A1", "CD163", "MRC1", "MSR1", # macrophages
+              "PECAM1", "PTPRB", "FLT1", "VWF", # VEC
+              "NOTCH3", "PDGFRB", "MYO1B", # mural 
+              "TRDN", "TTN", "NEB", "TNNT1", "LGR5", "ATP2A2", # muscle
+              "PLIN1", "AQP7", "ADIPOQ", # adipocytes
+              "CD247", "SKAP1", "THEMIS", # t cells
+              "TNNT3", "MYH1", "MYH3", # fast-twitch
+              "POSTN", "CSMD2", "ADAM12", "FN1", "CEMIP", 
+              "HLA-DRA", "CD86", "CD74", # macrophages
+              "ASPM", "DIAPH3", "TOP2A",
+              "MMRN1", "PROX1", "PKHD1L1", # LEC
+              "FCN1", "LYZ", "AOAH",
+              "BCL11A", "CUX2", "CLEC4C",
+              "TENM2", "PTCH2", "APOD", "CNTN4", "ABCA10", # nerve
+               "KIT", "CPA3", "IL18R1", # granulocytes
+              "AK5", "ACP5", "MMP9") # cycling
+
+DotPlot(so, features = annotation_markers,
+             assay = "soupX") + 
+    # scale_colour_viridis(direction = -1) + 
+    scale_colour_gradient2(low = "#f7f3f2", mid = "#f2390a", high = "#6e1e0a", midpoint = 1)+
+    ggtitle("Annotation markers")+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+```
+Muscle types dotplot
+
+```{r,fig.height=5, fig.width=9, message = FALSE}
+muscle_markers <- c(
+              "TRDN", "TTN", "NEB",# muscle
+              "TNNT1", "LGR5", "ATP2A2",  # slow-twitch
+              "TNNT3", "MYH1", "MYH3", # fast-twitch
+              "PAX7", "CALCR", "CDH4", "CLCN5" # satellite cells
+              ) 
+
+
+DotPlot(so, features = muscle_markers, 
+        idents = c("Skeletal muscle cells", "Satellite cells"),
+             assay = "soupX") + 
+    # scale_colour_viridis(direction = -1) + 
+    scale_colour_gradient2(low = "#f7f3f2", mid = "#f2390a", high = "#6e1e0a", midpoint = 0)+
+    ggtitle("Muscle markers")+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+```
+
+B cell and plasma cell markers
+```{r,fig.height=5, fig.width=9, message = FALSE}
+B_cell_markers <- c("BLNK", "IL4R", "MS4A1", "CD19", "CD40", "CD69", "CD83", #  B cells  cannonical
+              "CD28", "CD79A", "SDC1",  "CD27", "XBP1", "IRF4", "PRDM1", "JCHAIN",# B plasma cells cannonical
+                "PRKCB", "CLNK" # highly expressed with B cell function
+              
+              ) 
+
+top10markers_0.1 %>% filter(cluster == 13) %>% pull(gene)
+
+
+DotPlot(so, features = B_cell_markers, 
+        idents = c("B cells", "B plasma cells"),
+             assay = "soupX") + 
+    # scale_colour_viridis(direction = -1) + 
+    scale_colour_gradient2(low = "#f7f3f2", mid = "#f2390a", high = "#6e1e0a", midpoint = 0)+
+    ggtitle("B cell markers")+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+```
+B cells: IL4R, PRKCB, CLNK
+Plasma cells: BLNK, PRDM1, JCHAIN
+
+
+Fibroblasts
+
+```{r}
+markers_0.1 %>% filter (cluster ==1) %>% pull(gene) %>% head(10)
+fibroblast_markers_0.1 <- c("COL1A1", "COL1A2", "COL3A1", "DCN",  # canonical
+                            "NEGR1", "PDZRN4", "COMP", "LAMA2")
+                            
+DotPlot(so, features = fibroblast_markers_0.1, 
+        idents = c("Fibroblasts"),
+             assay = "soupX") + 
+    # scale_colour_viridis(direction = -1) + 
+    scale_colour_gradient2(low = "#f7f3f2", mid = "#f2390a", high = "#6e1e0a", midpoint = 0)+
+    ggtitle("Fibroblast markers")+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+COL1A2, DCN, NEGR1, LAMA2
+
+## Final annotation dotplot 0.1
+
+Change the order of the idents to be by grouped cell types
+```{r}
+Idents(so) <- factor(so$cell_annotation_scVI_0.1, 
+                     levels =  c("Fibroblasts", 
+                                 "Skeletal muscle cells",
+                                 "Satellite cells", 
+                                 "Mural cells", 
+                                 "Lymphatic endothelial cells", 
+                                 "Vascular endothelial cells", 
+                                 "Adipocytes", 
+                                 "Macrophages", 
+                                 "T cells", 
+                                 "Granulocytes", 
+                                 "B cells",
+                                 "B plasma cells",
+                                 "Nervous system cells"
+                     )
+)
+```
+
+
+```{r,fig.height=8, fig.width=16, message = FALSE}
+final_annotation_markers_0.1 <- c("COL1A2", "DCN", "NEGR1", "LAMA2", #fibroblasts -
+                              "TRDN", "TTN", "NEB",# muscle -
+            #                  "TNNT1", "LGR5", "ATP2A2",  # slow-twitch-
+            #  "TNNT3", "MYH1", "MYH3", # fast-twitch-
+            #  "COL22A1", "SPAG16", "SORBS2", # transitional muscle-
+              "PAX7", "CALCR", "CDH4", "CLCN5", # satellite cells
+              "NOTCH3", "PDGFRB", "MYO1B", # mural -
+              "MMRN1", "PROX1", "PKHD1L1", # LEC
+              "PECAM1", "PTPRB", "FLT1", "VWF", # VEC-
+              "PLIN1", "AQP7", "ADIPOQ", # adipocytes-
+              "F13A1", "CD163", "MRC1", # macrophages -
+              "CD247", "IL7R", "THEMIS", # T cells -
+              "KIT", "CPA3", "IL18R1", "CDK15",# granulocytes
+              "IL4R", "PRKCB", "CLNK", #  B cells -
+              "BLNK", "PRDM1", "JCHAIN", # B plasma cells
+              "NRXN1", "XKR4", "CDH19", "PPP2R2B" # nerve
+
+               ) 
+
+
+DotPlot(so, features = final_annotation_markers_0.1, 
+             assay = "soupX") + 
+    # scale_colour_viridis(direction = -1) + 
+    scale_colour_gradient2(low = "#f7f3f2", mid = "#f2390a", high = "#6e1e0a", midpoint = 1)+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, size = 16))+
+    theme(axis.text.y = element_text(size = 16))+
+    theme(axis.title.x = element_blank())+
+    theme(axis.title.y = element_blank())
+
+ggsave(paste0(directory, "/DotPlot/Annotation_markers_0.1.png"), width = 16, height = 8)
+ggsave(paste0(directory, "/DotPlot/Annotation_markers_0.1.svg"), width = 16, height = 8)
+
+```
+
+
+### Resolution 0.2
+
+```{r,fig.height=8, fig.width=16, message = FALSE}
+Idents(so) <- so$cell_annotation_scVI_0.2
+annotation_markers <- c("COL1A1", "COL1A2", "COL3A1", "DCN", #fibroblasts
+              "HMCN1", "NEGR1", "DCLK1", "KAZN", "BICC1", "PRICKLE1", # fibroblasts
+              "CLU", "COMP", "MMP3", "NOVA1", "CILP", "FBLN1", "PRG4", # fibroblasts
+              "F13A1", "CD163", "MRC1", "MSR1", # macrophages
+              "PECAM1", "PTPRB", "FLT1", "VWF", # VEC
+              "NOTCH3", "PDGFRB", "MYO1B", # mural 
+              "TRDN", "TTN", "NEB", "TNNT1", "LGR5", "ATP2A2", # muscle
+              "PLIN1", "AQP7", "ADIPOQ", # adipocytes
+              "CD247", "SKAP1", "THEMIS", # t cells
+              "TNNT3", "MYH1", "MYH3", # fast-twitch
+              "POSTN", "CSMD2", "ADAM12", "FN1", "CEMIP", 
+              "HLA-DRA", "CD86", "CD74", # macrophages
+              "ASPM", "DIAPH3", "TOP2A",
+              "MMRN1", "PROX1", "PKHD1L1", # LEC
+              "FCN1", "LYZ", "AOAH",
+              "BCL11A", "CUX2", "CLEC4C",
+              "TENM2", "PTCH2", "APOD", "CNTN4", "ABCA10", # nerve
+               "KIT", "CPA3", "IL18R1", # granulocytes
+              "AK5", "ACP5", "MMP9") # cycling
+
+DotPlot(so, features = annotation_markers,
+             assay = "soupX") + 
+    # scale_colour_viridis(direction = -1) + 
+    scale_colour_gradient2(low = "#f7f3f2", mid = "#f2390a", high = "#6e1e0a", midpoint = 1)+
+    ggtitle("Annotation markers")+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+```
+Muscle types dotplot
+
+```{r,fig.height=5, fig.width=9, message = FALSE}
+muscle_markers <- c(
+              "TRDN", "TTN", "NEB",# muscle
+              "TNNT1", "LGR5", "ATP2A2",  # slow-twitch
+              "TNNT3", "MYH1", "MYH3", # fast-twitch
+              "PAX7", "CALCR", "CDH4", "CLCN5" # satellite cells
+              ) 
+
+
+DotPlot(so, features = muscle_markers, 
+        idents = c("Fast-twitch skeletal muscle cells", "Slow-twitch skeletal muscle cells", "Satellite cells"),
+             assay = "soupX") + 
+    scale_colour_gradient2(low = "#f7f3f2", mid = "#f2390a", high = "#6e1e0a", midpoint = 0)+
+    ggtitle("Muscle markers")+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+```
+Fibroblasts
+
+```{r, fig.width=8, fig.height=4}
+markers_0.2 %>% filter (cluster ==3) %>% pull(gene) %>% head(10)
+fibroblast_markers_0.2 <- c("COL1A1", "COL1A2", "COL3A1", "DCN", "PDGFRA", "FN1", "VIM", "THY1", # canonical
+                            "NEGR1", "PDZRN4", "COMP", "LAMA2", # cannonical
+                            "KAZN", "DCLK1", "NOVA1", "VIT", "FBN1", "ABCA8", #NEGR1+
+                            "MMP3", "GALNT13", "HPSE2", "KLHL29", "GALNT15", "ITGA10")
+                            
+DotPlot(so, features = fibroblast_markers_0.2, 
+        idents = c("NEGR1+ Fibroblasts", "ITGA10+ Fibroblasts"),
+             assay = "soupX") + 
+    scale_colour_gradient2(low = "#f7f3f2", mid = "#f2390a", high = "#6e1e0a", midpoint = 0)+
+    ggtitle("Fibroblast markers")+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+```
+
+ITGA10+: ITGA10, COL1A2, DCN, COMP, KLHL29
+NEGR1+: NEGR1, LAMA2, KAZN, DCLK1, FBN1
+
+## Final annotation dotplot 0.2
+
+Change the order of the idents to be by grouped cell types
+```{r}
+Idents(so) <- factor(so$cell_annotation_scVI_0.2, 
+                     levels =  c("NEGR1+ Fibroblasts", 
+                                 "ITGA10+ Fibroblasts",
+                                 "Fast-twitch skeletal muscle cells",
+                                 "Slow-twitch skeletal muscle cells",
+                                 "Satellite cells", 
+                                 "Mural cells", 
+                                 "Lymphatic endothelial cells", 
+                                 "Vascular endothelial cells", 
+                                 "Adipocytes", 
+                                 "Macrophages", 
+                                 "T cells", 
+                                 "Granulocytes", 
+                                 "B cells",
+                                 "B plasma cells",
+                                 "Nervous system cells"
+                     )
+)
+```
+
+
+```{r,fig.height=8, fig.width=16, message = FALSE}
+final_annotation_markers_0.2 <- c("LAMA2", "COL1A2", "DCN", # fibroblasts
+                                  "NEGR1", "KAZN", "DCLK1", "FBN1", # NEGR1+ fib
+                                  "ITGA10", "COMP", "KLHL29", # ITGA10+ fib
+                                  "TRDN", "TTN", "NEB",# muscle -
+                                  "TNNT1", "LGR5", "ATP2A2",  # slow-twitch-
+                                  "TNNT3", "MYH1", "MYH3", # fast-twitch-
+                                  "PAX7", "CALCR", "CDH4", "CLCN5", # satellite cells
+                                "NOTCH3", "PDGFRB", "MYO1B", # mural -
+              "MMRN1", "PROX1", "PKHD1L1", # LEC
+              "PECAM1", "PTPRB", "FLT1", "VWF", # VEC-
+              "PLIN1", "AQP7", "ADIPOQ", # adipocytes-
+              "F13A1", "CD163", "MRC1", # macrophages -
+              "CD247", "IL7R", "THEMIS", # T cells -
+              "KIT", "CPA3", "IL18R1", "CDK15",# granulocytes
+              "IL4R", "PRKCB", "CLNK", #  B cells -
+              "BLNK", "PRDM1", "JCHAIN", # B plasma cells
+              "NRXN1", "XKR4", "CDH19", "PPP2R2B" # nerve
+               ) 
+
+
+DotPlot(so, features = final_annotation_markers_0.2, 
+             assay = "soupX") +
+    scale_colour_gradient2(low = "#f7f3f2", mid = "#f2390a", high = "#6e1e0a", midpoint = 1)+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, size = 16))+
+    theme(axis.text.y = element_text(size = 16))+
+    theme(axis.title.x = element_blank())+
+    theme(axis.title.y = element_blank())
+
+ggsave(paste0(directory, "/DotPlot/Annotation_markers_0.2.png"), width = 16, height = 8)
+ggsave(paste0(directory, "/DotPlot/Annotation_markers_0.2.svg"), width = 16, height = 8)
+
+```
+
+```{r}
+sessionInfo()
+```
+
