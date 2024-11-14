@@ -42,7 +42,7 @@ dir.create(directory, showWarnings = FALSE)
 Read in the Achilles subset fibroblast object. 
 
 ```{r}
-so.fibroblasts <- readRDS("20241008_14-55_Subset_fibroblasts.dir/RDS_objects.dir/Achilles_fibroblast_subset.rds")
+so.fibroblasts <- readRDS("20241111_11-16_Fine_annotation_fibroblasts_0.3.dir/RDS_objects.dir/Achilles_fibroblast_subset.rds")
 ```
 
 
@@ -52,13 +52,13 @@ Select a resolution and set seurat clusters to that resolution
 
 ```{r} 
 set_resolution <- function(so, resolution){
-    so[["seurat_clusters"]] <- so[[paste0("leiden_X_scVI_snn_res.", resolution)]]
+    so[["seurat_clusters"]] <- so[[paste0("louvain_X_scVI_snn_res.", resolution)]]
     Idents(so) <- so$seurat_clusters
     print(resolution)
     print(levels(Idents(so)))
     return(so)
 }
-# so.test <- set_resolution(so.fibroblasts, 0.25)
+so.test <- set_resolution(so.fibroblasts, 0.3)
 
 ```
 
@@ -145,7 +145,8 @@ run_enricher <- function (gene_list, resolution){
     dir.create(paste0(directory, "/Pseudobulk_", resolution))
     results <- list()
     
-    for(i in 1:length(gene_list[[1]])){
+    # for(i in 1:length(gene_list[[1]])){
+    for (i in names(genes_counts[[1]])){
         current_cluster <- names(gene_list[[1]][i])
         results[[i]] <- enricher(rownames(gene_list[[1]][[i]]), TERM2GENE = GOBP_reference, universe = expressed_genes_all)
         saveRDS(results[[i]], 
@@ -162,7 +163,7 @@ run_enricher <- function (gene_list, resolution){
     }
 }
 
-# enricher.results <- run_enricher(genes_counts, 0.25)
+# enricher.results <- run_enricher(genes_counts, 0.3)
 ```
 
 
@@ -174,26 +175,33 @@ Use analysis = "Pseudobulk",
 ```{r, fig.width=8, fig.height=7}
 visualise_enricher <- function (results, resolution, so, analysis){
     # plot each fibroblast subset
-    for (i in 1:length(results)){
+    for (i in names(results)){
+        print(i)
         n_results <- results[[i]]@result %>% filter (p.adjust <0.05) %>% nrow()
+        #print(n_results)
         if (n_results > 0){
             dotplot(results[[i]])
             ggsave(paste0(directory, "/", analysis, "_", resolution, "/Cluster_", i, ".png"))
     }
         }
-            
+
     # Alternative grouped dotplot
     # group the results together
     res <- list()
-    for (i in 1:length(results)){
-            res[[i]] <- results[[i]]@result
-            res[[i]]$cluster <- i
+    for (i in names(results)){
+            #print(i)
+            j <- as.numeric(i)+1
+            #print(j)
+            res[[j]] <- results[[i]]@result
+            res[[j]]$cluster <- i
             
-            res[[i]] <- res[[i]] %>% 
+            res[[j]] <- res[[j]] %>% 
                 filter(p.adjust < 0.05) %>% 
                 arrange(desc(p.adjust))
         }
     res <- bind_rows(res)
+    print(head(res))
+    print(dim(res))
     
     # make cluster a factor
     res$cluster <- factor(res$cluster, levels = levels(Idents(so)))
@@ -223,14 +231,17 @@ visualise_enricher <- function (results, resolution, so, analysis){
                 theme(axis.title.x = element_blank())+
                 theme(axis.title.y = element_blank())+
                 labs(colour = "-log10(p.adj)")+
-                scale_y_discrete(position = "right")
+                scale_y_discrete(position = "right")+
+        ggtitle(paste0(analysis, " ,Resolution ", resolution))
     # save        
     ggsave (paste0(directory, "/", analysis, "_", resolution, "/Combined_dotplot.png"), 
                     width = 8, height = 7)
       
 }
       
-# visualise_enricher(enricher.results.2, 0.4, so.test, "Findmarkers_enricher")
+#visualise_enricher(enricher.results, 0.3, so.test, "Pseudobulk")
+#visualise_enricher(enricher.results.2, 0.3, so.test, "Findmarkers_enricher")
+
 ```
 
 
@@ -243,8 +254,8 @@ run_pseudobulk_enricher <- function (so, resolution){
     visualise_enricher(enricher.results, resolution, so.test, "Pseudobulk")
 }
 
-run_pseudobulk_enricher(so.fibroblasts, 0.25)
-run_pseudobulk_enricher(so.fibroblasts, 0.4)
+run_pseudobulk_enricher(so.fibroblasts, 0.3)
+# run_pseudobulk_enricher(so.fibroblasts, 0.4)
 
 ```
 
@@ -253,19 +264,21 @@ run_pseudobulk_enricher(so.fibroblasts, 0.4)
 
 Read in the markers calculated by the script "Fibroblasts_subset_recluster.Rmd" from 20241008_14-55_Subset_fibroblasts.dir
 
+TO DO: David suggests using a significance threshold and/or fewer markers to see how that affects the pathways. 
+
 ```{r, message = FALSE}
 
 get_markers <- function(resolution){
-    markers <- read.table(paste0("20241008_14-55_Subset_fibroblasts.dir/Marker_lists/Markers_leiden_X_scVI_snn_res.", resolution, ".txt"), 
+    markers <- read.table(paste0("20241108_10-07_Subset_fibroblasts.dir/Marker_lists/Markers_louvain_X_scVI_snn_res.", resolution, ".txt"), 
                 sep = "\t")
-    top100_markers <- markers %>% group_by(cluster) %>% 
+    top200_markers <- markers %>% group_by(cluster) %>% 
         filter(abs(avg_log2FC)>0.2) %>% 
         arrange(desc(abs(avg_log2FC))) %>% 
         slice_head(n = 200)
-    return(top100_markers)
+    return(top200_markers)
 
 }
-# top_markers <- get_markers(0.4)
+top_markers <- get_markers(0.3)
 
 ```
 
@@ -277,23 +290,26 @@ run_enricher_2 <- function(markers, resolution){
     dir.create(paste0(directory, "/Findmarkers_enricher_", resolution))
     results <- list()
         
-    for(i in 1:length(unique(markers$cluster))){
-        #print(i)
+    for(i in unique(markers$cluster)){
+        print(i)
+        j <- i + 1
+        #print(j)
         genes <- markers %>% filter(cluster == i) %>% pull(gene)
         #print(head(genes))
         
-        results[[i]] <- enricher(genes, TERM2GENE = GOBP_reference, universe = expressed_genes_all)
-        saveRDS(results[[i]], 
-                paste0(directory, "/Findmarkers_enricher_", resolution, "/Cluster_", i, ".RDS"))    
+        results[[j]] <- enricher(genes, TERM2GENE = GOBP_reference, universe = expressed_genes_all)
+        #print("Enricher ran")
+        saveRDS(results[[j]], paste0(directory, "/Findmarkers_enricher_", resolution, "/Cluster_", i, ".RDS"))    
             
     }
         
-    # names(results) <- names(counts_list)
+    names(results) <- unique(markers$cluster)
     return(results)
+    
 }
-# so.test <- set_resolution(so.fibroblasts, 0.4)
-# enricher.results.2 <- run_enricher_2(top_markers, 0.4)
-# visualise_enricher(enricher.results.2, 0.4, so.test, "Findmarkers_enricher")
+ so.test <- set_resolution(so.fibroblasts, 0.3)
+ enricher.results.2 <- run_enricher_2(top_markers, 0.3)
+visualise_enricher(enricher.results.2, 0.3, so.test, "Findmarkers_enricher")
 ```
 
 Make a combined function
@@ -305,8 +321,8 @@ run_findmarkers_enricher <- function(so, resolution){
     enricher.results.2 <- run_enricher_2(top_markers, resolution)
     visualise_enricher(enricher.results.2, resolution, so.test, "Findmarkers_enricher")
 }
-run_findmarkers_enricher(so.fibroblasts, 0.25)
-run_findmarkers_enricher(so.fibroblasts, 0.4)
+run_findmarkers_enricher(so.fibroblasts, 0.3)
+
 ```
 
 
@@ -318,13 +334,14 @@ This is how Jolet did it in the quads paper.
 run_gost <- function (resolution, background){
     
     # get the markers    
-    markers <- read.table(paste0("20241008_14-55_Subset_fibroblasts.dir/Marker_lists/Markers_leiden_X_scVI_snn_res.", resolution, ".txt"), 
+    markers <- read.table(paste0("20241108_10-07_Subset_fibroblasts.dir/Marker_lists/Markers_louvain_X_scVI_snn_res.", resolution, ".txt"), 
                 sep = "\t")
     
     # create a list of genes for each cluster filtered by padj<0.05
     markers_list <- list()
-    for (i in levels(Idents(so.fibroblasts))){
-        markers_list[[i]] <- markers %>% 
+    for (i in unique(markers$cluster)){
+        j <- i+1
+        markers_list[[j]] <- markers %>% 
             group_by(cluster) %>% 
             arrange(desc(avg_log2FC)) %>% 
             filter (p_val_adj < 0.05) %>%
@@ -360,7 +377,7 @@ run_gost <- function (resolution, background){
     
 }
 
-gostres_out <- run_gost(0.4, "custom")
+gostres_out <- run_gost(0.3, "custom")
 
 ```
 
@@ -385,8 +402,11 @@ plot_gost <- function (results, resolution, background){
         group_by(query) %>% 
         slice_min(order_by = p_value, n = 10)
     
+    # add a column for cluster
+    res$cluster <- as.numeric(str_extract(res$query, "[:digit:]"))-1
+    
     # make cluster a factor
-    res$query <- factor(res$query, levels = sort(unique(res$query)))
+    res$cluster <- factor(res$cluster, levels = sort(unique(res$cluster)))
     
     # make term_name a factor
     pathways <- as.data.frame(sort(table(res$term_name)))
@@ -398,7 +418,7 @@ plot_gost <- function (results, resolution, background){
     res$term_name <- factor(res$term_name, levels = rev(unique(res$term_name)))    
     
     
-    ggplot(res, aes(x = query, y = term_name, size = query_size, colour = p_value)) +
+    ggplot(res, aes(x = cluster, y = term_name, size = query_size, colour = p_value)) +
                 geom_point()+
                 #scale_colour_viridis()+
                 theme_bw()+
@@ -407,14 +427,14 @@ plot_gost <- function (results, resolution, background){
                 theme(axis.title.y = element_blank())+
                 labs(colour = "-log10(p.adj)")+
                 scale_y_discrete(position = "right")+
-        ggtitle(paste0("Resolution ", resolution, ", ", background, " background"))
+        ggtitle(paste0("GOST, Resolution ", resolution, ", ", background, " background"))
     
     
     ggsave (paste0(directory, "/Pathway_analysis_gost/Combined_dotplot_", resolution, "_", background, ".png"), 
                     width = 8, height = 7, bg = "white")
 }
     
-plot_gost(gostres_out, 0.4, "custom")
+plot_gost(gostres_out, 0.3, "custom")
 
 ```
 
@@ -428,23 +448,22 @@ run_gost_findmarkers <- function (resolution, background){
 }
 
 
-run_gost_findmarkers(0.25, "custom")
-run_gost_findmarkers(0.25, "universe")
-run_gost_findmarkers(0.4, "custom")
-run_gost_findmarkers(0.4, "universe")
+run_gost_findmarkers(0.3, "custom")
+run_gost_findmarkers(0.3, "universe")
+
 ```
 ### Comparison of gene sets
 
 What is the difference in gene sets between using findallmarkers and pseudobulk?
 
-Resolution 0.25
+Resolution 0.3
 ```{r}
-so.test <- set_resolution(so.fibroblasts, 0.25)
+so.test <- set_resolution(so.fibroblasts, 0.3)
 genes_counts <- run_pseudobulk(so.test)
 # top 200 genes per cluster from pseudobulk
-genes_counts[[1]]
+# genes_counts[[1]]
 # top 200 genes per cluster from findallmarkers
-top_markers <- get_markers(0.25)
+top_markers <- get_markers(0.3)
 top_markers <- split(top_markers, top_markers$cluster)
 
 for (i in seq(1: length(top_markers))){
@@ -454,21 +473,6 @@ for (i in seq(1: length(top_markers))){
 
 ```
 
-Resolution 0.4
-```{r}
-so.test <- set_resolution(so.fibroblasts, 0.4)
-# top 200 genes per cluster from pseudobulk
-genes_counts <- run_pseudobulk(so.test)
-# top 200 genes per cluster from findallmarkers
-top_markers <- get_markers(0.4)
-top_markers <- split(top_markers, top_markers$cluster)
-
-for (i in seq(1: length(top_markers))){
-    print(paste0("Cluster ", i))
-    print(length(intersect(rownames(genes_counts[[1]][[i]]), top_markers[[i]]$gene)))
-}
-
-```
 ```{r}
 sessionInfo()
 ```
