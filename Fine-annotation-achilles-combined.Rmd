@@ -307,16 +307,16 @@ names(group.colors) <- cell.types
 achilles.colours <- c("#E25822",  # NEGH1hi fib
                       "#499999",  # Macrophages
                       "#F28E2B",  # VEC
-                      "#4E79A7",  # Mural
+                      "#4E79A7",  # Slow-twitch
                       "#F3C300",  # Adipocytes
                       "#E68FAC",  # T cells
                       "#8DB600",  # Nerve
                       "#888888",  # LEC
-                      "#A1CAF1",  # Fast skm
+                      "#A1CAF1",  # Mural
                       "#BE0032",  # ITGA10hi fib
-                      "#117733",  # slow skm
-                      "#332288",  # granulocytes
-                      "#A55194",  # 
+                      "#117733",  # Granulocytes
+                      "#332288",  # Transitional
+                      "#A55194",  # Fast-twitch
                       "#661100",  # B cells
                       "#a0785a")  # Satellite cells
 
@@ -363,6 +363,47 @@ p
 ggsave(paste0(directory, "/Fibroblast_comparison_figures/UMAP_by_microanatomy.png"), 
        device = "png", width = 12, height = 10, bg = "white")
 ```
+
+## Spatial analysis
+To use this object as a reference for spatial analysis, we need to use a broader annotation. 
+
+```{r}
+df <- data.frame("cell_annotation_update" = unique( so.harmony$cell_annotation_update))
+df$cell_annotation_spatial <- c("Adipocytes", "Endothelial cells", "Fibroblasts", "Endothelial cells", "Fibroblasts", "Immune cells", "Immune cells", "Endothelial cells", "Muscle cells", "Nervous system cells", "Muscle cells", "Immune cells", "Muscle cells", "Muscle cells", "Immune cells")
+df
+
+so$cell_annotation_spatial <- left_join(so.harmony[[]], df)
+
+```
+
+Colours for this less granular annotation
+
+```{r}
+spatial.colours <- c("#E25822",  # Fibroblasts
+                      "#4E79A7",  # Muscle
+                      "#F3C300",  # Adipocytes
+                      "#E68FAC",  # Immune cells
+                      "#8DB600",  # Nerve
+                      "#888888"  # Endothelial
+                     )  # 
+
+names(spatial.colours) <- c("Fibroblasts", "Muscle cells", "Adipocytes",  "Immune cells",  "Nervous system cells", "Endothelial cells")
+```
+
+DimPlot by spatial annotations
+
+
+```{r}
+
+DimPlot(so.harmony, reduction = "harmony.umap", pt.size = .1, group.by = "cell_annotation_spatial", cols = spatial.colours)
+    ggtitle("Annotations for spatial analysis")
+```
+
+```{r}
+ggsave(paste0(directory, "/Fibroblast_comparison_figures/UMAP_by_spatial_annotation.png"), 
+       device = "png", width = 12, height = 10, bg = "white")
+```
+
 
 Save the updated object
 

@@ -1,0 +1,85 @@
+---
+title: "Convert h5ad to sce to seurat"
+author: "Carla Cohen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+Attempt to convert adata objects to Seurat. 
+Never got it to work completely. 
+
+Read in the scvi integrated object and the merged object using zellkonverter. 
+This creates an sce object.
+Takes a long time to read in!
+
+```{r}
+h5ad.merge <- readH5AD("20240827_14-42_scvi_integration.dir/merged_normalised.h5ad")
+print ("Merged object")
+h5ad.merge 
+
+h5ad.scvi <- readH5AD("20240827_14-42_scvi_integration.dir/Achilles_scVI.h5ad")
+
+print ("SCVI Integrated object")
+h5ad.scvi
+assays(h5ad.scvi)
+colData(h5ad.scvi)%>% head()
+```
+
+Convert integrated data from sce to seurat object
+
+```{r}
+so.scvi <- CreateSeuratObject(counts = counts(h5ad.scvi), # raw counts
+                              data = assays(h5ad.scvi)$log1p_norm, # normalised counts
+                                     assay = "RNA",
+                                     project = "Achilles",
+                                     meta.data =as.data.frame(colData(h5ad.scvi)))
+
+# add soupX and decontX assays
+so.scvi@assays$soupX <- CreateAssayObject(counts = assays(h5ad.scvi)$soupX)
+so.scvi@assays$decontX <- CreateAssayObject(counts = assays(h5ad.scvi)$decontX)
+so.scvi
+
+# rowdata
+# as.data.frame(rowData(h5ad.scvi)) # gene metadata, can't work out how to add this
+
+# Manually setting the assay key for the object
+so.scvi@assays$RNA@key <- "rna_"
+so.scvi@assays$soupX@key <- "soupX_"
+so.scvi@assays$decontX@key <- "decontX_"
+
+# reductions
+so.scvi[["X_pca"]] <- CreateDimReducObject(embeddings = reducedDims(h5ad.scvi)$X_pca, key = "XPCA_", assay = "RNA")
+so.scvi[["X_scVI"]] <- CreateDimReducObject(embeddings = reducedDims(h5ad.scvi)$X_scVI, key = "XscVI_", assay = "RNA")
+so.scvi[["X_umap"]] <- CreateDimReducObject(embeddings = reducedDims(h5ad.scvi)$X_umap, key = "Xumap_", assay = "RNA")
+
+so.scvi
+```
+
+
+Convert merged data from sce to seurat object
+
+```{r}
+so.merge <- CreateSeuratObject(counts = counts(h5ad.merge), # raw counts
+                              data = assays(h5ad.merge)$log1p_norm, # normalised counts
+                                     assay = "RNA",
+                                     project = "Achilles",
+                                     meta.data =as.data.frame(colData(h5ad.merge)))
+
+# add soupX and decontX assays
+so.merge@assays$soupX <- CreateAssayObject(counts = assays(h5ad.merge)$soupX)
+so.merge@assays$decontX <- CreateAssayObject(counts = assays(h5ad.merge)$decontX)
+
+# rowdata
+# as.data.frame(rowData(h5ad.merge)) # gene metadata, can't work out how to add this
+
+# Manually setting the assay key for the object
+so.merge@assays$RNA@key <- "rna_"
+so.merge@assays$soupX@key <- "soupX_"
+so.merge@assays$decontX@key <- "decontX_"
+
+# reductions
+so.merge[["X_pca"]] <- CreateDimReducObject(embeddings = reducedDims(h5ad.merge)$X_pca, key = "XPCA_", assay = "RNA")
+so.merge[["X_umap"]] <- CreateDimReducObject(embeddings = reducedDims(h5ad.merge)$X_umap, key = "Xumap_", assay = "RNA")
+
+so.merge
+```

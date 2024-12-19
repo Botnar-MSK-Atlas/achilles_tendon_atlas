@@ -1,0 +1,492 @@
+---
+title: "Integration QC achilles"
+author: "Carla Cohen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+The aim of this script is to do additional QC plots on the merged and integrated data, once final settings have been chosen.  
+
+Working directory is /project/tendonhca/ccohen/chromium/analysis/20231006_achilles
+
+
+## Set up
+
+Set up and read in the yml file. 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+library(Seurat)
+library(tidyverse)
+library(harmony)
+library(cowplot)
+library(clustree)
+library(sctransform)
+library(yaml)
+library(viridis)
+
+# make a new output folder for each run, with the date & time in the directory name
+date <- Sys.Date() %>% str_replace_all("-", "")
+time <- format(Sys.time(), "%X") %>% str_replace_all(":", "-") %>%
+    str_sub(1, 5)
+directory <- paste0(date,"_", time, "_Integration-QC.dir")
+dir.create(directory, showWarnings = FALSE)
+
+#need to update yml file as appropriate
+ini <- read_yaml("integration_qc.yml")
+```
+
+#### Parameters
+
+Print the parameters used
+```{r}
+ini
+```
+
+
+Extract some names that depend on the normalisation method performed
+
+```{r}
+
+if (ini$normalisation_method == "SCTransform"){
+        
+        # save the reduction names
+        pca_name <- "sct.pca"
+        umap_name <- "sct.umap"
+        
+        # save the resolution prefix
+        res_prefix <- "SCT_snn_res."
+        
+    } else if (ini$normalisation_method == "SCTransformv2"){
+    
+    # save the reduction names
+     pca_name <- "sctv2.pca"
+     umap_name <- "sctv2.umap"
+     
+     # save the resolution prefix
+     res_prefix <- "SCTv2_snn_res."
+    
+    } else if (ini$normalisation_method == "LogNormalise"){
+    
+     # save the reduction names
+     pca_name <- "lognorm.pca"
+     umap_name <- "lognorm.umap"
+     
+     # save the resolution prefix
+     res_prefix <- "RNA_snn_res."
+}
+     
+    # Some prefixes change if decontX is used for normalisation
+    if (ini$normalisation_assay == "decontXcounts"){
+        res_prefix <- "decontXcounts_snn_res."
+    }
+    if (ini$normalisation_assay == "soupX"){
+        res_prefix <- "soupX_snn_res."
+    }
+        
+
+print(ini$normalisation_method) 
+print(pca_name)
+print(umap_name)
+print(res_prefix)
+
+```
+
+
+#### Read in merged & integrated Seurat object
+
+```{r}
+so.merge <- readRDS(paste0(ini$integration_date, "_Integration.dir/RDS_objects.dir/Achilles_merge_SeuratObject.rds"))
+so.harmony <- readRDS(paste0(ini$annotation_date, "_Annotation_update.dir/RDS_objects.dir/Achilles_integrated_annotated_0.2.rds"))
+
+```
+
+## QC on merged object
+
+Check distribution by metadata elements on PCA
+
+```{r, by donor, fig.height=15, fig.width=10}
+plot_list <- list()
+
+#By sample
+plot_list[[1]] <- DimPlot(so.merge, reduction = pca_name, pt.size = .1, shuffle = TRUE, group.by = "orig.ident")+
+    scale_colour_viridis_d()+
+    ggtitle("sample")
+#By patient
+plot_list[[2]] <- DimPlot(so.merge, reduction = pca_name, pt.size = .1, shuffle = TRUE, group.by = "patient")+
+    scale_colour_viridis_d()+
+    ggtitle ("patient")
+#By age
+plot_list[[3]] <- DimPlot(so.merge, reduction = pca_name, pt.size = .1, shuffle = TRUE, group.by = "age")+
+    scale_colour_viridis_d()+
+    ggtitle ("age")
+#By sex
+plot_list[[4]] <- DimPlot(so.merge, reduction = pca_name, pt.size = .1, shuffle = TRUE, group.by = "sex")+
+    scale_colour_viridis_d()+
+    ggtitle ("sex")
+#By microanatomy
+plot_list[[5]] <- DimPlot(so.merge, reduction = pca_name, pt.size = .1, shuffle = TRUE, group.by = "microanatomical_site")+
+    scale_colour_viridis_d()+
+    ggtitle("microanatomical site")
+#By surgical procedure
+#plot_list[[6]] <- DimPlot(so.merge, reduction = pca_name, pt.size = .1, group.by = "surgical_procedure")
+#By disease status
+#plot_list[[7]] <- DimPlot(so.merge, reduction = pca_name, pt.size = .1, group.by = "disease_status")
+#By anatomical site
+#plot_list[[8]] <- DimPlot(so.merge, reduction = pca_name, pt.size = .1, group.by = "anatomical_site")
+#By time to freezing
+#plot_list[[9]] <- DimPlot(so.merge, reduction = pca_name, pt.size = .1, group.by = "time_to_freezing")
+#By sequencing date
+#plot_list[[10]] <- DimPlot(so.merge, reduction = pca_name, pt.size = .1, group.by = "sequencing_date")
+#By ethnicity
+#plot_list[[11]] <- DimPlot(so.merge, reduction = pca_name, pt.size = .1, group.by = "ethnicity")
+
+title <- ggdraw() + draw_label("Merged data metafeatures on PCA plot", fontface='bold', size = 16)
+p <- plot_grid(plotlist = plot_list, ncol = 2) 
+p <- plot_grid(title, p, ncol=1, rel_heights=c(0.2, 1))
+
+
+p
+```
+
+```{r, include=FALSE}
+#save the plot
+dir.create(paste0(directory, "/Integration_QC_Figures.dir/"))
+ggsave(paste0(directory, "/Integration_QC_Figures.dir/PCA_merged_metafeatures.", ini$file_type), 
+       p, device = ini$file_format, width = 10, height = 15, bg = "white")
+
+
+```
+
+Check distribution by metadata elements on Violin plot
+
+```{r, fig.height=12, fig.width=10}
+plot_list <- list()
+
+#By sample
+plot_list[[1]] <- VlnPlot(so.merge, pt.size = 0, features = "PC_1", group.by = "orig.ident") +
+    scale_fill_viridis_d()+
+    theme(legend.position="none")+
+    ggtitle ("sample")
+#By patient
+plot_list[[2]] <- VlnPlot(so.merge, pt.size = 0, features = "PC_1", group.by = "patient")+
+    scale_fill_viridis_d()+
+    theme(legend.position="none")+
+    ggtitle("patient")
+#By age
+plot_list[[3]] <- VlnPlot(so.merge, pt.size = 0, features = "PC_1", group.by = "age")+
+    scale_fill_viridis_d()+
+    ggtitle ("age")
+#By sex
+plot_list[[4]] <- VlnPlot(so.merge, pt.size = 0, features = "PC_1", group.by = "sex")+
+    scale_fill_viridis_d()+
+    ggtitle("sex")
+#By microanatomy
+plot_list[[5]] <- VlnPlot(so.merge, pt.size = 0, features = "PC_1", group.by = "microanatomical_site")+
+    scale_fill_viridis_d()+
+    ggtitle("microanatomical site")
+#By surgical procedure
+#plot_list[[6]] <- VlnPlot(so.merge, pt.size = .1, features = "PC_1", group.by = "surgical_procedure")
+#By disease status
+#plot_list[[7]] <- VlnPlot(so.merge, pt.size = .1, features = "PC_1", group.by = "disease_status")
+#By anatomical site
+#plot_list[[8]] <- VlnPlot(so.merge, pt.size = .1, features = "PC_1", group.by = "anatomical_site")
+#By time to freezing
+#plot_list[[9]] <- VlnPlot(so.merge, pt.size = .1, features = "PC_1", group.by = "time_to_freezing")
+#By sequencing date
+#plot_list[[10]] <- VlnPlot(so.merge, pt.size = .1, features = "PC_1", group.by = "sequencing_date")
+#By ethnicity
+#plot_list[[11]] <- VlnPlot(so.merge, pt.size = .1, features = "PC_1", group.by = "ethnicity")
+
+
+title <- ggdraw() + draw_label("Metafeatures on Violin plot", fontface='bold', size = 16)
+p <- plot_grid(plotlist = plot_list, ncol = 2) 
+p <- plot_grid(title, p, ncol=1, rel_heights=c(0.05, 1))
+
+
+p
+
+
+```
+
+
+```{r, include=FALSE}
+ggsave(paste0(directory, "/Integration_QC_Figures.dir/VlnPlot_merged_metafeatures.", ini$file_type), 
+       p, device = ini$file_format, width = 10, height = 12, bg = "white")
+```
+
+
+Visualise contribution of metafeatures on UMAP
+
+```{r, fig.width=12, fig.height=15}
+plot_list <- list()
+
+#By sample
+plot_list[[1]] <- DimPlot(so.merge, reduction = umap_name, shuffle = TRUE, group.by = "orig.ident") +
+    scale_colour_viridis_d()+
+    ggtitle ("sample")
+#By patient
+plot_list[[2]] <- DimPlot(so.merge, reduction = umap_name,  shuffle = TRUE, group.by = "patient")+
+    scale_colour_viridis_d()+
+    ggtitle("patient")
+#By age
+plot_list[[3]] <- DimPlot(so.merge, reduction = umap_name,  shuffle = TRUE, group.by = "age")+
+    scale_colour_viridis_d()+
+    ggtitle ("age")
+#By sex
+plot_list[[4]] <- DimPlot(so.merge, reduction = umap_name,  shuffle = TRUE, group.by = "sex")+
+    scale_colour_viridis_d()+
+    ggtitle("sex")
+#By microanatomy
+plot_list[[5]] <- DimPlot(so.merge, reduction = umap_name, shuffle = TRUE, group.by = "microanatomical_site")+
+    scale_colour_viridis_d()+
+    ggtitle("microanatomical site")
+
+title <- ggdraw() + draw_label("Metafeatures on UMAP", fontface='bold', size = 16)
+p <- plot_grid(plotlist = plot_list, ncol = 2) 
+p <- plot_grid(title, p, ncol=1, rel_heights=c(0.1, 1))
+
+
+p
+```
+
+
+
+```{r}
+ggsave(paste0(directory, "/Integration_QC_Figures.dir/UMAP_merged_metafeatures.", ini$file_type), 
+       p, device = ini$file_format, width = 12, height = 15, bg = "white")
+
+```
+
+
+## QC on integrated object
+
+Compare PCA plot from the merged vs integrated data
+
+```{r, fig.width = 14, fig.height=6}
+
+p1 <- DimPlot(so.harmony, reduction = pca_name, group.by = "orig.ident", shuffle = TRUE) +
+    scale_colour_viridis_d()+
+        ggtitle ("PCA plot merged")
+p2 <- DimPlot(so.harmony, reduction = "harmony", group.by = "orig.ident", shuffle = TRUE) + 
+    scale_colour_viridis_d()+
+    ggtitle ("PCA plot integrated")
+
+p <- plot_grid(p1,p2, nrow = 1)
+p
+
+
+```
+
+
+```{r}
+ggsave(paste0(directory, "/Integration_QC_Figures.dir/PCA_merged_vs_integrated.", ini$file_type), 
+       p, device = ini$file_format, width = 14, height = 6, bg = "white")
+```
+
+
+Check distribution by metadata elements on UMAP following integration
+
+```{r, by donor, fig.height=12, fig.width=10}
+plot_list <- list()
+
+#By sample
+plot_list[[1]] <- DimPlot(so.harmony, reduction = "harmony.umap", pt.size = .1, group.by = "orig.ident", shuffle = TRUE)+
+    scale_colour_viridis_d()+
+    ggtitle("sample")
+#By patient
+plot_list[[2]] <- DimPlot(so.harmony, reduction = "harmony.umap", pt.size = .1, group.by = "patient", shuffle = TRUE)+
+    scale_colour_viridis_d()+
+    ggtitle ("patient")
+#By age
+plot_list[[3]] <- DimPlot(so.harmony, reduction = "harmony.umap", pt.size = .1, group.by = "age", shuffle = TRUE)+
+    scale_colour_viridis_d()+
+    #theme(legend.position="none")+
+    ggtitle ("age")
+#By sex
+plot_list[[4]] <- DimPlot(so.harmony, reduction = "harmony.umap", pt.size = .1, group.by = "sex", shuffle = TRUE)+
+    scale_colour_viridis_d()+
+    ggtitle ("sex")
+#By microanatomy
+plot_list[[5]] <- DimPlot(so.harmony, reduction = "harmony.umap", pt.size = .1, group.by = "microanatomical_site", shuffle = TRUE)+
+    scale_colour_viridis_d()+
+    ggtitle("microanatomical site")
+#By surgical procedure
+#plot_list[[6]] <- DimPlot(so.harmony, reduction = "harmony.umap", pt.size = .1, group.by = "surgical_procedure")
+#By disease status
+#plot_list[[7]] <- DimPlot(so.harmony, reduction = "harmony.umap", pt.size = .1, group.by = "disease_status")
+#By anatomical site
+#plot_list[[8]] <- DimPlot(so.harmony, reduction = "harmony.umap", pt.size = .1, group.by = "anatomical_site")
+#By time to freezing
+#plot_list[[9]] <- DimPlot(so.harmony, reduction = "harmony.umap", pt.size = .1, group.by = "time_to_freezing")
+#By sequencing date
+#plot_list[[10]] <- DimPlot(so.harmony, reduction = "harmony.umap", pt.size = .1, group.by = "sequencing_date")
+#By ethnicity
+#plot_list[[11]] <- DimPlot(so.harmony, reduction = "harmony.umap", pt.size = .1, group.by = "ethnicity")
+
+title <- ggdraw() + draw_label("Metafeatures on UMAP after harmony integration", fontface='bold', size = 24)
+p <- plot_grid(plotlist = plot_list, ncol = 2) 
+p <- plot_grid(title, p, ncol=1, rel_heights=c(0.1, 1))
+
+
+p
+```
+
+
+```{r, include=FALSE}
+#save the plot
+ggsave(paste0(directory, "/Integration_QC_Figures.dir/UMAP_harmony_metafeatures.", ini$file_type), 
+       p, device = ini$file_format, width = 10, height = 12, bg = "white")
+
+
+```
+
+Plot metafeatures on Vln plot of harmony principal component
+
+```{r, fig.height=10, fig.width=12}
+plot_list <- list()
+
+#By sample
+plot_list[[1]] <- VlnPlot(object = so.harmony, features = "harmony_1", group.by = "orig.ident", pt.size = 0) +
+    scale_fill_viridis_d()+
+    theme(legend.position="none")+
+    ggtitle ("sample")
+#By patient
+plot_list[[2]] <- VlnPlot(so.harmony, pt.size = 0, features = "harmony_1", group.by = "patient")+
+    scale_fill_viridis_d()+
+    theme(legend.position="none")+
+    ggtitle("patient")
+#By age
+plot_list[[3]] <- VlnPlot(so.harmony, pt.size = 0, features = "harmony_1", group.by = "age")+
+    scale_fill_viridis_d()+
+    theme(legend.position="none")+
+    ggtitle ("age")
+#By sex
+plot_list[[4]] <- VlnPlot(so.harmony, pt.size = 0, features = "harmony_1", group.by = "sex")+
+    scale_fill_viridis_d()+
+    theme(legend.position="none")+
+    ggtitle("sex")
+#By microanatomy
+plot_list[[5]] <- VlnPlot(so.harmony, pt.size = 0, features = "harmony_1", group.by = "microanatomical_site")+
+    scale_fill_viridis_d()+
+    theme(legend.position="none")+
+    ggtitle("microanatomical site")
+#By surgical procedure
+#plot_list[[6]] <- VlnPlot(so.harmony, pt.size = .1, features = "harmony_1", group.by = "surgical_procedure")
+#By disease status
+#plot_list[[7]] <- VlnPlot(so.harmony, pt.size = .1, features = "harmony_1", group.by = "disease_status")
+#By anatomical site
+#plot_list[[8]] <- VlnPlot(so.harmony, pt.size = .1, features = "harmony_1", group.by = "anatomical_site")
+#By time to freezing
+#plot_list[[9]] <- VlnPlot(so.harmony, pt.size = .1, features = "harmony_1", group.by = "time_to_freezing")
+#By sequencing date
+#plot_list[[10]] <- VlnPlot(so.harmony, pt.size = .1, features = "harmony_1", group.by = "sequencing_date")
+#By ethnicity
+#plot_list[[11]] <- VlnPlot(so.harmony, pt.size = .1, features = "harmony_1", group.by = "ethnicity")
+
+
+title <- ggdraw() + draw_label("Metafeatures on Violin plot after Harmony integration", fontface='bold', size = 16)
+p <- plot_grid(plotlist = plot_list, ncol = 2) 
+p <- plot_grid(title, p, ncol=1, rel_heights=c(0.05, 1))
+
+
+p
+
+
+```
+
+
+```{r, include=FALSE}
+#save the plot
+ggsave(paste0(directory, "/Integration_QC_Figures.dir/VlnPlot_harmony_metafeatures.", ini$file_type), 
+       p, device = ini$file_format, width = 12, height = 10, bg = "white")
+
+
+```
+
+Plot distribution of Age on UMAP with each age on a separate plot
+
+```{r, fig.width=14, fig.height=8}
+p <- DimPlot(so.harmony, reduction = "harmony.umap", pt.size = .1, split.by = "age", shuffle = TRUE, ncol = 3)+
+    #scale_colour_viridis_d()+
+    theme(panel.background = element_rect(colour = "black", linewidth = 1))+
+    #theme(legend.position="none")+
+    ggtitle ("age")
+p
+```
+```{r, include=FALSE}
+
+ggsave(paste0(directory, "/Integration_QC_Figures.dir/UMAP_harmony_age.", ini$file_type), 
+       p, device = ini$file_format, width = 12, height = 10, bg = "white")
+```
+
+Plot distribution of Age on UMAP with each age on a separate plot
+
+```{r, fig.width=14, fig.height=20}
+p <- DimPlot(so.harmony, reduction = "harmony.umap", pt.size = .1, split.by = "orig.ident", shuffle = TRUE, ncol = 3)+
+    #scale_colour_viridis_d()+
+    theme(panel.background = element_rect(colour = "black", linewidth = 1))+
+    #theme(legend.position="none")+
+    ggtitle ("sample")
+p
+```
+
+```{r, include=FALSE}
+
+ggsave(paste0(directory, "/Integration_QC_Figures.dir/UMAP_harmony_sample.", ini$file_type), 
+       p, device = ini$file_format, width = 12, height = 20, bg = "white")
+```
+
+#### Cell cycle
+
+Look at cell cycle markers using CellCycleScoring
+
+First calculate the phase for each cell, using an inbuilt database (in Seurat) of known cell cycle marker genes. 
+
+```{r}
+
+#Run CellCycleScoring algorithm, results will appear in the metadata 
+so.harmony <- CellCycleScoring(so.harmony, s.features = cc.genes$s.genes, g2m.features = cc.genes$g2m.genes)
+
+# view cell cycle scores and phase assignments
+head(so.harmony[[]])
+
+```
+
+Visualise the output of cell cycle markers
+
+```{r, fig.width=16, fig.height=10, message = FALSE}
+# Visualize the distribution of cell cycle markers 
+p1 <- RidgePlot(so.harmony, features = c("PCNA", "TOP2A", "MCM6", "MKI67"), group.by = "Phase", ncol = 4,
+                assay = "soupX")
+title <- ggdraw() + draw_label("Expression of cell cycle marker genes", fontface='bold', size = 16)
+
+
+# Visualise cell cycle assignment on PCA
+p2 <- DimPlot(so.harmony, reduction = pca_name, group.by = "Phase")+
+    ggtitle("Phase mapped on PCA")
+
+# Visualise cell cycle assignment on UMAP
+p3 <- DimPlot(so.harmony, reduction = "harmony.umap", group.by = "Phase", pt.size = 0.1)+
+    ggtitle("Phase mapped on UMAP")
+
+p4 <- plot_grid(p2, p3)
+
+p <- plot_grid(title, p1, p4, nrow = 3, rel_heights=c(0.1, 0.6, 1))
+
+p
+```
+
+No effect of cycle, key cell cycle genes are not expressed.  
+Cell cycle could be regressed out in later steps if required. 
+
+```{r, include=FALSE}
+ggsave(paste0(directory, "/Integration_QC_Figures.dir/Cell_cycle_metrics.", ini$file_type), 
+       p, device = ini$file_type, width = 16, height = 10, bg = "white")
+
+
+```
+
+
+

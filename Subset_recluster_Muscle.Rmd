@@ -1,11 +1,11 @@
 ---
-title: "Subset and recluster fibroblasts"
+title: "Subset and recluster"
 author: "Carla Cohen"
 date: "`r Sys.Date()`"
 output: html_document
 ---
 
-A script to subset and re-cluster the fibroblast subsets in the Achilles data  
+A script to subset and re-cluster the cell subsets of interest in the Achilles data  
 
 
 ```{r setup, include=FALSE}
@@ -28,18 +28,19 @@ library(scales)
 reticulate::use_condaenv(condaenv = "integration-env", conda = "/project/ancestryhca/ccohen/mamba_installation/conda/condabin/conda", required = F)
 np <- reticulate::import("numpy")
 reticulate::import(module = 'leidenalg')
+ini <- read_yaml("subcluster.yml")
 
 # make a new output folder for each run, with the date & time in the directory name
 date <- Sys.Date() %>% str_replace_all("-", "")
 time <- format(Sys.time(), "%X") %>% str_replace_all(":", "-") %>%
     str_sub(1, 5)
-directory <- paste0(date,"_", time, "_Subset_fibroblasts.dir")
+directory <- paste0(date,"_", time, "_Subset_", ini$cell_type, ".dir")
 dir.create(directory, showWarnings = FALSE)
 dir.create(paste0(directory, "/Subset_figures/"))
 dir.create(paste0(directory, "/Marker_lists/"))
 dir.create(paste0(directory, "/Dotplots"))
 dir.create(paste0(directory, "/Heatmaps"))
-ini <- read_yaml("subcluster.yml")
+
 
 ```
 
@@ -78,8 +79,7 @@ so <- readRDS(ini$seurat_object)
 # colnames(so[[]])
 # add the idents as a column of metadata
 Idents(so) <- identities
-# downsample for testing
-# so <- so[, sample(colnames(so), size =20000, replace=F)] #actually doesn't really work as we don't get clusters of FB
+
 so
 ```
 
@@ -91,52 +91,90 @@ p <- DimPlot(so, label = TRUE, repel = TRUE, shuffle = TRUE,reduction = umap_nam
 p
 ```
 
-Subset the fibroblasts
+Subset the cells of interest
 
 ```{r}
-so.fibroblasts <- subset(so, idents = ini$subset_clusters)
-so.fibroblasts
+so.subset <- subset(so, idents = ini$subset_clusters)
+so.subset
 ```
 Tidy up the metadata
 ```{r}
 # remove existing clusters
-resolutionList <- grep("snn_res", colnames(so.fibroblasts@meta.data), value = TRUE)
+resolutionList <- grep("snn_res", colnames(so.subset@meta.data), value = TRUE)
 
 for (resolution in resolutionList){
-      so.fibroblasts[[resolution]] <- NULL
+      so.subset[[resolution]] <- NULL
 }
 
 # remove the harmony and X_scVI reductions generated from the whole object
 if (ini$integration_method == "harmony"){
-    so.fibroblasts[["harmony"]] <- NULL
+    so.subset[["harmony"]] <- NULL
 }else if (ini$integration_method == "scVI"){
-    so.fibroblasts[["X_scVI"]] <- NULL
+    so.subset[["X_scVI"]] <- NULL
 }
 
-so.fibroblasts
+so.subset
+```
+Plot the metafeatures
+
+```{r, fig.width=10, fig.height=10}
+FeaturePlot(so.subset, features = c("nCount_RNA", "nCount_soupX", "nFeature_RNA", "nFeature_soupX", "subsets_mito_percent", "percent.ribo", "decontX_contamination"))
+ggsave(paste0(directory, "/Subset_figures/Meatfeatures.png"), width = 10, height = 10, bg = "white")
 ```
 
-Re-cluster the fibroblasts
+```{r, fig.width=12, fig.height=4}
+FeaturePlot(so.subset, features = c("subsets_mito_percent", "decontX_contamination"), blend = TRUE, cols = c("grey", "red", "blue"))
+```
+
+VlnPlot
+
+```{r}
+VlnPlot(so.subset, features = c("subsets_mito_percent", "percent.ribo", "decontX_contamination"))
+```
+Plot these features vs counts
+
+```{r}
+FeatureScatter(so.subset, "nCount_RNA", "subsets_mito_percent", group.by = "patient" )
+
+```
+
+
+
+Add at % mt filter to 4% and decontX filter to 0.2
+
+```{r}
+so.subset <- subset(so.subset, subset = subsets_mito_percent < 4)
+so.subset <- subset(so.subset, subset = decontX_contamination < 0.2)
+```
+
+Plot the metafeatures again
+
+```{r, fig.width=10, fig.height=10}
+FeaturePlot(so.subset, features = c("nCount_RNA", "nCount_soupX", "nFeature_RNA", "nFeature_soupX", "subsets_mito_percent", "percent.ribo", "decontX_contamination"))
+ggsave(paste0(directory, "/Subset_figures/Meatfeatures_after_filter.png"), width = 10, height = 10, bg = "white")
+```
+
+Re-cluster the cells of interest
 First we need to re-normalise etc
 
 ```{r}
-DefaultAssay(so.fibroblasts) <- ini$normalisation_assay
+DefaultAssay(so.subset) <- ini$normalisation_assay
 
-so.fibroblasts <- so.fibroblasts %>% 
+so.subset <- so.subset %>% 
            NormalizeData() %>%
            FindVariableFeatures(nfeatures = ini$nfeatures) %>% 
-           ScaleData() %>%
+           ScaleData(features = rownames(so.subset)) %>% # scale all genes for plotting later
            RunPCA()
 
 if (ini$integration_method == "harmony"){
     
-    so.fibroblasts <- RunHarmony(so.fibroblasts, 
+    so.subset <- RunHarmony(so.subset, 
                          group.by.vars = "patient.seqbatch", 
                          plot_convergence = TRUE, 
                          dims.use = 1:ini$n_dims, 
                          kmeans_init_nstart=20, kmeans_init_iter_max=100)
     
-    so.fibroblasts <- so.fibroblasts %>% 
+    so.subset <- so.subset %>% 
         FindNeighbors(dims = 1:ini$n_dims, reduction = "harmony") %>%
         RunUMAP(dims = 1:ini$n_dims, reduction = "harmony") 
     
@@ -149,26 +187,26 @@ if (ini$integration_method == "harmony"){
     scVI_obs <- read.table(paste0(ini$import_embeddings, "/Achilles_scVI_obs.txt"), sep = "\t", header = TRUE, row.names = 1)
     
     # check the barcodes match
-    table(rownames(scVI_obs) %in% colnames(so.fibroblasts))
+    table(rownames(scVI_obs) %in% colnames(so.subset))
     
     # add rownames to the matrix
     rownames(scVI_embeddings) <- rownames(scVI_obs)
     
     # subset for testing
-    scVI_embeddings <- scVI_embeddings[colnames(so.fibroblasts),]
-    scVI_obs <- scVI_obs[colnames(so.fibroblasts),]
+    #scVI_embeddings <- scVI_embeddings[colnames(so.subset),]
+    #scVI_obs <- scVI_obs[colnames(so.subset),]
     
     # add the new embeddings to the subsetted object
-    so.fibroblasts[["X_scVI"]] <- CreateDimReducObject(embeddings = scVI_embeddings, key = "scVI_", assay = "RNA")
+    so.subset[["X_scVI"]] <- CreateDimReducObject(embeddings = scVI_embeddings, key = "scVI_", assay = "RNA")
     
     # re-calculate neighbours using the scVI embeddings
-    so.fibroblasts <- FindNeighbors(so.fibroblasts, reduction = "X_scVI", dims = 1:ini$n_dims, graph.name = c("X_scVI_nn", "X_scVI_snn"))
+    so.subset <- FindNeighbors(so.subset, reduction = "X_scVI", dims = 1:ini$n_dims, graph.name = c("X_scVI_nn", "X_scVI_snn"))
 
     # recalculate the UMAP using scVI embedidngs
-    so.fibroblasts <- RunUMAP(so.fibroblasts, reduction = "X_scVI", dims = 1:ini$n_dims)
+    so.subset <- RunUMAP(so.subset, reduction = "X_scVI", dims = 1:ini$n_dims)
 }
 
-so.fibroblasts
+so.subset
 
 ```
 
@@ -177,13 +215,13 @@ Plot with the original labels.
 
 ```{r}
 
-DimPlot(so.fibroblasts, label = TRUE, repel = TRUE, shuffle = TRUE, reduction = "umap.scvi")
-DimPlot(so.fibroblasts, label = TRUE, repel = TRUE, shuffle = TRUE, reduction = "umap")
+DimPlot(so.subset, label = TRUE, repel = TRUE, shuffle = TRUE, reduction = "umap.scvi")
+DimPlot(so.subset, label = TRUE, repel = TRUE, shuffle = TRUE, reduction = "umap")
 ggsave(paste0(directory, "/Subset_figures/UMAP_original_clusters.png"), width = 8, height = 6, bg = "white")
 ```
 
 ```{r}
-ElbowPlot(so.fibroblasts, ndims = 50)
+ElbowPlot(so.subset, ndims = 50)
 ggsave(paste0(directory, "/Subset_figures/Elbow_plot.png"), width = 8, height = 6, bg = "white")
 ```
 
@@ -194,19 +232,19 @@ Find Clusters at resolutions from 0.05-0.3
 if (ini$integration_method == "harmony"){
     
     if (ini$cluster_method == "louvain"){
-        so.fibroblasts <- FindClusters(so.fibroblasts, resolution = seq(0.05, 0.3, 0.05))
+        so.subset <- FindClusters(so.subset, resolution = seq(0.1, 0.6, 0.1))
     } else if (ini$cluster_method == "leiden"){
-        so.fibroblasts <- so.fibroblasts %>% FindClusters(resolution = seq(0.05, 0.3, 0.05), 
+        so.subset <- so.subset %>% FindClusters(resolution = seq(0.05, 0.3, 0.05), 
                                               algorithm = "leiden",
                                               method = "igraph") # needed if running leiden
     }
 
 } else if (ini$integration_method == "scVI"){
     if (ini$cluster_method == "louvain"){
-        so.fibroblasts <- FindClusters(so.fibroblasts, resolution = seq(0.1, 1, 0.1), 
+        so.subset <- FindClusters(so.subset, resolution = seq(0.1, 0.6, 0.1), 
                                        graph.name = "X_scVI_snn")
     } else if (ini$cluster_method == "leiden"){
-        so.fibroblasts <- so.fibroblasts %>% FindClusters(resolution = seq(0.1, 1, 0.1), 
+        so.subset <- so.subset %>% FindClusters(resolution = seq(0.1, 0.6, 0.1), 
                                               algorithm = "leiden",
                                               method = "igraph", 
                                               graph.name = "X_scVI_snn" #this was calc using scVI reduction on RNA assay
@@ -225,8 +263,8 @@ NB doing the re-integration makes essentially no difference.
 
 ```{r, fig.height= 10, fig.width=10}
 
-clustree(so.fibroblasts, prefix = prefix_name, node_colour = "sc3_stability") + 
-        ggtitle("Fibroblasts Clustree")
+clustree(so.subset, prefix = prefix_name, node_colour = "sc3_stability") + 
+        ggtitle("Clustree")
 ggsave(paste0(directory, "/Subset_figures/Clustree_plot.png"), 
        width = 10, height = 10, bg = "white")
 ```
@@ -235,12 +273,12 @@ Plot UMAP for each clustering resolution
 
 ```{r, fig.width=10, fig.height=20}
 
-resolutionList <- grep("_snn_res", colnames(so.fibroblasts@meta.data), value = TRUE)
+resolutionList <- grep("_snn_res", colnames(so.subset@meta.data), value = TRUE)
 
 plot_list <- list()
 
 for (resolution in resolutionList){
-      plot_list [[resolution]] <- DimPlot(object = so.fibroblasts, label = TRUE, reduction = "umap", 
+      plot_list [[resolution]] <- DimPlot(object = so.subset, label = TRUE, reduction = "umap", 
                                           group.by = resolution, shuffle = TRUE)
       }
 
@@ -260,19 +298,19 @@ Select resolution
 
 ```{r} 
 resolution <- ini$display_resolution
-so.fibroblasts[["seurat_clusters"]] <- so.fibroblasts[[paste0(prefix_name, resolution)]]
-Idents(so.fibroblasts) <- so.fibroblasts$seurat_clusters
-levels(Idents(so.fibroblasts))
+so.subset[["seurat_clusters"]] <- so.subset[[paste0(prefix_name, resolution)]]
+Idents(so.subset) <- so.subset$seurat_clusters
+levels(Idents(so.subset))
 ```
 
 
 UMAP split by microanatomy
 
 ```{r, fig.height=8, fig.width=8}
-DimPlot(object = so.fibroblasts, label = TRUE, reduction = "umap", shuffle = TRUE, 
+DimPlot(object = so.subset, label = TRUE, reduction = "umap", shuffle = TRUE, 
              split.by = "microanatomical_site", ncol = 2)+
     theme(panel.background = element_rect(colour = "black", linewidth = 1))+
-    ggtitle(paste0("Fibroblast UMAP split my microanatomy at resolution ", resolution))
+    ggtitle(paste0(ini$cell_type, " UMAP split my microanatomy at resolution ", resolution))
 ggsave(paste0(directory, "/Subset_figures/UMAP_microanatomy.png"), 
        width = 10, height = 10, bg = "white")
 
@@ -281,10 +319,10 @@ ggsave(paste0(directory, "/Subset_figures/UMAP_microanatomy.png"),
 UMAP split by orig.ident
 
 ```{r, fig.height=16, fig.width=8}
-DimPlot(object = so.fibroblasts, label = TRUE, reduction = "umap", shuffle = TRUE, 
+DimPlot(object = so.subset, label = TRUE, reduction = "umap", shuffle = TRUE, 
              split.by = "orig.ident", ncol = 3)+
     theme(panel.background = element_rect(colour = "black", linewidth = 1))+
-    ggtitle(paste0("Fibroblast UMAP split by orig.ident at resolution ", resolution))
+    ggtitle(paste0(ini$cell_type, " UMAP split by orig.ident at resolution ", resolution))
 ggsave(paste0(directory, "/Subset_figures/UMAP_orig.ident.png"), 
        width = 8, height = 16, bg = "white")
 
@@ -293,27 +331,46 @@ ggsave(paste0(directory, "/Subset_figures/UMAP_orig.ident.png"),
 UMAP split by patient
 
 ```{r, fig.height=8, fig.width=10}
-DimPlot(object = so.fibroblasts, reduction = "umap", shuffle = TRUE, 
+DimPlot(object = so.subset, reduction = "umap", shuffle = TRUE, 
              split.by = "patient", ncol = 3, label = TRUE)+
     theme(panel.background = element_rect(colour = "black", linewidth = 1))+
-    ggtitle(paste0("Fibroblast UMAP split by patient at resolution ", resolution))
+    ggtitle(paste0(ini$cell_type, " UMAP split by patient at resolution ", resolution))
 ggsave(paste0(directory, "/Subset_figures/UMAP_patient.png"), 
        width = 10, height = 7, bg = "white")
 ```
+
+UMAP split by patient at all resolutions
+
+```{r, fig.height=8, fig.width=10}
+
+resolutionList <- grep("_snn_res", colnames(so.subset@meta.data), value = TRUE)
+
+for (resolution in resolutionList){
+    DimPlot(object = so.subset, reduction = "umap", shuffle = TRUE, 
+                 split.by = "patient", , group.by = resolution, ncol = 3, label = TRUE)+
+        theme(panel.background = element_rect(colour = "black", linewidth = 1))+
+        ggtitle(paste0(ini$cell_type, " UMAP split by patient at resolution ", resolution))
+    ggsave(paste0(directory, "/Subset_figures/UMAP_patient_", resolution, ".png"), 
+           width = 10, height = 7, bg = "white")
+}
+
+
+```
+
 
 UMAP split by patient - each cluster separately
 
 ```{r, fig.height=6, fig.width=8}
 # set the colours
-colours <- hue_pal()(length(levels(Idents(so.fibroblasts))))
-names(colours) <- levels(Idents(so.fibroblasts))
+colours <- hue_pal()(length(levels(Idents(so.subset))))
+names(colours) <- levels(Idents(so.subset))
 
-for (cluster_id in levels(Idents(so.fibroblasts))){
+for (cluster_id in levels(Idents(so.subset))){
     #print(cluster_id)
-    so.subset <- subset(so.fibroblasts, idents = cluster_id)
-    DimPlot(so.subset, label = TRUE, reduction = "umap", shuffle = TRUE, 
+    so.cluster <- subset(so.subset, idents = cluster_id)
+    DimPlot(so.cluster, label = TRUE, reduction = "umap", shuffle = TRUE, 
              split.by = "patient", ncol = 3, cols = colours)+
-    ggtitle(paste0("Fibroblast UMAP cluster ", cluster_id, " per patient res ", resolution))
+    ggtitle(paste0(ini$cell_type, " UMAP cluster ", cluster_id, " per patient res ", resolution))
     ggsave(paste0(directory, "/Subset_figures/UMAP_cluster_", cluster_id, "_by_patient_", resolution, ".png"), 
        width = 8, height = 6, bg = "white")
 }
@@ -326,8 +383,8 @@ Update the naming of earlier clustering with louvain or leiden
 ```{r}
 # it is not possible to directly change metadata column names
 # create a df with new column names
-metadata <- so.fibroblasts[[]]
-names <- colnames(so.fibroblasts[[]])
+metadata <- so.subset[[]]
+names <- colnames(so.subset[[]])
 if (ini$integration_method == "harmony"){
     if (ini$cluster_method == "louvain"){
         names <- str_replace(names, "^soupX", "louvain_soupX")
@@ -353,17 +410,17 @@ if (ini$integration_method == "harmony"){
 
 # remove old columns from metadata
 
-resolutionList <- grep("_snn_res", colnames(so.fibroblasts@meta.data), value = TRUE)
+resolutionList <- grep("_snn_res", colnames(so.subset@meta.data), value = TRUE)
 
 for (resolution in resolutionList){
-      so.fibroblasts[[resolution]] <- NULL
+      so.subset[[resolution]] <- NULL
       }
 
 # add the newly labelled columns
 
-so.fibroblasts <- AddMetaData(so.fibroblasts, metadata)
+so.subset <- AddMetaData(so.subset, metadata)
 
-colnames(so.fibroblasts[[]])
+colnames(so.subset[[]])
 
 
 ```
@@ -373,27 +430,27 @@ colnames(so.fibroblasts[[]])
 ### Visualise QC metrics 
 
 ```{r, message = FALSE, fig.width=10, fig.height=15}
-p1 <- VlnPlot(so.fibroblasts, features = "sum", assay = "RNA", pt.size = 0)+
+p1 <- VlnPlot(so.subset, features = "sum", assay = "RNA", pt.size = 0)+
     scale_y_log10() +
     scale_fill_viridis_d()+
     theme(legend.position="none")+
     theme_cowplot()+
     ggtitle("nCounts")
 
-p2 <- VlnPlot(so.fibroblasts, features = "detected", assay = "RNA", pt.size = 0)+
+p2 <- VlnPlot(so.subset, features = "detected", assay = "RNA", pt.size = 0)+
     scale_y_log10() +
     scale_fill_viridis_d()+
     theme(legend.position="none")+
     theme_cowplot()+
     ggtitle("nFeatures")
 
-p3 <- VlnPlot(so.fibroblasts, features = "subsets_mito_percent", assay = "RNA", pt.size = 0)+
+p3 <- VlnPlot(so.subset, features = "subsets_mito_percent", assay = "RNA", pt.size = 0)+
     scale_fill_viridis_d()+
     theme(legend.position="none")+
     theme_cowplot()+
     ggtitle("Percent mitochondrial reads")
 
-p4 <- VlnPlot(so.fibroblasts, features = "decontX_contamination", assay = "RNA", pt.size = 0)+
+p4 <- VlnPlot(so.subset, features = "decontX_contamination", assay = "RNA", pt.size = 0)+
     scale_fill_viridis_d()+
     theme(legend.position="none")+
     theme_cowplot()+
@@ -410,13 +467,13 @@ p
 Plot QC metrics on UMAP
 
 ```{r, fig.height=8, fig.width=10, message = FALSE}
-p1<- FeaturePlot(so.fibroblasts, features = "sum", reduction = "umap")+ggtitle ("nCounts")+
+p1<- FeaturePlot(so.subset, features = "sum", reduction = "umap")+ggtitle ("nCounts")+
     scale_color_continuous(type = "viridis", limits = c(0,10000))
-p2<- FeaturePlot(so.fibroblasts, features = "detected", reduction = "umap") + ggtitle("nFeatures")+
+p2<- FeaturePlot(so.subset, features = "detected", reduction = "umap") + ggtitle("nFeatures")+
     scale_color_continuous(type = "viridis", limits = c(0,5000))
-p3<- FeaturePlot(so.fibroblasts, features = "subsets_mito_percent", reduction = "umap") + ggtitle ("Percent mito reads")+
+p3<- FeaturePlot(so.subset, features = "subsets_mito_percent", reduction = "umap") + ggtitle ("Percent mito reads")+
     scale_color_continuous(type = "viridis")
-p4<- FeaturePlot(so.fibroblasts, features = "decontX_contamination", reduction = "umap")+
+p4<- FeaturePlot(so.subset, features = "decontX_contamination", reduction = "umap")+
     scale_colour_gradientn(colours = viridis(256, option = "D"), name = "decontX score")+
         ggtitle("decontX_contamination")
 p <- plot_grid(p1, p2, p3, p4)
@@ -437,11 +494,11 @@ Run FindAllMarkers on the soupX assay for each calculated resolution.
 find_markers <- function(resolution){
     print(resolution)
     # set the idents to the resolution
-    Idents(so.fibroblasts) <- so.fibroblasts[[resolution]] %>% pull()
+    Idents(so.subset) <- so.subset[[resolution]] %>% pull()
     # how many clusters are there?
-    print(length(unique(Idents(so.fibroblasts))))
+    print(length(unique(Idents(so.subset))))
     
-    markers <-  FindAllMarkers(so.fibroblasts,
+    markers <-  FindAllMarkers(so.subset,
                            assay = "soupX",
                            only.pos = TRUE, 
                            min.pct = 0.25, 
@@ -455,7 +512,7 @@ find_markers <- function(resolution){
 }
 
 # create a list of resolutions
-resolutionList <- grep("snn_res", colnames(so.fibroblasts@meta.data), value = TRUE)
+resolutionList <- grep("snn_res", colnames(so.subset@meta.data), value = TRUE)
 
 # find markers at each resolution
 found_markers <- list()
@@ -503,10 +560,10 @@ for (resolution in resolutionList){
     # only do this if there were marker genes found
     if (length(found_markers[[resolution]]$gene > 0)){
         # set the idents to the resolution
-        Idents(so.fibroblasts) <- so.fibroblasts[[resolution]] %>% pull()
+        Idents(so.subset) <- so.subset[[resolution]] %>% pull()
         
         res <- str_remove(resolution, "soupX_snn_res.")
-        DotPlot(so.fibroblasts,
+        DotPlot(so.subset,
                  features = unique(top10_markers[[resolution]]$gene),
                  assay = "soupX") + 
         scale_colour_viridis(direction = -1) + 
@@ -516,7 +573,7 @@ for (resolution in resolutionList){
         ggsave(paste0(directory, "/Dotplots/Top10markers_", res, ".png"), width = 10, height = 12)
         ggsave(paste0(directory, "/Dotplots/Top10markers_", res, ".svg"), width = 10, height = 12)
         
-        DoHeatmap(subset(so.fibroblasts), 
+        DoHeatmap(subset(so.subset), 
                    features = unique(top10_markers[[resolution]]$gene),
                    assay = "soupX") + 
             scale_fill_viridis()+
@@ -592,11 +649,11 @@ contributing_genes <- function(so){
     title <- ggdraw() + draw_label("Ambient RNA detection", fontface='bold', size = 16)
     p <- plot_grid(title, p, ncol=1, rel_heights=c(0.05, 1))
     
-    ggsave(paste0(directory, "/SoupX_figures/SoupX_umap.png"), p, 
+    ggsave(paste0(directory, "/Subset_figures/SoupX_umap.png"), p, 
                 width = 16, height = 14, bg = "white")
     
 }
-contributing_genes(so.fibroblasts)
+contributing_genes(so.subset)
 
 ```
 
@@ -605,7 +662,7 @@ Save the object
 
 ```{r}
 dir.create(paste0(directory, "/RDS_objects.dir/"))
-saveRDS(so.fibroblasts, paste0(directory, "/RDS_objects.dir/Achilles_fibroblast_subset.rds"))
+saveRDS(so.subset, paste0(directory, "/RDS_objects.dir/Achilles_", ini$cell_type, "_subset.rds"))
 sessionInfo()
 ```
 

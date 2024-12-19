@@ -42,7 +42,7 @@ dir.create(directory, showWarnings = FALSE)
 Read in the Achilles subset fibroblast object. 
 
 ```{r}
-so.fibroblasts <- readRDS("20241111_11-16_Fine_annotation_fibroblasts_0.3.dir/RDS_objects.dir/Achilles_fibroblast_subset.rds")
+so.fibroblasts <- readRDS("20241115_09-59_Fine_annotation_fibroblasts_0.3.dir/RDS_objects.dir/Achilles_fibroblast_subset.rds")
 ```
 
 
@@ -135,7 +135,7 @@ run_pseudobulk <- function(so){
     return(list(gene_list, counts_list))
 }
 
-# genes_counts <- run_pseudobulk(so.test)
+genes_counts <- run_pseudobulk(so.test)
 ```
 
 Run Pathway analysis using GOBP with "enricher" function from clusterProfiler. 
@@ -163,7 +163,7 @@ run_enricher <- function (gene_list, resolution){
     }
 }
 
-# enricher.results <- run_enricher(genes_counts, 0.3)
+enricher.results <- run_enricher(genes_counts, 0.3)
 ```
 
 
@@ -239,22 +239,23 @@ visualise_enricher <- function (results, resolution, so, analysis){
       
 }
       
-#visualise_enricher(enricher.results, 0.3, so.test, "Pseudobulk")
+visualise_enricher(enricher.results, 0.3, so.test, "Pseudobulk")
 #visualise_enricher(enricher.results.2, 0.3, so.test, "Findmarkers_enricher")
 
 ```
 
 
 Put all the functions together
+NOT WORKING
 ```{r}
-run_pseudobulk_enricher <- function (so, resolution){
-    so.test <- set_resolution(so.fibroblasts, resolution)
-    genes_counts <- run_pseudobulk(so.test)
-    enricher.results <- run_enricher(genes_counts, resolution)
-    visualise_enricher(enricher.results, resolution, so.test, "Pseudobulk")
-}
+#run_pseudobulk_enricher <- function (so, resolution){
+#    so.test <- set_resolution(so.fibroblasts, resolution)
+#    genes_counts <- run_pseudobulk(so.test)
+#    enricher.results <- run_enricher(genes_counts, resolution)
+#    visualise_enricher(enricher.results, resolution, so.test, "Pseudobulk")
+#}
 
-run_pseudobulk_enricher(so.fibroblasts, 0.3)
+#run_pseudobulk_enricher(so.fibroblasts, 0.3)
 # run_pseudobulk_enricher(so.fibroblasts, 0.4)
 
 ```

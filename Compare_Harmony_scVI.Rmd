@@ -1,0 +1,115 @@
+---
+title: "Compare Harmony/scVI"
+author: "Carla Cohen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(SingleCellExperiment)
+library(Seurat)
+library(tidyverse)
+library(scater)
+library(cowplot)
+```
+
+# read in the SCE objects
+
+```{r}
+#make a list of sample files
+file_list <- list.files("20231031_14-36_Doublet.dir/RDS_objects.dir/doublet_filtered/SingleCellExp/", pattern=".rds", recursive = TRUE)
+names(file_list) <- str_replace(file_list, "_doublet_filtered_SingleCellExp.rds", "") 
+
+#Make a new list for the sce objects
+sce <- list()
+
+# generate a list of sce objects
+for (i in 1:length(file_list)){
+    sce[[i]] <- readRDS(paste0("20231031_14-36_Doublet.dir/RDS_objects.dir/doublet_filtered/SingleCellExp/",file_list[i]))
+}
+sce
+```
+
+## Plot individual umaps
+
+```{r, fig.width = 12, fig.height=20}
+plot_list <- list()
+for (i in 1:length(sce)){
+    plot_list[[i]] <- plotReducedDim(sce[[i]], dimred = "umap", colour_by = "seurat_clusters")+
+            ggtitle(mainExpName(sce[[i]]))
+}
+plot_grid(plotlist = plot_list, ncol = 3)
+```
+Confirmed that UMAPs are the same as in the scVI script 
+
+## Plot individual PCAs
+
+```{r, fig.width = 12, fig.height=20}
+plot_list <- list()
+for (i in 1:length(sce)){
+    plot_list[[i]] <- plotReducedDim(sce[[i]], dimred = "pca", colour_by = "seurat_clusters")+
+            ggtitle(mainExpName(sce[[i]]))
+}
+plot_grid(plotlist = plot_list, ncol = 3)
+```
+Confirm these are the same as in the scVI script
+
+
+# Seurat
+
+Read in the same objects but in seurat format
+
+```{r}
+#make a list of sample files
+file_list <- list.files("20231031_14-36_Doublet.dir/RDS_objects.dir/doublet_filtered/Seurat/", pattern=".rds", recursive = TRUE)
+names(file_list) <- str_replace(file_list, "_doublet_filtered_SeuratObject.rds", "") 
+
+#Make a new list for the Seurat objects
+so <- list()
+
+# generate a list of Seurat objects
+for (i in 1:length(file_list)){
+    so[[i]] <- readRDS(paste0("20231031_14-36_Doublet.dir/RDS_objects.dir/doublet_filtered/Seurat/",file_list[i]))
+}
+so
+```
+## Plot individual umaps
+
+```{r, fig.width = 12, fig.height=20}
+plot_list <- list()
+for (i in 1:length(sce)){
+    plot_list[[i]] <- DimPlot(so[[i]], reduction = "umap", group.by = "seurat_clusters")+
+            ggtitle(so[[i]]@project.name)
+}
+plot_grid(plotlist = plot_list, ncol = 3)
+```
+Confirmed that UMAPs are the same as in the scVI script & SCE
+
+## Merge the objects
+
+```{r}
+so.merge <- merge(so[[1]], y = so[-c(1)], add.cell.ids = names(file_list))
+so.merge
+```
+
+Plot the PCA of the merged object
+First have to normalise etc as per the integration script. 
+
+
+```{r}
+so.merge <- so.merge %>% 
+           NormalizeData() %>%
+           FindVariableFeatures() %>% 
+           ScaleData() %>%
+           RunPCA()%>%
+           FindNeighbors() %>%
+           RunUMAP(dims = 1:20)
+```
+Plot PCA of merged data
+
+```{r}
+so.merge[[]]
+DimPlot(so.merge, reduction = "pca", group.by = c("orig.ident", "sex", "age", "nCount_RNA"))
+```
+

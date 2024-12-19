@@ -76,26 +76,22 @@ Okabe_Ito <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00",
 ma.cols <-  c(Enth = Okabe_Ito[3], MB = Okabe_Ito[5], MTJ = Okabe_Ito[6], muscle = Okabe_Ito[7])
 
 # achilles colours
-achilles.colours <- c(#"#E25822",  # NEGH1hi fib
-                      "#499999",  # Macrophages
+achilles.colours_0.1 <- c("#499999",  # Macrophages
                       "#F28E2B",  # VEC
-                      "#4E79A7",  # Slow-twitch
+                      "#4E79A7",  # Skeletal muscle
                       "#F3C300",  # Adipocytes
                       "#E68FAC",  # T cells
                       "#8DB600",  # Nerve
                       "#888888",  # LEC
                       "#A1CAF1",  # Mural
-                      "#BE0032",  # ITGA10hi fib
+                      "#BE0032",  # Fibroblasts
                       "#117733",  # Granulocytes
-                      "#332288",  # Transitional
-                      "#A55194",  # Fast-twitch
-                      "#661100",  # B cells
-                      "#a0785a")  # Satellite cells
+                      "#332288",  # Satellite cells
+                      "#a0785a",  # B plasma cells
+                      "#661100"  # B cells
+                    )  
 
-names(achilles.colours) <- c(#"NEGR1hi Fibroblasts", 
-    "Macrophages", "Vascular endothelial cells",  "Slow-twitch skeletal muscle cells",  "Adipocytes", "T cells", "Nervous system cells", "Lymphatic endothelial cells", "Mural cells", 
-    #"ITGA10hi Fibroblasts", 
-    "Fibroblasts", "Granulocytes", "Transitional skeletal muscle cells", "Fast-twitch skeletal muscle cells", "B cells", "Satellite cells")
+names(achilles.colours_0.1) <- c("Macrophages", "Vascular endothelial cells",  "Skeletal muscle cells",  "Adipocytes", "T cells", "Nervous system cells", "Lymphatic endothelial cells", "Mural cells", "Fibroblasts", "Granulocytes", "Satellite cells", "B plasma cells",  "B cells")
 
 ```
 
@@ -111,6 +107,7 @@ Read in Seurat object
 
 ```{r}
 so.achilles <- readRDS(paste0(ini$so_location, "/RDS_objects.dir/Achilles_integrated_annotated.rds"))
+Idents(so.achilles) <- so.achilles$cell_annotation_scVI_0.1
 so.achilles
 ```
 
@@ -123,6 +120,13 @@ if (ini$subset_muscle == TRUE){
 
 ```
 
+
+Plot the UMAP split by microanatomy
+
+```{r, fig.width=10, fig.height=8}
+DimPlot(so.achilles, split.by = "microanatomical_site", ncol = 2, reduction = "umap.scvi")
+ggsave(paste0(directory, "/Figures/UMAP_microanatomy.png"), width = 10, height = 8)
+```
 
 NB the following text from the script used to generate paper figures: 
 https://github.com/MarioniLab/milo_analysis_2020/blob/main/notebooks/mouse_thymus-figures_revision.Rmd  
@@ -142,6 +146,11 @@ Done following the vignette as I have done in the script miloR_vignette (on comp
 
 # Convert to single cell experiment object  
 sce <- as.SingleCellExperiment(so.achilles)
+
+# add the scvi dim reduction
+reducedDim(sce, "X_SCVI") <- Embeddings(so.achilles, "X_scVI") 
+# add the umap reduction
+reducedDim(sce, "UMAP.SCVI") <- Embeddings(so.achilles, "umap.scvi") 
 
 # Create a milo object
 achilles_milo <- Milo(sce)
@@ -276,14 +285,14 @@ ggsave(paste0(directory, "/Figures/Volcano_plot.png"), width = 6, height = 6, bg
 ggsave(paste0(directory, "/Figures/Volcano_plot.pdf"), width = 6, height = 6, bg = "white")
 ```
 
-#### Neighbourhood graph on Harmony UMAP projection 
+#### Neighbourhood graph on scVI UMAP projection 
 
 First build the neighbourhood graph, then plot it
 
 
 ```{r, warning=FALSE, message = FALSE, fig.height=5.95, fig.width=6.95}
 achilles_milo <- buildNhoodGraph(achilles_milo, overlap=5)
-p1 <- plotNhoodGraphDA(achilles_milo, layout="HARMONY.UMAP", milo_res=da_results, alpha=0.1)+
+p1 <- plotNhoodGraphDA(achilles_milo, layout="UMAP.SCVI", milo_res=da_results, alpha=0.1)+
     scale_fill_gradient2(low = "#00466B", mid = "#FFFFFF", high = "#A91400", midpoint = 0, name = "logFC")
 p1
 ggsave(paste0(directory, "/Figures/Neighbourhood_graph_DA.png"), width = 7, height = 6)
@@ -293,8 +302,8 @@ ggsave(paste0(directory, "/Figures/Neighbourhood_graph_DA.pdf"), width = 7, heig
 Do the same plot but colour by original cluster
 
 ```{r, fig.width=9, fig.height=6}
-p2 <- plotNhoodGraph(achilles_milo, layout="HARMONY.UMAP", colour_by=ini$cell_labels) +    
-    scale_fill_manual(values=achilles.colours) +
+p2 <- plotNhoodGraph(achilles_milo, layout="UMAP.SCVI", colour_by=ini$cell_labels) +    
+    scale_fill_manual(values=achilles.colours_0.1) +
     guides(fill=guide_legend(title="Cell type", override.aes=list(size=4)))
 p2
 ggsave(paste0(directory, "/Figures/Neighbourhood_graph_annotation.png"), width = 9, height = 6)
@@ -317,7 +326,7 @@ ggsave(paste0(directory, "/Figures/Neighbourhood_graphs.pdf"), width = 14, heigh
 
 ```{r, fig.width = 10, fig.height=5}
 ## Plot single-cell UMAP
-umap_pl <- plotReducedDim(achilles_milo, dimred = "HARMONY.UMAP", 
+umap_pl <- plotReducedDim(achilles_milo, dimred = "UMAP.SCVI", 
                           colour_by="microanatomical_site", 
                           text_by = ini$cell_labels, 
                           text_size = 3, point_size=0.5) +
@@ -326,7 +335,7 @@ umap_pl <- plotReducedDim(achilles_milo, dimred = "HARMONY.UMAP",
 
 ## Plot neighbourhood graph
 nh_graph_pl <- plotNhoodGraphDA(achilles_milo, da_results,
-                                layout="HARMONY.UMAP",alpha=0.1) +
+                                layout="UMAP.SCVI",alpha=0.1) +
     scale_fill_gradient2(low = "#00466B", mid = "#FFFFFF", high = "#A91400", midpoint = 0, name = "logFC")
   
 p <- plot_grid(umap_pl, nh_graph_pl)
@@ -389,18 +398,15 @@ da_results[[ini$cell_labels]] <- factor(da_results[[ini$cell_labels]],
                                                           "Nervous system cells", 
                                                            "Adipocytes", 
                                                           "Granulocytes", 
-                                                          "B cells", 
+                                                          "B plasma cells", 
+                                                          "B cells",
                                                           "T cells", 
                                                           "Macrophages", 
                                                           "Mural cells",
                                                           "Lymphatic endothelial cells", 
                                                           "Vascular endothelial cells", 
-                                                           "Satellite cells", 
-                                                          "Transitional skeletal muscle cells", 
-                                                          "Slow-twitch skeletal muscle cells",  
-                                                          "Fast-twitch skeletal muscle cells",
-                                                         # "NEGR1hi Fibroblasts", 
-                                                         # "ITGA10hi Fibroblasts"
+                                                          "Satellite cells", 
+                                                         "Skeletal muscle cells", 
                                                          "Fibroblasts"
                                                           ))
 
@@ -422,20 +428,17 @@ da_results_subset[[ini$cell_labels]] <- factor(da_results_subset[[ini$cell_label
                                                levels = c("Nervous system cells", 
                                                            "Adipocytes", 
                                                           "Granulocytes", 
+                                                          "B plasma cells",
                                                           "B cells", 
                                                           "T cells", 
                                                           "Macrophages", 
                                                           "Mural cells",
                                                           "Lymphatic endothelial cells", 
                                                           "Vascular endothelial cells", 
-                                                           "Satellite cells", 
-                                                          "Transitional skeletal muscle cells", 
-                                                          "Slow-twitch skeletal muscle cells",  
-                                                          "Fast-twitch skeletal muscle cells",
-                                                         # "NEGR1hi Fibroblasts", 
-                                                         # "ITGA10hi Fibroblasts"
+                                                          "Satellite cells", 
+                                                         "Skeletal muscle cells", 
                                                          "Fibroblasts"
-                                                          ))
+                                                         ))
 
 
 plotDAbeeswarm(da_results_subset, group.by = ini$cell_labels)+

@@ -78,40 +78,140 @@ ini
 
 #### Read in the sce from the SoupX workflow  
 
+For the Achilles data set, some samples use auto soupX correction and some manual soupX correction. 
+
+Sample	Which to use
+MSK0785-Ach-Enth	Adipocyte
+MSK0785-Ach-MB	Auto
+MSK0785-Ach-MTJ	Auto
+MSK0785-Ach-muscle	Auto
+MSK1250-Ach-Enth	Auto
+MSK1250-Ach-MB2	Muscle
+MSK1250-Ach-MTJ	Auto
+MSK1250-ACH-muscle	Fibroblast
+MSK1284-Ach-Enth	Fibroblast
+MSK1556-Ach-Enth	Adipocyte
+MSK1556-Ach-MB	Auto
+MSK1556-Ach-MTJ	Auto
+MSK1556-ACH-muscle	Fibroblast
+MSK1687-ACH-Enth	Adipocyte
+MSK1687-ACH-MB	Auto
+MSK1687-ACH-MTJ	Adipocyte
+MSK1691-ACH-Enth	Macrophage
+MSK1691-ACH-MB	Adipocyte
+MSK1691-ACH-MTJ	Auto
+
+Read in the sce objects & so from auto SoupX correction
+
 ```{r}
 
-# make a named vector of filtered sample files
+# make a named vector of soupX auto sample files
 
-file_list_sce <- list.files(paste0(ini$soupX_files, "_SoupX.dir/RDS_objects.dir/SingleCellExp/"), 
+file_list_auto_sce <- list.files(paste0(ini$soupX_auto_files, "_SoupX.dir/RDS_objects.dir/SingleCellExp/"), 
                                  pattern="_SingleCellExp.rds")
 
-names(file_list_sce) <- str_replace(file_list_sce, "_filtered_soupX_SingleCellExp.rds", "")
+names(file_list_auto_sce) <- str_replace(file_list_auto_sce, "_filtered_soupX_SingleCellExp.rds", "")
 
-file_list_so <- list.files(paste0(ini$soupX_files, "_SoupX.dir/RDS_objects.dir/Seurat/"), 
+file_list_auto_so <- list.files(paste0(ini$soupX_auto_files, "_SoupX.dir/RDS_objects.dir/Seurat/"), 
                                  pattern="SeuratObject.rds")
 
-names(file_list_so) <- str_replace(file_list_so, "_filtered_soupX_SeuratObject.rds", "")
+names(file_list_auto_so) <- str_replace(file_list_auto_so, "_filtered_soupX_SeuratObject.rds", "")
 
+# select the files to use from auto soupX correction
+
+files_to_keep <- c("MSK0785-Ach-MB", "MSK0785-Ach-MTJ", "MSK0785-Ach-muscle", "MSK1250-Ach-Enth", "MSK1250-Ach-MTJ", 
+                   "MSK1556-Ach-MB", "MSK1556-Ach-MTJ", "MSK1687-ACH-MB", "MSK1691-ACH-MTJ")
+positions <- match(files_to_keep, names(file_list_auto_sce))
+file_list_auto_sce <- file_list_auto_sce[positions]
+file_list_auto_so <- file_list_auto_so[positions]
+print ("Files from auto soupX correction")
+names(file_list_auto_sce)
 ```
 
 
-Read in the sce objects & so 
+
 
 ```{r, echo=FALSE}
 
-sce <- list()
-so <- list()
-for (i in 1:length(file_list_sce)){
+sce_auto <- list()
+so_auto <- list()
+for (i in 1:length(file_list_auto_sce)){
     
-    sce[[i]] <- readRDS(paste0(ini$soupX_files, 
+    sce_auto[[i]] <- readRDS(paste0(ini$soupX_auto_files, 
                                "_SoupX.dir/RDS_objects.dir/SingleCellExp/",
-                                                file_list_sce[i]))
-    so[[i]] <- readRDS(paste0(ini$soupX_files, 
+                                                file_list_auto_sce[i]))
+    so_auto[[i]] <- readRDS(paste0(ini$soupX_auto_files, 
                                "_SoupX.dir/RDS_objects.dir/Seurat/",
-                                                file_list_so[i]))
+                                                file_list_auto_so[i]))
 }
 
 ```
+
+Read in files from manual soupX correction 
+
+```{r}
+
+# make a named vector of soupX manual sample files
+
+file_list_manual_sce <- list.files(paste0(ini$soupX_manual_files, "_SoupX.dir/RDS_objects.dir/SingleCellExp/"), 
+                                 pattern="_SingleCellExp.rds")
+
+names(file_list_manual_sce) <- str_replace(file_list_manual_sce, "_filtered_soupX_SingleCellExp.rds", "")
+
+file_list_manual_so <- list.files(paste0(ini$soupX_manual_files, "_SoupX.dir/RDS_objects.dir/Seurat/"), 
+                                 pattern="SeuratObject.rds")
+
+names(file_list_manual_so) <- str_replace(file_list_manual_so, "_filtered_soupX_SeuratObject.rds", "")
+
+# select the files to use from manual soupX correction
+
+files_to_keep <- c("MSK0785-Ach-Enth", "MSK1250-Ach-MB2", "MSK1250-ACH-muscle", 
+                   "MSK1284-Ach-Enth", "MSK1556-Ach-Enth", "MSK1556-ACH-muscle", 
+                   "MSK1687-ACH-Enth", "MSK1687-ACH-MTJ", "MSK1691-ACH-Enth", 
+                   "MSK1691-ACH-MB")
+
+positions <- match(files_to_keep, names(file_list_manual_sce))
+file_list_manual_sce <- file_list_manual_sce[positions]
+file_list_manual_so <- file_list_manual_so[positions]
+print ("Files from manual soupX correction")
+names(file_list_manual_sce)
+```
+
+```{r, echo=FALSE}
+
+sce_manual <- list()
+so_manual <- list()
+for (i in 1:length(file_list_manual_sce)){
+    
+    sce_manual[[i]] <- readRDS(paste0(ini$soupX_manual_files, 
+                               "_SoupX.dir/RDS_objects.dir/SingleCellExp/",
+                                                file_list_manual_sce[i]))
+    so_manual[[i]] <- readRDS(paste0(ini$soupX_manual_files, 
+                               "_SoupX.dir/RDS_objects.dir/Seurat/",
+                                                file_list_manual_so[i]))
+}
+
+```
+
+
+Combine the two lists
+
+```{r}
+sce <- c(sce_auto, sce_manual)
+so <- c(so_auto, so_manual)
+rm (sce_auto, sce_manual, so_auto, so_manual)
+```
+
+
+Update the metadata of the sce to include soupX_fraction
+
+```{r}
+for (i in 1:length(sce)){
+    colData(sce[[i]])$soupX_fraction <- so[[i]]$soupX_fraction
+}
+
+```
+
 
 ## Doublet detection  
 
@@ -522,8 +622,10 @@ Plot side by side for each sample
 - decontX on UMAP
 - decontX Vln
 - doublet on UMAP
+- soupX Vln
+- soupX on UMAP
 
-```{r, fig.width=14, fig.height=16, message = FALSE}
+```{r, fig.width=14, fig.height=20, message = FALSE}
 if (ini$doublet_filter == TRUE){
 
 plot_list <- list()
@@ -611,6 +713,18 @@ for (i in 1:length (sce_filter_doublet)){
         scale_colour_viridis_d(begin = 0, end = 0.75)+
         ggtitle("Doublet detection")
     
+        # soupX score
+    p_list[[11]] <- plotReducedDim(sce_filter_doublet[[i]], dimred = "umap", 
+               colour_by = "soupX_fraction")+
+        ggtitle("SoupX contamination")
+    
+
+    # soupX distribution
+    p_list[[12]] <- plotColData(sce_filter_doublet[[i]], x = "sample", y = "soupX_fraction", 
+                               colour = "sample")+
+        scale_colour_viridis_d()+
+        theme(legend.position = "none")+
+        ggtitle("SoupX distribution")
     
     title <- ggdraw() + 
         draw_label(paste0(mainExpName(sce_filter_doublet[[i]]), ": ", ncol(sce_filter_doublet[[i]]), " cells"), 
@@ -619,7 +733,8 @@ for (i in 1:length (sce_filter_doublet)){
     p2 <-  plot_grid(plotlist = p_list[4:5], ncol = 2)
     p3 <-  plot_grid(plotlist = p_list[6:7], ncol = 2)
     p4 <-  plot_grid(plotlist = p_list[8:10], ncol = 3)
-    plot_list[[i]] <- plot_grid(title, p1, p2, p3, p4, ncol=1, rel_heights=c(0.1, 1, 1, 1, 1))
+    p5 <- plot_grid(plotlist = p_list[11:12], ncol = 2)
+    plot_list[[i]] <- plot_grid(title, p1, p2, p3, p4, p5, ncol=1, rel_heights=c(0.1, 1, 1, 1, 1, 1))
     
 }
 }
@@ -634,7 +749,7 @@ for (i in 1:length(plot_list)){
                       mainExpName(sce_filter_doublet[[i]]), 
                       "_qc_summary.", ini$file_type), 
                plot = plot_list[[i]],
-            device = ini$file_type, width = 14, height = 16, bg = "white")
+            device = ini$file_type, width = 14, height = 20, bg = "white")
     }
 
 }

@@ -1,0 +1,156 @@
+---
+title: "Explore soupX correction"
+author: "Carla Cohen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+Want to look at the soupX correction of Achilles data and decide which one to use. 
+
+Read in the data
+
+Original soupX correction
+
+```{r}
+so.original <- readRDS("20240514_17-23_Final_annotation.dir/RDS_objects.dir/Achilles_integrated_annotated.rds")
+```
+
+
+Recent stringent soupX correction
+```{r}
+so.stringent <- readRDS("20240717_22-04_Annotation_update.dir/RDS_objects.dir/Achilles_integrated_annotated_0.2.rds")
+# add the idents as a column of metadata
+so.stringent$cell_annotation_0.2 <- Idents(so.stringent)
+so.stringent
+```
+Plot updated general markers
+
+```{r, fig.height=10, fig.width=8}
+plot_updated_markers <- function (so, resolution, assay, type){
+    p <- DotPlot(so, 
+             features =c("COL1A1", "COL1A2", "COL3A1", "DCN",
+              "HMCN1", "NEGR1", "DCLK1", "KAZN", "BICC1", "PRICKLE1",
+              "CLU", "COMP", "MMP3", "NOVA1", "CILP", "FBLN1", "PRG4",
+              "TRDN", "TTN", "NEB", "TNNT1", "LGR5", "ATP2A2",
+              "PECAM1", "PTPRB", "FLT1", "VWF",
+              "PTPRC", "F13A1", "CD163", "MRC1", "MSR1",
+              "PLIN1", "AQP7", "ADIPOQ",
+              "NOTCH3", "PDGFRB", "MYO1B",
+              "TNNT3", "MYH1", "MYH3",
+              "CD247", "SKAP1", "THEMIS",
+              "MMRN1", "PROX1", "PKHD1L1",
+              "PAX7",
+              "KIT", "CPA3", "IL18R1",
+              "MS4A1", "CD37", "BLNK",
+              "IL1RAPL2", "XKR4", "NRXN1",
+                "ASPM", "DIAPH3", "TOP2A"),
+             assay = assay) + 
+    scale_colour_viridis(direction = -1) +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+    ggtitle(paste0("Updated markers: ", type, ", ", assay)) + 
+    coord_flip()
+    
+    p
+}
+plot_updated_markers(so.original, 0.2, "soupX", "original")
+plot_updated_markers(so.original, 0.2, "RNA", "original")
+plot_updated_markers(so.stringent, 0.2, "soupX", "stringent")
+plot_updated_markers(so.stringent, 0.2, "RNA", "stringent")
+
+```
+Plot specific muscle subtype genes
+
+```{r, fig.height=12, fig.width=14}
+plot_muscle_markers <- function (so, resolution, assay, type){
+    p1 <- DotPlot(so, 
+             features =c("TRDN", "DES", "ACTN2"),
+             assay = assay) + 
+    scale_colour_viridis(direction = -1) +
+        theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+    ggtitle("General Muscle markers") + 
+    coord_flip()
+    
+    p2 <- DotPlot(so, 
+             features =c("TNNC2", "TNNI2", "TNNT3", "ACTN3", "HOMER1", "KCNQ5", "MYH1", "MYH3", "MYLK4", "MYBPC2"),
+             assay = assay) + 
+    scale_colour_viridis(direction = -1) +
+        theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+    ggtitle("Fast twitch markers") + 
+        coord_flip()
+    
+    p3 <- DotPlot(so, 
+             features =c("COL22A1", "ADAMTSL1", "CPM", "CSMD1", "FRAS1", "PZP", "RALYL", "SAMD5", "SORBS2", "SPAG16"),
+             assay = assay) + 
+    scale_colour_viridis(direction = -1) +
+        theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+    ggtitle("Transitional markers") + 
+    coord_flip()
+    
+    p4 <- DotPlot(so, 
+             features =c("TNNC1", "TNNI1", "TNNT1", "ATP2A2", "CCR3", "LGR5", "MYH7", "MYH7B", "NEK10", "TECRL"),
+             assay = assay) + 
+    scale_colour_viridis(direction = -1) +
+        theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+    ggtitle("Slow twitch markers") + 
+    coord_flip()
+    
+    #add an overall title and arrange the graphs on one page
+    title_text <- paste0("Muscle markers: ", type, ", ", assay)
+    title <- ggdraw() + draw_label(title_text, fontface='bold', size = 16)
+    p <- plot_grid(p1, p2, p3, p4, ncol = 2)
+    p <- plot_grid(title, p, ncol=1, rel_heights=c(0.05, 1))
+    
+    p
+}
+plot_muscle_markers(so = so.original, resolution = 0.2, assay = "soupX", type= "original")
+plot_muscle_markers(so.original, 0.2, "RNA", "original")
+plot_muscle_markers(so.stringent, 0.2, "soupX", "stringent")
+plot_muscle_markers(so.stringent, 0.2, "RNA", "stringent")
+
+```
+
+Plot muscle markers split by tendon region
+
+Fast-twitch markers
+
+```{r, fig.height=10, fig.width=12}
+plot_fast_twitch_split <- function (so, resolution, assay, type){
+    p <- DotPlot(so, 
+             features = c("TNNC2", "TNNI2", "TNNT3", "ACTN3", "HOMER1", "KCNQ5", "MYH1", "MYH3", "MYLK4", "MYBPC2"),
+             assay = assay, 
+             split.by = "microanatomical_site", 
+             cols = c("orange", "blue", "purple", "darkgreen")) + 
+    #scale_colour_viridis(direction = -1) +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+    ggtitle(paste0("Fast twitch markers: ", type, ", ", assay)) 
+    
+    p
+}
+plot_fast_twitch_split(so.original, 0.2, "soupX", "original")
+plot_fast_twitch_split(so.original, 0.2, "RNA", "original")
+plot_fast_twitch_split(so.stringent, 0.2, "soupX", "stringent")
+plot_fast_twitch_split(so.stringent, 0.2, "RNA", "stringent")
+
+```
+
+Slow-twitch markers
+
+```{r, fig.height=10, fig.width=12}
+plot_slow_twitch_split <- function (so, resolution, assay, type){
+    p <- DotPlot(so, 
+             features = c("TNNC1", "TNNI1", "TNNT1", "ATP2A2", "CCR3", "LGR5", "MYH7", "MYH7B", "NEK10", "TECRL"),
+             assay = assay, 
+             split.by = "microanatomical_site", 
+             cols = c("orange", "blue", "purple", "darkgreen")) + 
+    #scale_colour_viridis(direction = -1) +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+    ggtitle(paste0("Fast twitch markers: ", type, ", ", assay)) 
+    
+    p
+}
+plot_slow_twitch_split(so.original, 0.2, "soupX", "original")
+plot_slow_twitch_split(so.original, 0.2, "RNA", "original")
+plot_slow_twitch_split(so.stringent, 0.2, "soupX", "stringent")
+plot_slow_twitch_split(so.stringent, 0.2, "RNA", "stringent")
+
+```

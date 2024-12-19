@@ -35,7 +35,7 @@ library(cowplot)
 library(pheatmap)
 library(yaml)
 library(svglite)
-
+options(bitmapType='cairo')
 # make a new output folder for each run, with the date & time in the directory name
 date <- Sys.Date() %>% str_replace_all("-", "")
 time <- format(Sys.time(), "%X") %>% str_replace_all(":", "-") %>%
@@ -73,68 +73,17 @@ ini
 Read in Seurat object
 
 ```{r}
-# If using 2 fibroblast types
-# so.achilles <- readRDS("20240119_11-02_Fine_annotation.dir/RDS_objects.dir/Achilles_integrated_annotated.rds")
 
-# If using 1 fibroblast type
-so.achilles <- readRDS("20240514_17-23_Final_annotation.dir/RDS_objects.dir/Achilles_integrated_annotated.rds")
-```
-Simplify cell names
-
-```{r}
-# If using 2 fibroblast subsets 
-#df <- data.frame("cell_annotation_update" = unique( so.achilles$cell_annotation_update))
-#df$cell_annotation <- c("Adipocyte", 
-#                        "Mural", 
-#                        "ITGA10Fibroblasts", 
-#                        "VEC", 
-#                        "NEGR1Fibroblasts", 
-#                        "Macrophages", 
-#                        "Tcells", 
-#                        "LEC", 
-#                        "Slowtwitch", 
-#                        "Nerve", 
-#                        "Fasttwitch", 
-#                        "Granulocytes", 
-#                        "Satellite", 
-#                        "Transitionalmuscle", 
-#                        "Bcells")
-#df
-
-#cell_annotation <- left_join(so.achilles[[]], df)
-#rownames(cell_annotation) <- colnames(so.achilles)
-#cell_annotation <- cell_annotation %>% select("cell_annotation")
-
-#so.achilles <- AddMetaData(so.achilles, metadata = cell_annotation, col.name = "cell_annotation")
+so.achilles <- readRDS("20241106_11-56_Final_annotation.dir/RDS_objects.dir/Achilles_integrated_annotated.rds")
 ```
 
+Simplify cell names by removing non-alphanumeric characters and spaces
+
 ```{r}
-# If using 1 fibroblast subset 
+column <- paste0("cell_annotation_scVI_", ini$resolution)
+so.achilles$cell_annotation_pseudobulk <- str_replace_all(so.achilles[[column]][, 1], " ", "") 
+so.achilles$cell_annotation_pseudobulk <- str_replace(so.achilles$cell_annotation_pseudobulk, "\\+", "hi")
 
-df <- data.frame("cell_annotation_combine_fibroblasts" = unique( so.achilles$cell_annotation_combine_fibroblasts))
-df$cell_annotation <- c("Adipocyte", 
-                        "Mural", 
-                        "Fibroblast", 
-                        "VEC", 
-                        "Macrophages", 
-                        "Tcells", 
-                        "LEC", 
-                        "Slowtwitch", 
-                        "Nerve", 
-                        "Fasttwitch", 
-                        "Granulocytes", 
-                        "Satellite", 
-                        "Transitionalmuscle", 
-                        "Bcells")
-df
-
-cell_annotation <- left_join(so.achilles[[]], df)
-rownames(cell_annotation) <- colnames(so.achilles)
-cell_annotation <- cell_annotation %>% select("cell_annotation")
-
-so.achilles <- AddMetaData(so.achilles, metadata = cell_annotation, col.name = "cell_annotation")
-
-so.achilles[[]]
 ```
 
 
@@ -152,8 +101,8 @@ Plot UMAP for reference
 
 ```{r, fig.width=8, fig.height=10}
 # visualise the distribution of clusters based on sample (patient) 
-cell_plot <- DimPlot(so.achilles, reduction = 'harmony.umap', group.by = 'cell_annotation', label = TRUE)
-cond_plot <- DimPlot(so.achilles, reduction = 'harmony.umap', group.by = 'sample', shuffle = TRUE)
+cell_plot <- DimPlot(so.achilles, reduction = 'umap.scvi', group.by = 'cell_annotation_pseudobulk', label = TRUE)
+cond_plot <- DimPlot(so.achilles, reduction = 'umap.scvi', group.by = 'sample', shuffle = TRUE)
 plot_grid(cell_plot, cond_plot, ncol = 1)
 ```
 
@@ -168,7 +117,7 @@ We want to pseudobulk using sample and microanatomy information. We already have
 
 #Aggregation of counts to sample level per cell type
 cts <- AggregateExpression(so.achilles, 
-                    group.by = c("cell_annotation", "sample"),
+                    group.by = c("cell_annotation_pseudobulk", "sample"),
                     assays = 'soupX',
                     slot = "counts",
                     return.seurat = FALSE)
@@ -197,6 +146,13 @@ for (i in 1:length(names(cts.split))){
 }
 
 names(counts_list) <- names(cts.split)
+
+# filter samples: keep only those that express more than 1000 genes
+for (i in 1:length(names(cts.split))){
+    keep <- colSums(counts_list[[i]]) >= 1000
+    counts_list[[i]] <- counts_list[[i]][, keep]
+}
+
 ```
 
 ### Generate sample level metadata 
@@ -209,10 +165,12 @@ colData <- data.frame(sample = unique(so.achilles[["sample"]]))
 colData <- left_join(colData, so.achilles[[]], keep = FALSE, multiple = "first") %>% 
     select(sample, patient, microanatomical_site, sequencing_date, sex)
 rownames(colData) <- colData$sample
-colData
+#colData
 
 ```
 ## Check if there are enough replicates to run DEseq2
+Each microanatomical site should include cells from at least 3 donors
+Each of these donors should express at least 1000 genes in that cell type (otherwise causes problems later)
 
 ```{r}
 find_celltypes_to_run <- function(celltype){
@@ -352,7 +310,6 @@ for (i in 1:length(celltypes_list)){
 names(DEseq2_results_cells_Enth) <- celltypes_list
 names(DEseq2_results_cells_MTJ) <- celltypes_list
 ```
-
 Save the files
 
 ```{r}
@@ -539,7 +496,7 @@ calc_clusters <- function(results_obj, celltype){
     # Get number of significant genes
     print(paste0(celltype, " has ", nrow(res_LRT_tb), " significant genes"))
 
-    if (nrow(res_LRT_tb) > 15) {
+    if (nrow(res_LRT_tb) > 30) {
         # Obtain rlog values for those significant genes
     rld <- rlog(dds, blind=FALSE)
     rld_mat <- assay(rld)
@@ -560,6 +517,7 @@ for (i in 1:length(celltypes_list)){
 }
 names(clusters_list) <- celltypes_list
 ```
+
 
 Save the cluster outputs
 ```{r}
@@ -913,7 +871,7 @@ build_summary <- function (DEseq2_results, ref_site){
             res_filt = na.omit(DEseq2_results[[i]][results_name]) %>% as.data.frame()
             colnames(res_filt) <- c("baseMean", "log2FolChange", "lfcSE", "stat", "pvalue", "padj")
             res_filt_upregulated <- res_filt %>% filter(padj < 0.05 & log2FolChange > 1) %>% nrow()
-            print(res_filt_upregulated)
+            #print(res_filt_upregulated)
             res_filt_downregulated <- res_filt %>% filter(padj < 0.05 & log2FolChange < 1) %>% nrow()
             df[j,] <- c(names(DEseq2_results[i]), comparisons[j], res_filt_upregulated, 
                         res_filt_downregulated, sum(res_filt_downregulated, res_filt_upregulated)
@@ -942,19 +900,19 @@ Plot the summary of results
 DE_Enth.long <- DE_Enth %>% pivot_longer(3:5, values_to = "count", names_to = "type")
 # merge column for cell annotation & comparison
 DE_Enth.long <- DE_Enth.long %>% mutate (cell_annotation_comparison = paste(cell_annotation, comparison, sep = "_"))
-DE_Enth.long
-
+# make "count" an integer
+DE_Enth.long$count <- as.integer(DE_Enth.long$count)
+# DE_Enth.long
 DE_Enth.long$cell_annotation_comparison <- factor(DE_Enth.long$cell_annotation_comparison, 
-                                 levels = c("Fibroblast_MBvsEnth", "Fibroblast_MTJvsEnth", "Fibroblast_musclevsEnth", 
-                                            "Fasttwitch_MBvsEnth", "Fasttwitch_MTJvsEnth", "Fasttwitch_musclevsEnth", 
-                                            "Slowtwitch_MBvsEnth", "Slowtwitch_MTJvsEnth", "Slowtwitch_musclevsEnth" , 
-                                            "Adipocyte_MBvsEnth", "Adipocyte_MTJvsEnth", "Adipocyte_musclevsEnth",
-                                            "VEC_MBvsEnth", "VEC_MTJvsEnth", "VEC_musclevsEnth", 
-                                            "LEC_MBvsEnth", "LEC_MTJvsEnth", "LEC_musclevsEnth", 
-                                            "Mural_MBvsEnth", "Mural_MTJvsEnth", "Mural_musclevsEnth", 
-                                            "Granulocytes_MBvsEnth", "Granulocytes_MTJvsEnth", "Granulocytes_musclevsEnth", 
+                                 levels = c("Fibroblasts_MBvsEnth", "Fibroblasts_MTJvsEnth", "Fibroblasts_musclevsEnth", 
+                                            "Adipocytes_MBvsEnth", "Adipocytes_MTJvsEnth", "Adipocytes_musclevsEnth",
+                                            "Skeletalmusclecells_MBvsEnth", "Skeletalmusclecells_MTJvsEnth", "Skeletalmusclecells_musclevsEnth",
+                                            "Muralcells_MBvsEnth", "Muralcells_MTJvsEnth", "Muralcells_musclevsEnth",
+                                            "Vascularendothelialcells_MBvsEnth", "Vascularendothelialcells_MTJvsEnth", "Vascularendothelialcells_musclevsEnth", 
                                             "Macrophages_MBvsEnth", "Macrophages_MTJvsEnth", "Macrophages_musclevsEnth", 
-                                            "Tcells_MBvsEnth", "Tcells_MTJvsEnth", "Tcells_musclevsEnth")
+                                            "Granulocytes_MBvsEnth", "Granulocytes_MTJvsEnth", "Granulocytes_musclevsEnth", 
+                                            "Tcells_MBvsEnth", "Tcells_MTJvsEnth", "Tcells_musclevsEnth",
+                                            "Lymphaticendothelialcells_MBvsEnth", "Lymphaticendothelialcells_MTJvsEnth", "Lymphaticendothelialcells_musclevsEnth")
 )
 
 ```
@@ -969,7 +927,7 @@ ggplot(DE_Enth.long, aes(x = cell_annotation_comparison, y = count))+
     scale_colour_manual(values = c("MBvsEnth" = comparison.cols[1], "MTJvsEnth" = comparison.cols[2], "musclevsEnth"=comparison.cols[3]))+
     theme(axis.title.x = element_blank())+
     ylab("Number of differentially expressed genes")+
-    theme(axis.text.y = element_text(size = 12, colour = "black"))+
+   # theme(axis.text.y = element_text(size = 12, colour = "black"))+
     theme(axis.title.y = element_text(size = 12, colour = "black"))
 ggsave(paste0(directory, "/Number_DEgenes_vs_Enth.png"), width = 12, height = 6)
 ggsave(paste0(directory, "/Number_DEgenes_vs_Enth.png"), width = 12, height = 6)
@@ -982,20 +940,19 @@ How many DE genes were in each cell type compared to MTJ?
 DE_MTJ.long <- DE_MTJ %>% pivot_longer(3:5, values_to = "count", names_to = "type")
 # merge column for cell annotation & comparison
 DE_MTJ.long <- DE_MTJ.long %>% mutate (cell_annotation_comparison = paste(cell_annotation, comparison, sep = "_"))
-DE_MTJ.long
-
+DE_MTJ.long$count <- as.integer(DE_MTJ.long$count)
+# DE_Enth.long
 DE_MTJ.long$cell_annotation_comparison <- factor(DE_MTJ.long$cell_annotation_comparison, 
-                                 levels = c("Fibroblast_EnthvsMTJ", "Fibroblast_MBvsMTJ", "Fibroblast_musclevsMTJ",
-                                            "Fasttwitch_EnthvsMTJ", "Fasttwitch_MBvsMTJ", "Fasttwitch_musclevsMTJ", 
-                                            "Slowtwitch_EnthvsMTJ", "Slowtwitch_MBvsMTJ", "Slowtwitch_musclevsMTJ",
-                                            "Adipocyte_EnthvsMTJ", "Adipocyte_MBvsMTJ", "Adipocyte_musclevsMTJ", 
-                                            "VEC_EnthvsMTJ", "VEC_MBvsMTJ", "VEC_musclevsMTJ", 
-                                            "LEC_EnthvsMTJ", "LEC_MBvsMTJ", "LEC_musclevsMTJ", 
-                                            "Mural_EnthvsMTJ", "Mural_MBvsMTJ", "Mural_musclevsMTJ", 
-                                            "Granulocytes_EnthvsMTJ","Granulocytes_MBvsMTJ", "Granulocytes_musclevsMTJ", 
-                                            "Macrophages_EnthvsMTJ", "Macrophages_MBvsMTJ" , "Macrophages_musclevsMTJ", 
-                                            "Tcells_EnthvsMTJ", "Tcells_MBvsMTJ", "Tcells_musclevsMTJ"))
-
+                                 levels = c("Fibroblasts_EnthvsMTJ", "Fibroblasts_MBvsMTJ", "Fibroblasts_musclevsMTJ", 
+                                            "Adipocytes_EnthvsMTJ", "Adipocytes_MBvsMTJ", "Adipocytes_musclevsMTJ",
+                                            "Skeletalmusclecells_EnthvsMTJ", "Skeletalmusclecells_MBvsMTJ", "Skeletalmusclecells_musclevsMTJ",
+                                            "Muralcells_EnthvsMTJ", "Muralcells_MBvsMTJ", "Muralcells_musclevsMTJ",
+                                            "Vascularendothelialcells_EnthvsMTJ", "Vascularendothelialcells_MBvsMTJ", "Vascularendothelialcells_musclevsMTJ", 
+                                            "Macrophages_EnthvsMTJ", "Macrophages_MBvsMTJ", "Macrophages_musclevsMTJ", 
+                                            "Granulocytes_EnthvsMTJ", "Granulocytes_MBvsMTJ", "Granulocytes_musclevsMTJ", 
+                                            "Tcells_EnthvsMTJ", "Tcells_MBvsMTJ", "Tcells_musclevsMTJ",
+                                            "Lymphaticendothelialcells_EnthvsMTJ", "Lymphaticendothelialcells_MBvsMTJ", "Lymphaticendothelialcells_musclevsMTJ")
+)
 ```
 
 ```{r, fig.width=12, fig.height=6}

@@ -245,7 +245,7 @@ for (i in unique(mouse_achilles$subpopulation)){
     if (i != "Nerve cells 2"){ # this cell type doesn't work as no genes are found in the so
         mouse_achilles_top50[[i]] <- mouse_achilles %>% 
         group_by(subpopulation) %>% 
-        slice_max(n=50, order_by = desc(p_val_adj)) %>% 
+        slice_max(n=50, order_by = dplyr::desc(p_val_adj)) %>% 
         filter(subpopulation == i) %>%
         pull (gene) %>%
     # convert to capital letters
@@ -1775,8 +1775,9 @@ DotPlot(so.fibroblasts,
     ggtitle("Cluster_0v2") + 
     theme(plot.title = element_text(size = 14, face = "bold"))+
     theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+coord_flip()
-    ggsave(paste0(directory, "/Top_9_Dotplots/Cluster_0v2.png"), width = 7, height =7, bg = "white")
+    ggsave(paste0(directory, "/Top_20_Dotplots/Cluster_0v2.png"), width = 7, height =7, bg = "white")
 ```
+
 ```{r}
 markers_2v0 <- FindMarkers(so.fibroblasts, assay = "soupX", ident.1 = "2", ident.2 = "0", 
                            only.pos = TRUE, min.pct = 0.25)
@@ -1795,7 +1796,7 @@ DotPlot(so.fibroblasts,
     ggtitle("Cluster_2v0") + 
     theme(plot.title = element_text(size = 14, face = "bold"))+
     theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+coord_flip()
-    ggsave(paste0(directory, "/Top_9_Dotplots/Cluster_2v0.png"), width = 7, height =7, bg = "white")
+    ggsave(paste0(directory, "/Top_20_Dotplots/Cluster_2v0.png"), width = 7, height =7, bg = "white")
 ```
 
 
@@ -1818,7 +1819,7 @@ DotPlot(so.fibroblasts,
     ggtitle("Cluster_2v6") + 
     theme(plot.title = element_text(size = 14, face = "bold"))+
     theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+coord_flip()
-    ggsave(paste0(directory, "/Top_9_Dotplots/Cluster_2v6.png"), width = 7, height =7, bg = "white")
+    ggsave(paste0(directory, "/Top_20_Dotplots/Cluster_2v6.png"), width = 7, height =7, bg = "white")
 ```
 CFD, MIR3171HG
 

@@ -50,9 +50,21 @@ ini
 Read in the Seurat object
 
 ```{r}
+if (ini$integration_method == "harmony" & ini$cluster_method == "louvain"){
+    print("harmony, louvain")
+    so <- readRDS(paste0(ini$integration_date, "_Integration.dir/RDS_objects.dir/Achilles_harmony_SeuratObject.rds"))
+} else if (ini$integration_method == "scVI" & ini$cluster_method == "louvain"){
+    print("scVI, louvain")
+    so <- readRDS(paste0(ini$integration_date, "_Integration-scvi-visualisation.dir/RDS_objects.dir/Achilles_harmony_scvi_SeuratObject.rds"))
+} else if (ini$integration_method == "harmony" & ini$cluster_method == "leiden"){
+    print("harmony, leiden")
+    so <- readRDS(paste0(ini$integration_date, "_Cluster_leiden.dir/RDS_objects.dir/Achilles_harmony_SeuratObject.rds"))
+} else if (ini$integration_method == "scVI" & ini$cluster_method == "leiden"){
+    print("scVI, leiden")
+    so <- readRDS(paste0(ini$integration_date, "_Cluster_leiden.dir/RDS_objects.dir/Achilles_harmony_SeuratObject.rds"))
+}
 
-so.harmony <- readRDS(paste0(ini$integration_date, "_Integration.dir/RDS_objects.dir/Achilles_harmony_SeuratObject.rds"))
-so.harmony
+so
 
 ```
 
@@ -96,11 +108,23 @@ if (ini$normalisation_method == "SCTransform"){
     }    
 }
  
+if (ini$integration_method == "harmony"){
+    integrated_umap_name <-  "harmony.umap"
+} else if (ini$integration_method == "scVI"){
+    integrated_umap_name <-  "umap.scvi"
+}
+
+if (ini$integration_method == "harmony" & ini$cluster_method == "leiden"){
+    res_prefix <- "leiden_soupX_snn_res." 
+} else if (ini$integration_method == "scVI" & ini$cluster_method == "leiden"){
+    res_prefix <- "leiden_X_scVI_snn_res." 
+}
 
 print(ini$normalisation_method) 
 print(pca_name)
 print(umap_name)
 print(res_prefix)
+print(integrated_umap_name)
 ```
 
 ### Normalisation
@@ -112,15 +136,15 @@ Here we need to find variable features and perform scaling for downstream visual
 
 if (ini$normalisation_method == "SCTransform"){
     
-    DefaultAssay(so.harmony) <- "RNA"
-    so.harmony <- so.harmony %>% 
+    DefaultAssay(so) <- "RNA"
+    so <- so %>% 
            FindVariableFeatures(nfeatures = 3000) %>% 
            ScaleData() 
-    DefaultAssay(so.harmony) <- "SCT"
+    DefaultAssay(so) <- "SCT"
     
     # save the updated objects
     dir.create(paste0(directory, "RDS_objects.dir/SCTransform/"))
-    saveRDS(so.harmony, 
+    saveRDS(so, 
             paste0(directory, "/RDS_objects.dir/SCTransform/Achilles_integrated_SCT.rds"))
 }
 
@@ -132,18 +156,17 @@ if (ini$normalisation_method == "SCTransform"){
 Annotation at resolution 0.1
 
 ```{r}
-
 # set a resolution
 resolution <- 0.1
-so.harmony[["seurat_clusters"]] <- so.harmony[[paste0(res_prefix, resolution)]]
-Idents(so.harmony) <- so.harmony[[paste0(res_prefix, resolution)]]
-levels(Idents(so.harmony))
+so[["seurat_clusters"]] <- so[[paste0(res_prefix, resolution)]]
+Idents(so) <- so[[paste0(res_prefix, resolution)]]
+levels(Idents(so))
 ```
 
 ## Plot the UMAP at the chosen resolution  
 
 ```{r}
-p <- DimPlot(object = so.harmony, label = TRUE, reduction = "harmony.umap", shuffle = TRUE)+
+p <- DimPlot(object = so, label = TRUE, reduction = integrated_umap_name, shuffle = TRUE)+
     ggtitle(paste0("UMAP at resolution ", resolution))
 p
 ```
@@ -167,7 +190,7 @@ dir.create(paste0(directory, "/Marker_lists/"), showWarnings = FALSE)
 
 
 
-markers <-  FindAllMarkers(so.harmony,
+markers <-  FindAllMarkers(so,
                            assay = ini$markers_assay,
                            only.pos = ini$only_pos, 
                            min.pct = ini$min_pct, 
@@ -199,7 +222,7 @@ Plot the top 10 markers as a dotplot
 
 ```{r, fig.height=20, fig.width=8, message = FALSE}
 
-p <- DotPlot(so.harmony,
+p <- DotPlot(so,
              features = unique(top10markers$gene),
              assay = ini$normalisation_assay) + 
     scale_colour_viridis(direction = -1) + 
@@ -223,10 +246,10 @@ Use the top 10 genes to plot a heatmap
 
 ```{r, fig.height=16, fig.width=8}
 
-p <- DoHeatmap(subset(so.harmony, downsample = 500), # randomly select cells from each cluster, otherwise it's too big to plot
+p <- DoHeatmap(subset(so, downsample = 500), # randomly select cells from each cluster, otherwise it's too big to plot
                features = unique(top10markers$gene),
                assay = ini$normalisation_assay) + 
-        scale_fill_viridis()+ 
+        scale_fill_viridis()+
         ggtitle(paste0("Heatmap of top 10 markers at resolution ", resolution))
 
 p
@@ -248,7 +271,7 @@ Plots some general markers
 ```{r, fig.width=10, fig.height=20}
 
 plot_general_markers <- function (so, resolution){
-    p <- DotPlot(so.harmony, 
+    p <- DotPlot(so, 
              features = c("COL1A1", "COL1A2", "COL3A1", "DCN",
               "HMCN1", "NEGR1", "DCLK1", "KAZN", "BICC1", "PRICKLE1",
               "CLU", "COMP", "MMP3", "NOVA1", "CILP", "FBLN1", "PRG4",
@@ -276,7 +299,7 @@ plot_general_markers <- function (so, resolution){
 p
 }
 
-plot_general_markers(so.harmony, 0.1)
+plot_general_markers(so, 0.1)
 ```
 
 ```{r}
@@ -293,7 +316,7 @@ Plot some more refined markers after Jolet has discarded those that are not expr
 
 ```{r, fig.height=10, fig.width=8}
 plot_updated_markers <- function (so, resolution){
-    p <- DotPlot(so.harmony, 
+    p <- DotPlot(so, 
              features =c("COL1A1", "COL1A2", "COL3A1", "DCN",
               "HMCN1", "NEGR1", "DCLK1", "KAZN", "BICC1", "PRICKLE1",
               "CLU", "COMP", "MMP3", "NOVA1", "CILP", "FBLN1", "PRG4",
@@ -317,7 +340,7 @@ plot_updated_markers <- function (so, resolution){
     
     p
 }
-plot_updated_markers(so.harmony, 0.1)
+plot_updated_markers(so, 0.1)
 
 ```
 
@@ -334,33 +357,33 @@ Plot a number of gene lists from the hamstring paper
 ```{r, fig.width=12, fig.height=16}
 plot_dotplots <- function (so, resolution){
     
-    p1 <- DotPlot(so.harmony, 
+    p1 <- DotPlot(so, 
              features =c("COL1A1", "COL1A2", "COL3A1", "COL3A2",  "DCN", "PRG4"),
              assay = ini$normalisation_assay) + 
     scale_colour_viridis(direction = -1) +
     ggtitle("Fibroblast markers") + 
     coord_flip()
     
-    p2 <- DotPlot(so.harmony,
+    p2 <- DotPlot(so,
              features =c("PECAM1", "PTPRB", "VWF", "ADGRL4", "CD34", "CDH5", "FLT1", "NOTCH4", "TEK"),
              assay = ini$normalisation_assay)  + 
     scale_colour_viridis(direction = -1) +
     ggtitle("Vascular endothelial markers") + coord_flip()
     
-    p3 <- DotPlot(so.harmony,
+    p3 <- DotPlot(so,
              features =c("EPHB4", "FLT4", "KDR", "LYVE1", "MMRN1", "NRG3", "PKHD1L1", "PROX1"),
              assay = ini$normalisation_assay)  + 
     scale_colour_viridis(direction = -1) +
     ggtitle("Lymphatic endothelium markers") + coord_flip()
     
-    p4 <- DotPlot(so.harmony, 
+    p4 <- DotPlot(so, 
              features =c("TRDN", "DES", "ACTN2", "TNNC2", "TNNI2", "TNNT3", "TNNC1", "TNNI1", "TNNT1"),
              assay = ini$normalisation_assay)  + 
     scale_colour_viridis(direction = -1) +
     ggtitle("Skeletal muscle markers") + 
     coord_flip()
     
-    p5 <- DotPlot(so.harmony, 
+    p5 <- DotPlot(so, 
              features =c("ABCA8", "COL15A1", "CD55", "DCLK1", "ELN", "FBN1", "FBLN1", 
                          "FBLN2", "FBLN5", "KCND2", "NEGR1", "NOVA1", "PDGFRA", "VIT"),
              assay = ini$normalisation_assay)  + 
@@ -368,21 +391,21 @@ plot_dotplots <- function (so, resolution){
     ggtitle("Mural cell markers") + 
     coord_flip()
     
-   p6 <- DotPlot(so.harmony, 
+   p6 <- DotPlot(so, 
              features =c("GPAM", "TMEM132C", "PLIN1", "PLIN4", "AQP7", "ADIPOQ", "PDE3B", "FABP4", "LIPE"),
              assay = ini$normalisation_assay) + 
     scale_colour_viridis(direction = -1) +
     ggtitle("Adipocyte markers") + 
     coord_flip()
     
-    p7 <- DotPlot(so.harmony, 
+    p7 <- DotPlot(so, 
              features =c("NTRK3", "TENM2", "KANK4", "SLC2A1", "SLC22A3", "CLDN1"),
              assay = ini$normalisation_assay) + 
     scale_colour_viridis(direction = -1) +
     ggtitle("Nerve-like cell markers") + 
     coord_flip()
     
-    p8 <- DotPlot(so.harmony, 
+    p8 <- DotPlot(so, 
              features =c("PAX7", "CALCR", "CDH4", "CLCN5", "CTNND2", "GREM1"),
              assay = ini$normalisation_assay) + 
     scale_colour_viridis(direction = -1) +
@@ -399,7 +422,7 @@ plot_dotplots <- function (so, resolution){
     
 }
 
-plot_dotplots(so.harmony, 0.1)
+plot_dotplots(so, 0.1)
 ```
 
 ```{r}
@@ -414,35 +437,35 @@ ggsave(paste0(directory, "/Marker_dotplots/dotplot_cell_markers_", resolution, "
 ```{r, fig.width=12, fig.height=12}
 plot_immune_dotplots <- function (so, resolution){
     
-    p1 <- DotPlot(so.harmony, 
+    p1 <- DotPlot(so, 
              features =c("PTPRC", "CD247","IL7R", "CCR7", "THEMIS"),
              assay = ini$normalisation_assay) + 
     scale_colour_viridis(direction = -1) +
     ggtitle("T cell markers") + 
     coord_flip()
     
-    p2 <- DotPlot(so.harmony, 
+    p2 <- DotPlot(so, 
              features =c("MS4A1", "CD37", "BLNK", "CD38", "CD79A", "CD79B", "SDC1", "CD27", "CD78"),
              assay = ini$normalisation_assay) + 
     scale_colour_viridis(direction = -1) +
     ggtitle("B cell markers") + 
     coord_flip()
     
-    p3 <- DotPlot(so.harmony, 
+    p3 <- DotPlot(so, 
              features =c("CD14", "CD163", "CD163L1", "MERTK", "MRC1", "MSR1"),
              assay = ini$normalisation_assay) + 
     scale_colour_viridis(direction = -1) +
     ggtitle("Macrophage markers") + 
     coord_flip()
     
-    p4 <- DotPlot(so.harmony, 
+    p4 <- DotPlot(so, 
              features =c("CD300A", "IRF7", "CLEC4C", "IL3RA", "NRP1", "HLA-DQA1", "CD74", "GPAT3", "CIITA", "HLA-DRB1"),
              assay = ini$normalisation_assay) + 
     scale_colour_viridis(direction = -1) +
     ggtitle("Dendritic cell markers") + 
     coord_flip()
     
-    p5 <- DotPlot(so.harmony, 
+    p5 <- DotPlot(so, 
              features =c("KIT", "CDK15", "MS4A2", "IL18R1", "HPGD"),
              assay = ini$normalisation_assay) + 
     scale_colour_viridis(direction = -1) +
@@ -459,7 +482,7 @@ plot_immune_dotplots <- function (so, resolution){
     
 }
 
-plot_immune_dotplots(so.harmony, 0.1)
+plot_immune_dotplots(so, 0.1)
 ```
 ```{r}
 ggsave(paste0(directory, "/Marker_dotplots/dotplot_immune_cell_markers_", resolution, ".", ini$file_type), 
@@ -471,28 +494,28 @@ Plot specific muscle subtype genes
 
 ```{r, fig.height=8, fig.width=14}
 plot_muscle_markers <- function (so, resolution){
-    p1 <- DotPlot(so.harmony, 
+    p1 <- DotPlot(so, 
              features =c("TRDN", "DES", "ACTN2"),
              assay = ini$normalisation_assay) + 
     scale_colour_viridis(direction = -1) +
     ggtitle("General Muscle markers") + 
     coord_flip()
     
-    p2 <- DotPlot(so.harmony, 
+    p2 <- DotPlot(so, 
              features =c("TNNC2", "TNNI2", "TNNT3", "ACTN3", "HOMER1", "KCNQ5", "MYH1", "MYH3", "MYLK4", "MYBPC2"),
              assay = ini$normalisation_assay) + 
     scale_colour_viridis(direction = -1) +
     ggtitle("Fast twitch markers") + 
     coord_flip()
     
-    p3 <- DotPlot(so.harmony, 
+    p3 <- DotPlot(so, 
              features =c("COL22A1", "ADAMTSL1", "CPM", "CSMD1", "FRAS1", "PZP", "RALYL", "SAMD5", "SORBS2", "SPAG16"),
              assay = ini$normalisation_assay) + 
     scale_colour_viridis(direction = -1) +
     ggtitle("Transitional markers") + 
     coord_flip()
     
-    p4 <- DotPlot(so.harmony, 
+    p4 <- DotPlot(so, 
              features =c("TNNC1", "TNNI1", "TNNT1", "ATP2A2", "CCR3", "LGR5", "MYH7", "MYH7B", "NEK10", "TECRL"),
              assay = ini$normalisation_assay) + 
     scale_colour_viridis(direction = -1) +
@@ -506,7 +529,7 @@ plot_muscle_markers <- function (so, resolution){
     
     p
 }
-plot_muscle_markers(so.harmony, 0.1)
+plot_muscle_markers(so, 0.1)
 
 ```
 ```{r}
@@ -522,14 +545,14 @@ Annotation at resolution 0.2
 
 # set a resolution
 resolution <- 0.2
-so.harmony[["seurat_clusters"]] <- so.harmony[[paste0(res_prefix, resolution)]]
-Idents(so.harmony) <- so.harmony[[paste0(res_prefix, resolution)]]
-levels(Idents(so.harmony))
+so[["seurat_clusters"]] <- so[[paste0(res_prefix, resolution)]]
+Idents(so) <- so[[paste0(res_prefix, resolution)]]
+levels(Idents(so))
 ```
 ## Plot the UMAP at the chosen resolution  
 
 ```{r}
-p <- DimPlot(object = so.harmony, label = TRUE, reduction = "harmony.umap", shuffle = TRUE)+
+p <- DimPlot(object = so, label = TRUE, reduction = integrated_umap_name, shuffle = TRUE)+
     ggtitle(paste0("UMAP at resolution ", resolution))
 p
 ```
@@ -548,7 +571,7 @@ Save the output as a text file
 This is run on the RNA assay but using the decontX assay could be explored here. 
 
 ```{r}
-markers <-  FindAllMarkers(so.harmony,
+markers <-  FindAllMarkers(so,
                            assay = ini$markers_assay,
                            only.pos = ini$only_pos, 
                            min.pct = ini$min_pct, 
@@ -580,7 +603,7 @@ Use the top 10 genes to plot a heatmap
 
 ```{r, fig.height=16, fig.width=8}
 
-p <- DoHeatmap(subset(so.harmony, downsample = 500), # randomly select cells from each cluster, otherwise it's too big to plot
+p <- DoHeatmap(subset(so, downsample = 500), # randomly select cells from each cluster, otherwise it's too big to plot
                features = unique(top10markers$gene),
                assay = ini$normalisation_assay) + 
         scale_fill_viridis() + 
@@ -606,7 +629,7 @@ These groups of markers are defined by the hamstring analysis.
 
 Plot some more refined markers after Jolet has discarded those that are not expressed  
 ```{r, fig.height=10, fig.width=8}
-plot_updated_markers(so.harmony, 0.2)
+plot_updated_markers(so, 0.2)
 ```
 
 ```{r}
@@ -619,7 +642,7 @@ ggsave(paste0(directory, "/Marker_dotplots/dotplot_updated_general_markers_", re
 Plot a number of gene lists from the hamstring paper
 
 ```{r, fig.width=12, fig.height=16}
-plot_dotplots(so.harmony, 0.2)
+plot_dotplots(so, 0.2)
 ```
 
 ```{r}
@@ -630,7 +653,7 @@ ggsave(paste0(directory, "/Marker_dotplots/dotplot_cell_markers_", resolution, "
 
 
 ```{r, fig.width=12, fig.height=12}
-plot_immune_dotplots(so.harmony, 0.2)
+plot_immune_dotplots(so, 0.2)
 ```
 
 ```{r}
@@ -642,7 +665,7 @@ ggsave(paste0(directory, "/Marker_dotplots/dotplot_immune_cell_markers_", resolu
 Plot specific muscle subtype genes
 
 ```{r, fig.height=8, fig.width=14}
-plot_muscle_markers(so.harmony, 0.2)
+plot_muscle_markers(so, 0.2)
 
 ```
 ```{r}
@@ -655,7 +678,7 @@ ggsave(paste0(directory, "/Marker_dotplots/dotplot_muscle_cell_markers_", resolu
 Does cluster 9 express COL22A1?
 
 ```{r, fig.with = 10, fig.height=6}
-VlnPlot(so.harmony, features = "COL22A1")
+VlnPlot(so, features = "COL22A1")
 ```
 
 
@@ -667,13 +690,13 @@ Annotation at resolution 0.3
 
 # set a resolution
 resolution <- 0.3
-so.harmony[["seurat_clusters"]] <- so.harmony[[paste0(res_prefix, resolution)]]
-Idents(so.harmony) <- so.harmony[[paste0(res_prefix, resolution)]]
-levels(Idents(so.harmony))
+so[["seurat_clusters"]] <- so[[paste0(res_prefix, resolution)]]
+Idents(so) <- so[[paste0(res_prefix, resolution)]]
+levels(Idents(so))
 ```
 ### Plot the UMAP at resolution 0.3
 ```{r}
-p <- DimPlot(object = so.harmony, label = TRUE, reduction = "harmony.umap", shuffle = TRUE)+
+p <- DimPlot(object = so, label = TRUE, reduction = integrated_umap_name, shuffle = TRUE)+
     ggtitle(paste0("UMAP at resolution ", resolution))
 p
 ```
@@ -691,7 +714,7 @@ Save the output as a text file
 This can be run on the RNA assay, decontX assay, or soupX assay  
 
 ```{r, message = FALSE}
-markers <-  FindAllMarkers(so.harmony,
+markers <-  FindAllMarkers(so,
                            assay = ini$markers_assay,
                            only.pos = ini$only_pos, 
                            min.pct = ini$min_pct, 
@@ -721,7 +744,7 @@ Use the top 10 genes to plot a heatmap
 
 ```{r, fig.height=16, fig.width=8}
 
-p <- DoHeatmap(subset(so.harmony, downsample = 500), # randomly select cells from each cluster, otherwise it's too big to plot
+p <- DoHeatmap(subset(so, downsample = 500), # randomly select cells from each cluster, otherwise it's too big to plot
                features = unique(top10markers$gene),
                assay = ini$normalisation_assay) + 
         scale_fill_viridis()+ 
@@ -750,7 +773,7 @@ Plot some more refined markers after Jolet has discarded those that are not expr
 
 
 ```{r, message = FALSE, fig.height=10, fig.width=8}
-plot_updated_markers(so.harmony, 0.3)
+plot_updated_markers(so, 0.3)
 ```
 ```{r}
 
@@ -762,7 +785,7 @@ ggsave(paste0(directory, "/Marker_dotplots/dotplot_updated_general_markers_", re
 Plot a number of gene lists from the hamstring paper
 
 ```{r, fig.width=12, fig.height=16}
-plot_dotplots(so.harmony, 0.3)
+plot_dotplots(so, 0.3)
 ```
 
 ```{r}
@@ -773,7 +796,7 @@ ggsave(paste0(directory, "/Marker_dotplots/dotplot_cell_markers_", resolution, "
 
 
 ```{r, fig.width=12, fig.height=12}
-plot_immune_dotplots(so.harmony, 0.3)
+plot_immune_dotplots(so, 0.3)
 ```
 
 ```{r}
@@ -783,7 +806,7 @@ ggsave(paste0(directory, "/Marker_dotplots/dotplot_immune_cell_markers_", resolu
 ```
 
 ```{r, fig.width=12, fig.height=12}
-plot_muscle_markers(so.harmony, 0.3)
+plot_muscle_markers(so, 0.3)
 ```
 
 ```{r}

@@ -1,0 +1,562 @@
+---
+title: "Xenium panels"
+author: "Carla Cohen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+Aim to design Xenium panels. 
+Updated 18/7/2024 following the extra soupX clean up of Achilles data. 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(fig.width=10, fig.height=10) 
+library(Seurat)
+library(tidyverse)
+```
+
+## Premade Xenium panels. 
+
+Look at the expression of the Xenium pre-made cross-tissue panel in the Achilles dataset. 
+
+Load data
+
+```{r}
+so.achilles <- readRDS("20240717_22-04_Annotation_update.dir/RDS_objects.dir/Achilles_integrated_annotated_0.2.rds")
+# add the idents as a column of metadata
+so.achilles$cell_annotation_0.2 <- Idents(so.achilles)
+so.achilles
+
+```
+
+Relevant Xenium gene lists ordered by tissue type from    
+"Human multi tissue and cancer" panel  
+https://www.10xgenomics.com/products/xenium-panels
+
+
+```{r}
+
+breast_glandular_cells <- "ABCC11 BAMBI OPRPN FHL2 ESR1 CYTIP SLC26A3 EPCAM C15orf48 AGR3 CXCL2 GDF15 EHF PPP1R1B GPRC5A EDN1 TMC5 ANPEP CD14 ERBB2 FOXA1 RND1 SPDEF AQP3 MLPH KCNMA1 TBX3 MRC1 STC2 STC1 TCIM PTN KIT HAMP LIF NTN4 MYBPC1 S100A1 ELF5 KRT7 ALDH1A3 AR TAT SCGB2A1"
+breast_glandular_cells <- unlist(strsplit(breast_glandular_cells, split =" "))
+
+breast_other = "DST SEMA3C MYLK COL17A1 ACTG2 CNN1 PGR 	"
+breast_other <- unlist(strsplit(breast_other, split =" "))
+
+
+```
+
+
+```{r}
+create_dotplot <- function(celltype, genelist, width = 7, height = 7){
+    genes <- unlist(strsplit(genelist, split =" "))
+    p <- DotPlot(so.achilles, features = genes)+
+        ggtitle(celltype)+
+        coord_flip()+
+        theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+    ggsave(paste0("Xenium_markers/Dotplots/", celltype, ".png"), 
+       device = "png", width = 7, height = 7, bg = "white")
+    return(p)
+}
+```
+
+```{r}
+create_dotplot("breast_adipocytes", 
+               "ADIPOQ CYP1A1 MYC PLCG2 LPL CA4 PPARG RGS16 TCF4 MEF2C SNAI1 CAVIN2 ERG MCF2L SOX17 TIMP4 TMEM100 CAV1 ADAMTS1 EDNRB CAVIN1 CD34 CYP4B1 GATA2 HIGD1B TCF15 APOLD1 RAPGEF3 GNG11 ADGRL4 BTNL9 CLEC14A DNASE1L3 EGFL7 MMRN2 RAMP2 SOX18 TM4SF18 CD93 CRHBP",
+               width = 10, height = 12)
+```
+
+
+```{r}
+create_dotplot("general_granulocytes", 
+               "CPA3 CTSG HPGDS MS4A2 SLC18A2 VWA5A HAVCR2 FCER1A IL2RA THAP2 TNFRSF9 ", 
+               width = 7, height = 7)
+```
+
+```{r}
+create_dotplot("breast_DCs", "DUSP2 PTPRC GLIPR1 CD247 FGFBP2 FCGR3A GNLY KLRC1 NKG7 KLRB1 CD3D CD8A GZMA GZMB KLRD1 PRF1 CCL5 ")
+```
+
+```{r}
+create_dotplot("colon", "AQP8 NPDC1 KRT20 MALL HES4 FGFBP1 CENPF MKI67 TOP2A GPX2 HMGCS2 DMBT1 CFTR PRDM1 SLC26A2 LGI4 CAPN8 ASCL1 HEPACAM2 PROX1 SCGN COL5A2 SMIM24 GCG SST CHGA CLCA1 FKBP11 IL1R2 SPIB LGR5 MZB1 PCNA CCNB2 CDK1 UBE2C ADH1C"
+)
+```
+```{r}
+create_dotplot("general_B_cells", "CD19 CLECL1 TCL1A TNFRSF13B TNFRSF17 CXCR4 BASP1 CD70 CD83 C1orf162 SPI1 CD69 CTLA4 ADAM28 GPR183 SELL AIF1 IRF8 SERPINB9 LY86 IL7R CCR7 BCL2L11 BANK1 CD27 CD28 MS4A1 DERL3 CD79A SLAMF1"
+)
+```
+
+```{r, fig.width = 10, fig.height=12}
+create_dotplot("general_endothelial_cells", "ACKR1 CSF3 ECSCR SELE VWF C7 INMT MFAP5 PMP22 FGL2 PDPN FBN1 PLAC9 SFRP2 TFPI PTGDS SRPX IGF1 IL1RL1 IL3RA PECAM1 CXCL10 ANGPT2 SNCG SH2D3C SNCA BMX MMRN1 LYVE1 MET", width = 7, height = 12)
+
+```
+
+```{r, fig.width = 10, fig.height=12}
+create_dotplot("general_fibroblasts", "APCDD1 COCH CTSK DIRAS3 DPT FBLN1 LTBP2 MEDAG MEST OGN PDGFRA SFRP4 TAC1 GEM VCAN CCL19 ASPN CRISPLD2 MAMDC2 PCOLCE PDGFRB THBS2 THY1 ACTA2 EGFR DPEP1 CXCL6 CFHR1 PRG4 CFB UPK3B GPC3", 
+               width = 7, height = 12)
+```
+
+```{r, fig.width = 10, fig.height=12}
+create_dotplot("general_macrophages", "APOBEC3A CXCL9 MCEMP1 PLA2G7 PLD4 TREM2 CD86 CSF2RA GATM CD4 MS4A6A AQP9 CD300E CLEC4E FCGR1A FCN1 LILRA5 LILRB2 LILRB4 MARCO RETN S100A12 CD163 CD68 IGSF6 MNDA MPEG1 MS4A4A VSIG4 SERPINB2 CD1E CLEC10A HLA-DQB2 ",
+               width = 7, height = 12)
+```
+```{r}
+create_dotplot("general_T_cells", "CD2 CD3E FOXP3 GZMK TENT5C TRAC")
+```
+
+# Custom panel design
+
+Aim to design ~5 markers for each cell type
+
+Change the order of the idents to be by grouped cell types
+```{r}
+Idents(so.achilles) <- factor(so.achilles$cell_annotation_0.2, 
+                     levels =  c("NEGR1+ fibroblasts", 
+                                 "ITGA10+ fibroblasts",
+                                 "Chondrocytes",
+                                 "Slow twitch skeletal muscle cells",
+                                 "Fast-twitch skeletal muscle cells", 
+                                 "Transitional skeletal muscle cells", 
+                                 "Satellite cells", 
+                                 "Mural cells", 
+                                 "Lymphatic endothelial cells", 
+                                 "Vascular endothelial cells", 
+                                 "Adipocytes", 
+                                 "Macrophages", 
+                                 "T cells", 
+                                 "Granulocytes", 
+                                 "B cells",
+                                 "Nerve-like cells"
+                     )
+)
+```
+
+Read in file of marker genes, previously calculated using FindAllMarkers()
+
+```{r}
+# TO DO check the order of the cell types
+achilles_markers <- read.table("20240717_11-26_Annotation.dir/Marker_lists/Markers_0.2.txt")
+# remove cluster 15
+achilles_markers <- achilles_markers %>% filter (cluster !=15)
+
+# add the cell types
+
+df <- so.achilles[[]] %>% select(soupX_snn_res.0.2, cell_annotation_0.2) %>% unique() 
+colnames(df) <- c("cluster", "cell_annotation_0.2")
+achilles_markers$cluster <- factor(achilles_markers$cluster)
+achilles_markers <- achilles_markers %>% left_join(df)
+achilles_markers
+
+#save the table
+write.table(achilles_markers, "Xenium_markers/Achilles_markers_res0.2.txt", sep = "\t", )
+
+# Filter to the top 10 markers for each cell type
+achilles_markers_top10 <- achilles_markers %>% 
+    group_by(cluster) %>% 
+    filter(p_val_adj<0.05) %>% 
+    slice_max(n = 10, order_by = avg_log2FC)
+write.table(achilles_markers_top10, "Xenium_markers/Achilles_markers_res0.2_top10.txt", sep = "\t", )
+```
+## Dotplot of top10 markers per groups of cells
+
+#### Muscle cells
+
+```{r, fig.width=12, fig.height=6}
+muscle_genes <- achilles_markers_top10 %>% 
+    filter (cell_annotation_0.2 == "Slow twitch skeletal muscle cells" | 
+                cell_annotation_0.2 == "Fast-twitch skeletal muscle cells" |
+                cell_annotation_0.2 == "Transitional skeletal muscle cells" |
+                cell_annotation_0.2 == "Satellite cells") 
+muscle_genes <- grep("^ENS", muscle_genes$gene, invert = TRUE, value = TRUE) %>% 
+    unique()
+    
+DotPlot(so.achilles, features = muscle_genes, assay = "soupX")+
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))+
+    scale_colour_gradient2(low = "#f7f3f2", mid = "#f2390a", high = "#6e1e0a", midpoint = 1)
+
+ggsave(paste0("Xenium_markers/Dotplots/Muscle_cells.png"), 
+           width = 12, height = 6, bg = "white")
+```
+
+#### Fibroblasts
+
+```{r, fig.width=12, fig.height=6}
+fibroblast_genes <- achilles_markers_top10 %>% 
+    filter (cell_annotation_0.2 == "NEGR1+ fibroblasts" | 
+                cell_annotation_0.2 == "ITGA10+ fibroblasts" |
+                cell_annotation_0.2 == "Chondrocytes") 
+fibroblast_genes <- grep("^ENS", fibroblast_genes$gene, invert = TRUE, value = TRUE) %>% 
+    unique()
+    
+DotPlot(so.achilles, features = fibroblast_genes, assay = "soupX")+
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))+
+    scale_colour_gradient2(low = "#f7f3f2", mid = "#f2390a", high = "#6e1e0a", midpoint = 1)
+
+ggsave(paste0("Xenium_markers/Dotplots/Fibroblast_cells.png"), 
+           width = 12, height = 6, bg = "white")
+```
+#### Immune cells
+
+```{r, fig.width=12, fig.height=6}
+immune_genes <- achilles_markers_top10 %>% 
+    filter (cell_annotation_0.2 == "T cells" | 
+                cell_annotation_0.2 == "B cells" |
+                cell_annotation_0.2 == "Macrophages" | 
+                cell_annotation_0.2 == "Granulocytes" ) 
+immune_genes <- grep("^ENS", immune_genes$gene, invert = TRUE, value = TRUE) %>% 
+    unique()
+    
+DotPlot(so.achilles, features = immune_genes, assay = "soupX")+
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))+
+    scale_colour_gradient2(low = "#f7f3f2", mid = "#f2390a", high = "#6e1e0a", midpoint = 1)
+
+ggsave(paste0("Xenium_markers/Dotplots/Immune_cells.png"), 
+           width = 12, height = 6, bg = "white")
+```
+
+#### Endothelial cells & other
+
+```{r, fig.width=12, fig.height=6}
+endothelial_genes <- achilles_markers_top10 %>% 
+    filter (cell_annotation_0.2 == "Vascular endothelial cells" | 
+                cell_annotation_0.2 == "Lymphatic endothelial cells" |
+                cell_annotation_0.2 == "Mural cells" | 
+                cell_annotation_0.2 == "Adipocytes" | 
+                cell_annotation_0.2 == "Nerve-like cells") 
+endothelial_genes <- grep("^ENS", endothelial_genes$gene, invert = TRUE, value = TRUE) %>% 
+    unique()
+    
+DotPlot(so.achilles, features = endothelial_genes, assay = "soupX")+
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))+
+    scale_colour_gradient2(low = "#f7f3f2", mid = "#f2390a", high = "#6e1e0a", midpoint = 1)
+
+ggsave(paste0("Xenium_markers/Dotplots/Endothelial-other_cells.png"), 
+           width = 12, height = 6, bg = "white")
+```
+## Feature plots of top markers
+
+```{r}
+celltypes <- unique(Idents(so.achilles))
+dir.create("Xenium_markers/Feature_Plots")
+
+for (cell in celltypes) {
+    print(cell)
+    celltype_genes <- achilles_markers_top10 %>%
+        filter(cell_annotation_0.2 == cell) %>% 
+        pull(gene)
+    celltype_genes <- grep("^ENS", celltype_genes, invert = TRUE, value = TRUE)
+    print(celltype_genes)
+    
+    FeaturePlot(so.achilles, features = celltype_genes, 
+                     cols = c("#f7f3f2", "#6e1e0a" ), 
+            reduction = "harmony.umap", ncol = 3)
+    ggsave(paste0("Xenium_markers/Feature_Plots/", cell, ".png"), 
+           width = 12, height = 14)
+}
+
+```
+
+
+## Top markers for NEGR1+ fibroblasts
+
+Considering the gene function/cellular location:
+NEGR1 - membrane
+KAZN - everywhere
+DCLK1 - membrane kinase
+NOVA1 - alt splicing regulator, nucleus
+VIT - ECM protein
+PDZRN4 - function unknown, predicted cytoplasm
+FBN1 - ECM protein
+GSN - actin assembly, everywhere
+BMP5 - TGFb ligand, extracellular
+
+
+
+
+
+
+
+```{r,fig.height=8, fig.width=18, message = FALSE}
+final_annotation_markers <- c("COL1A1", "COL1A2", "COL3A1", "DCN", #fibroblasts -
+                              "NEGR1", "KAZN", "DCLK1", "NOVA1", # NEGR1 fibroblasts
+                              "COMP", "MMP3", "HPSE2", "GALNT13", "ITGA10", # ITGA10 fibroblasts
+                              "FN1", "GPC6", "ACAN", "COL11A1", "SDK2", # chondrocytes
+                              "TRDN", "TTN", "NEB",# muscle -
+                              "TPD52L1", "TBC1D8", "LGR5", "ATP2A2",  # slow-twitch-
+              "TNNT3", "MYH1", "MYH3", # fast-twitch-
+              "COL22A1", "SPAG16", "SORBS2", # transitional muscle-
+              "PAX7", "CALCR", "CDH4", "CLCN5", # satellite cells
+              "NOTCH3", "PDGFRB", "MYO1B", # mural -
+              "MMRN1", "PROX1", "PKHD1L1", # LEC
+              "PECAM1", "PTPRB", "FLT1", "VWF", # VEC-
+              "PLIN1", "AQP7", "ADIPOQ", # adipocytes-
+              "F13A1", "CD163", "MRC1", # macrophages -
+              "CD247", "IL7R", "THEMIS", # T cells -
+              "KIT", "CPA3", "IL18R1", "CDK15",# granulocytes
+              "BLNK", "CLNK","IGHM", "IL4R",  #  B cells -
+              "NRXN1", "XKR4", "CDH19", "PPP2R2B" # nerve
+               ) 
+
+
+DotPlot(so.achilles, features = final_annotation_markers, 
+             assay = "soupX") + 
+    # scale_colour_viridis(direction = -1) + 
+    scale_colour_gradient2(low = "#f7f3f2", mid = "#f2390a", high = "#6e1e0a", midpoint = 1)+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, size = 16))+
+    theme(axis.text.y = element_text(size = 16))+
+    theme(axis.title.x = element_blank())+
+    theme(axis.title.y = element_blank())+
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+ggsave(paste0("Xenium_markers/Dotplots/Annotation_markers.png"), width = 20, height = 8, 
+       bg = "white")
+#ggsave(paste0(directory, "/DotPlot/Annotation_markers.svg"), width = 16, height = 8)
+
+```
+
+
+# Check Jolet's panel
+
+Fibroblasts
+
+```{r, fig.width=12, fig.height=6}
+# get the markers
+
+xenium_markers <- read.table("Files.dir/xenium_markers.txt", sep = "\t", header = TRUE)
+
+jolet_fibroblasts <- xenium_markers %>% filter (Cell_type == "Fibroblasts") %>% pull(Gene)
+
+DotPlot(so.achilles, features = jolet_fibroblasts, 
+             assay = "soupX") + 
+    # scale_colour_viridis(direction = -1) + 
+    scale_colour_gradient2(low = "#f7f3f2", mid = "#f2390a", high = "#6e1e0a", midpoint = 1)+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, size = 16))+
+    theme(axis.text.y = element_text(size = 16))+
+    theme(axis.title.x = element_blank())+
+    theme(axis.title.y = element_blank())+
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+ggsave(paste0("Xenium_markers/Dotplots/Jolet_fibroblasts.png"), width = 12, height = 6, 
+       bg = "white")
+```
+
+Immune cells
+
+```{r, fig.width=12, fig.height=6}
+jolet_immune <- xenium_markers %>% filter (Cell_type == "Immune cells" |
+                                                    Cell_type == "Macrophages"|
+                                                    Cell_type == "T cells" | 
+                                                    Cell_type == "B cells" |
+                                               Cell_type == "Granulocytes") %>% 
+    pull(Gene)
+
+DotPlot(so.achilles, features = jolet_immune, 
+             assay = "soupX") + 
+    # scale_colour_viridis(direction = -1) + 
+    scale_colour_gradient2(low = "#f7f3f2", mid = "#f2390a", high = "#6e1e0a", midpoint = 1)+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, size = 16))+
+    theme(axis.text.y = element_text(size = 16))+
+    theme(axis.title.x = element_blank())+
+    theme(axis.title.y = element_blank())+
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+    ggsave(paste0("Xenium_markers/Dotplots/Jolet_immune.png"), width = 12, height = 6, 
+       bg = "white")
+```
+
+Muscle cells
+
+```{r, fig.width=12, fig.height=6}
+jolet_muscle <- xenium_markers %>% filter (Cell_type == "Skeletal muscle cells" | 
+                                               Cell_type == "Satellite cells") %>% 
+    pull(Gene)
+
+DotPlot(so.achilles, features = jolet_muscle, 
+             assay = "soupX") + 
+    # scale_colour_viridis(direction = -1) + 
+    scale_colour_gradient2(low = "#f7f3f2", mid = "#f2390a", high = "#6e1e0a", midpoint = 1)+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, size = 16))+
+    theme(axis.text.y = element_text(size = 16))+
+    theme(axis.title.x = element_blank())+
+    theme(axis.title.y = element_blank())+
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+    ggsave(paste0("Xenium_markers/Dotplots/Jolet_muscle.png"), width = 12, height = 6, 
+       bg = "white")
+```
+
+
+Endothelial cells & Mural cells
+
+```{r, fig.width=12, fig.height=6}
+jolet_endothelial <- xenium_markers %>% filter (Cell_type == "Endothelial cells"| 
+                                                    Cell_type == "Lymphatic endothelial cells" |
+                                                    Cell_type == "Mural cells") %>% 
+    pull(Gene)
+
+DotPlot(so.achilles, features = jolet_endothelial, 
+             assay = "soupX") + 
+    # scale_colour_viridis(direction = -1) + 
+    scale_colour_gradient2(low = "#f7f3f2", mid = "#f2390a", high = "#6e1e0a", midpoint = 1)+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, size = 16))+
+    theme(axis.text.y = element_text(size = 16))+
+    theme(axis.title.x = element_blank())+
+    theme(axis.title.y = element_blank())+
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+    ggsave(paste0("Xenium_markers/Dotplots/Jolet_endothelial.png"), width = 12, height = 6, 
+       bg = "white")
+```
+Other cells
+
+```{r, fig.width=12, fig.height=6}
+jolet_other <- xenium_markers %>% filter (Cell_type == "Adipocytes"| 
+                                                    Cell_type == "Nervous system cells") %>% 
+    pull(Gene)
+
+DotPlot(so.achilles, features = jolet_other, 
+             assay = "soupX") + 
+    # scale_colour_viridis(direction = -1) + 
+    scale_colour_gradient2(low = "#f7f3f2", mid = "#f2390a", high = "#6e1e0a", midpoint = 1)+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, size = 16))+
+    theme(axis.text.y = element_text(size = 16))+
+    theme(axis.title.x = element_blank())+
+    theme(axis.title.y = element_blank())+
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+    ggsave(paste0("Xenium_markers/Dotplots/Jolet_other.png"), width = 12, height = 6, 
+       bg = "white")
+```
+
+
+## Check updated panel
+
+Fibroblasts
+
+```{r, fig.width=12, fig.height=6}
+# get the markers
+
+xenium_markers_2 <- read.table("Files.dir/xenium_markers_2.txt", sep = "\t", header = TRUE)
+
+jolet_fibroblasts <- xenium_markers_2 %>% filter (Cell_type == "Fibroblasts") %>% pull(Gene)
+
+DotPlot(so.achilles, features = jolet_fibroblasts, 
+             assay = "soupX") + 
+    # scale_colour_viridis(direction = -1) + 
+    scale_colour_gradient2(low = "#f7f3f2", mid = "#f2390a", high = "#6e1e0a", midpoint = 1)+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, size = 16))+
+    theme(axis.text.y = element_text(size = 16))+
+    theme(axis.title.x = element_blank())+
+    theme(axis.title.y = element_blank())+
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+ggsave(paste0("Xenium_markers/Dotplots/Jolet_fibroblasts_2.png"), width = 15, height = 6, 
+       bg = "white")
+```
+
+Immune cells
+
+```{r, fig.width=12, fig.height=6}
+jolet_immune <- xenium_markers_2 %>% filter (Cell_type == "Immune cells" |
+                                                    Cell_type == "Macrophages"|
+                                                    Cell_type == "T cells" | 
+                                                    Cell_type == "B cells" |
+                                               Cell_type == "Granulocytes") %>% 
+    pull(Gene)
+
+DotPlot(so.achilles, features = jolet_immune, 
+             assay = "soupX") + 
+    # scale_colour_viridis(direction = -1) + 
+    scale_colour_gradient2(low = "#f7f3f2", mid = "#f2390a", high = "#6e1e0a", midpoint = 1)+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, size = 16))+
+    theme(axis.text.y = element_text(size = 16))+
+    theme(axis.title.x = element_blank())+
+    theme(axis.title.y = element_blank())+
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+    ggsave(paste0("Xenium_markers/Dotplots/Jolet_immune_2.png"), width = 12, height = 6, 
+       bg = "white")
+```
+
+Muscle cells
+RNA Assay
+
+```{r, fig.width=12, fig.height=6}
+jolet_muscle <- xenium_markers_2 %>% filter (Cell_type == "Skeletal muscle cells" | 
+                                               Cell_type == "Satellite cells") %>% 
+    pull(Gene)
+
+DotPlot(so.achilles, features = jolet_muscle, 
+             assay = "RNA") + 
+    # scale_colour_viridis(direction = -1) + 
+    scale_colour_gradient2(low = "#f7f3f2", mid = "#f2390a", high = "#6e1e0a", midpoint = 1)+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, size = 16))+
+    theme(axis.text.y = element_text(size = 16))+
+    theme(axis.title.x = element_blank())+
+    theme(axis.title.y = element_blank())+
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+    ggsave(paste0("Xenium_markers/Dotplots/Jolet_muscle_2_RNA.png"), width = 12, height = 6, 
+       bg = "white")
+```
+SoupX assay
+```{r, fig.width=12, fig.height=6}
+jolet_muscle <- xenium_markers_2 %>% filter (Cell_type == "Skeletal muscle cells" | 
+                                               Cell_type == "Satellite cells") %>% 
+    pull(Gene)
+
+DotPlot(so.achilles, features = jolet_muscle, 
+             assay = "soupX") + 
+    # scale_colour_viridis(direction = -1) + 
+    scale_colour_gradient2(low = "#f7f3f2", mid = "#f2390a", high = "#6e1e0a", midpoint = 1)+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, size = 16))+
+    theme(axis.text.y = element_text(size = 16))+
+    theme(axis.title.x = element_blank())+
+    theme(axis.title.y = element_blank())+
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+    ggsave(paste0("Xenium_markers/Dotplots/Jolet_muscle_2_soupX.png"), width = 12, height = 6, 
+       bg = "white")
+```
+
+
+Endothelial cells & Mural cells
+
+```{r, fig.width=12, fig.height=6}
+jolet_endothelial <- xenium_markers_2 %>% filter (Cell_type == "Endothelial cells"| 
+                                                    Cell_type == "Lymphatic endothelial cells" |
+                                                    Cell_type == "Mural cells") %>% 
+    pull(Gene)
+
+DotPlot(so.achilles, features = jolet_endothelial, 
+             assay = "soupX") + 
+    # scale_colour_viridis(direction = -1) + 
+    scale_colour_gradient2(low = "#f7f3f2", mid = "#f2390a", high = "#6e1e0a", midpoint = 1)+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, size = 16))+
+    theme(axis.text.y = element_text(size = 16))+
+    theme(axis.title.x = element_blank())+
+    theme(axis.title.y = element_blank())+
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+    ggsave(paste0("Xenium_markers/Dotplots/Jolet_endothelial_2.png"), width = 12, height = 6, 
+       bg = "white")
+```
+Other cells
+
+```{r, fig.width=12, fig.height=6}
+jolet_other <- xenium_markers_2 %>% filter (Cell_type == "Adipocytes"| 
+                                                    Cell_type == "Nervous system cells") %>% 
+    pull(Gene)
+
+DotPlot(so.achilles, features = jolet_other, 
+             assay = "soupX") + 
+    # scale_colour_viridis(direction = -1) + 
+    scale_colour_gradient2(low = "#f7f3f2", mid = "#f2390a", high = "#6e1e0a", midpoint = 1)+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, size = 16))+
+    theme(axis.text.y = element_text(size = 16))+
+    theme(axis.title.x = element_blank())+
+    theme(axis.title.y = element_blank())+
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+    ggsave(paste0("Xenium_markers/Dotplots/Jolet_other_2.png"), width = 12, height = 6, 
+       bg = "white")
+```

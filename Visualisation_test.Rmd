@@ -1,0 +1,44 @@
+---
+title: "visualisation test"
+author: "Carla Cohen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+Test using reticulate and numpy in a conda env
+
+```{r setup, load packages, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+#library(Seurat)
+#library(tidyverse)
+#library(cowplot)
+#library(clustree)
+#library(yaml)
+#library(viridis)
+#library(lisi)
+library(reticulate)
+# use reticulate to access numpy
+reticulate::use_condaenv(condaenv = "integration-env", conda = "/project/ancestryhca/ccohen/mamba_installation/conda/condabin/conda", required = F)
+np <- import("numpy")
+```
+
+```{r}
+scVI_embeddings <- np$load("20240827_14-42_scvi_integration.dir/scVI_embeddings.npy")
+print ("scVI embeddings")
+scVI_embeddings[1:5, 1:5]
+```
+```{r}
+so.scvi <- readRDS("20240827_13-51_Integration.dir/RDS_objects.dir/Achilles_harmony_SeuratObject.rds")
+
+#scVI_embeddings_df <- as.data.frame(scVI_embeddings)
+
+rownames(scVI_embeddings) <- colnames(so.scvi)
+
+scVI_embeddings[1:5, 1:5]
+```
+
+```{r}
+sessionInfo()
+```
+

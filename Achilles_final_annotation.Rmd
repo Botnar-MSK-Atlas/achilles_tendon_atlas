@@ -182,7 +182,7 @@ so_0.1 <- RenameIdents(so_0.1,
                            `10` = "Granulocytes",
                            `11` = "B cells", 
                            `12` = "Nervous system cells",
-                           `13` = "B plasma cells"
+                           `13` = "Plasma cells"
                            )
 
 # add these Idents as a column in the metadata as well
@@ -283,7 +283,7 @@ so_0.2 <- RenameIdents(so_0.2,
                            `12` = "Granulocytes",
                            `13` = "B cells",
                            `14` = "Nervous system cells",
-                           `15` = "B plasma cells")
+                           `15` = "Plasma cells")
 
 # add these Idents as a column in the metadata as well
 so_0.2$cell_annotation_scVI_0.2 <- Idents(so_0.2)
@@ -327,7 +327,7 @@ achilles.colours_0.1 <- c("#499999",  # Macrophages
                       "#661100"  # B cells
                     )  
 
-names(achilles.colours_0.1) <- c("Macrophages", "Vascular endothelial cells",  "Skeletal muscle cells",  "Adipocytes", "T cells", "Nervous system cells", "Lymphatic endothelial cells", "Mural cells", "Fibroblasts", "Granulocytes", "Satellite cells", "B plasma cells",  "B cells")
+names(achilles.colours_0.1) <- c("Macrophages", "Vascular endothelial cells",  "Skeletal muscle cells",  "Adipocytes", "T cells", "Nervous system cells", "Lymphatic endothelial cells", "Mural cells", "Fibroblasts", "Granulocytes", "Satellite cells", "Plasma cells",  "B cells")
 ```
 
 Achilles UMAP resolution 0.1
@@ -335,7 +335,7 @@ Achilles UMAP resolution 0.1
 ```{r, fig.width=10, fig.height=10}
 Idents(so) <- so$cell_annotation_scVI_0.1
 
-DimPlot(so, reduction = "harmony.umap", cols = achilles.colours_0.1, label = TRUE, shuffle = TRUE, repel = TRUE)+
+DimPlot(so, reduction = "umap.scvi", cols = achilles.colours_0.1, label = TRUE, shuffle = TRUE, repel = TRUE)+
     theme(legend.position="none")+
     xlab("UMAP_1")+
     ylab("UMAP_2")
@@ -365,7 +365,7 @@ achilles.colours_0.2 <- c("#499999",  # Macrophages
                      )  
 
 
-names(achilles.colours_0.2) <- c("Macrophages", "Vascular endothelial cells",  "Fast-twitch skeletal muscle cells",  "Slow-twitch skeletal muscle cells", "Adipocytes", "T cells", "Nervous system cells", "Lymphatic endothelial cells", "Mural cells", "NEGR1+ Fibroblasts", "ITGA10+ Fibroblasts", "Granulocytes", "Satellite cells", "B plasma cells",  "B cells")
+names(achilles.colours_0.2) <- c("Macrophages", "Vascular endothelial cells",  "Fast-twitch skeletal muscle cells",  "Slow-twitch skeletal muscle cells", "Adipocytes", "T cells", "Nervous system cells", "Lymphatic endothelial cells", "Mural cells", "NEGR1+ Fibroblasts", "ITGA10+ Fibroblasts", "Granulocytes", "Satellite cells", "Plasma cells",  "B cells")
 ```
 
 Achilles UMAP resolution 0.2
@@ -373,7 +373,7 @@ Achilles UMAP resolution 0.2
 ```{r, fig.width=10, fig.height=10}
 Idents(so) <- so$cell_annotation_scVI_0.2
 unique(Idents(so))
-DimPlot(so, reduction = "harmony.umap", cols = achilles.colours_0.2, label = TRUE, shuffle = TRUE, repel = TRUE)+
+DimPlot(so, reduction = "umap.scvi", cols = achilles.colours_0.2, label = TRUE, shuffle = TRUE, repel = TRUE)+
     theme(legend.position="none")+
     xlab("UMAP_1")+
     ylab("UMAP_2")
@@ -396,15 +396,19 @@ markers_0.2 <- read.table("20240916_17-29_Annotation.dir/Marker_lists/Markers_0.
 
 
 Calculate the top 10 markers for each cluster by log2FC
+Remove cluster 14 or 16
+
 
 ```{r}
 
 top10markers_0.1 <- markers_0.1 %>% 
     group_by(cluster) %>% 
-    slice_max(n=10, order_by = abs(avg_log2FC))
+    slice_max(n=10, order_by = abs(avg_log2FC)) %>% 
+    filter(cluster != 14)
 top10markers_0.2 <- markers_0.2 %>% 
     group_by(cluster) %>% 
-    slice_max(n=10, order_by = abs(avg_log2FC))
+    slice_max(n=10, order_by = abs(avg_log2FC))%>% 
+    filter(cluster != 16)
 
 ```
 
@@ -415,7 +419,8 @@ top10markers_0.2 <- markers_0.2 %>%
 Idents(so) <- so$cell_annotation_scVI_0.1
 DoHeatmap(subset(so, downsample = 500), # randomly select cells from each cluster, otherwise it's too big to plot
                features = unique(top10markers_0.1$gene),
-               assay = "soupX") + 
+               assay = "soupX", 
+          group.colors = achilles.colours_0.1) + 
         scale_fill_viridis() + 
         ggtitle("Heatmap of top 10 markers res 0.1")
 
@@ -718,6 +723,33 @@ DotPlot(so, features = final_annotation_markers_0.2,
 ggsave(paste0(directory, "/DotPlot/Annotation_markers_0.2.png"), width = 16, height = 8)
 ggsave(paste0(directory, "/DotPlot/Annotation_markers_0.2.svg"), width = 16, height = 8)
 
+```
+
+## Add annotation of cell subsets
+
+### Fibroblasts
+
+
+```{r}
+so.fibroblasts <- readRDS("20241101_15-31_Fine_annotation_fibroblasts_0.25.dir/RDS_objects.dir/Achilles_fibroblast_subset.rds")
+so.fibroblasts
+```
+
+```{r}
+Idents(so.fibroblasts) <- so.fibroblasts$cell_annotation_fibroblasts_0.25
+DimPlot(so.fibroblasts, reduction = "umap")
+```
+
+```{r}
+so$cell_annotation_fibroblasts_0.25 <- so.fibroblasts$cell_annotation_fibroblasts_0.25
+DimPlot(so, reduction = "umap.scvi", group.by = "cell_annotation_fibroblasts_0.25")
+```
+
+```{r}
+so.fibroblasts_0.4 <- readRDS("20241101_15-39_Fine_annotation_fibroblasts_0.4.dir/RDS_objects.dir/Achilles_fibroblast_subset.rds")
+Idents(so.fibroblasts_0.4) <- so.fibroblasts_0.4$cell_annotation_fibroblasts_0.4
+so$cell_annotation_fibroblasts_0.4 <- so.fibroblasts_0.4$cell_annotation_fibroblasts_0.4
+DimPlot(so, reduction = "umap.scvi", group.by = "cell_annotation_fibroblasts_0.4")
 ```
 
 ```{r}

@@ -1,0 +1,456 @@
+---
+title: "Annotation-update_achilles-combined"
+author: "Carla Cohen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Annotation update for achilles  
+
+This script is to perform annotation of the Achilles combined dataset 
+
+It follows Annotation-achilles-combined.Rmd  
+This script will end up being unique according to 
+* the number of variable features used
+* the assay used  
+
+This version uses the more stringent soupX clean up. 
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+
+```{r}
+library(tidyverse)
+library(Seurat)
+library(cowplot)
+library(yaml)
+library(viridis)
+
+# make a new output folder for each run, with the date & time in the directory name
+date <- Sys.Date() %>% str_replace_all("-", "")
+time <- format(Sys.time(), "%X") %>% str_replace_all(":", "-") %>%
+    str_sub(1, 5)
+directory <- paste0(date,"_", time, "_Annotation_update.dir")
+dir.create(directory, showWarnings = FALSE)
+
+#need to update yml file as appropriate
+ini <- read_yaml("annotation_update.yml")
+
+
+```
+Print the parameters
+
+```{r}
+ini
+```
+### Parameters
+Extract some names that depend on the normalisation method performed
+
+```{r}
+if (ini$normalisation_method == "SCTransform"){
+        
+        # save the reduction names
+        pca_name <- "sct.pca"
+        umap_name <- "sct.umap"
+        
+        # save the resolution prefix
+        res_prefix <- "SCT_snn_res."
+        
+    } else if (ini$normalisation_method == "SCTransformv2"){
+    
+    # save the reduction names
+     pca_name <- "sctv2.pca"
+     umap_name <- "sctv2.umap"
+     
+     # save the resolution prefix
+     res_prefix <- "SCTv2_snn_res."
+    
+    } else if (ini$normalisation_method == "LogNormalise"){
+    
+     # save the reduction names
+     pca_name <- "lognorm.pca"
+     umap_name <- "lognorm.umap"
+     
+     # save the resolution prefix
+     res_prefix <- "RNA_snn_res."
+     
+    # Some prefixes change if decontX is used for normalisation
+    if (ini$normalisation_assay == "decontXcounts"){
+        res_prefix <- "decontXcounts_snn_res."
+    }
+    if (ini$normalisation_assay == "soupX"){
+        res_prefix <- "soupX_snn_res."
+    }    
+}
+ 
+if (ini$cluster_method == "leiden" & ini$integration_method == "harmony"){
+    res_prefix <- "leiden_soupX_snn_res."
+}
+
+if (ini$cluster_method == "leiden" & ini$integration_method == "scVI"){
+    res_prefix <- "leiden_X_scVI_snn_res."
+    umap_name <- "umap.scvi"
+}
+
+print(ini$normalisation_method) 
+print(pca_name)
+print(umap_name)
+print(res_prefix)
+```
+Read in the integrated Seurat object
+NB if SCT is used this needs to come from the Annotation folder not the Integration folder.  
+If Leiden clustering is used, it will come from the Cluster_leiden folder.  
+
+```{r}
+
+so <- readRDS("20240916_16-01_Cluster_leiden.dir/RDS_objects.dir/Achilles_harmony_SeuratObject.rds")
+so
+
+```
+
+Use annotations from 20240916_17-29_Annotation.dir
+
+
+# Resolution 0.1
+
+Annotation at resolution 0.1
+
+```{r}
+
+# set a resolution
+resolution <- 0.1
+so[["seurat_clusters"]] <- so[[paste0(res_prefix, resolution)]]
+Idents(so) <- so$seurat_clusters
+levels(Idents(so))
+```
+
+## compare leiden and louvain clusters
+Yes they are different if you look at a higher resolution!
+
+```{r, fig.width=12, fig.height=6}
+p1 <- DimPlot(so, group.by = "leiden_X_scVI_snn_res.0.6", reduction = "umap.scvi")
+p2 <- DimPlot(so, group.by = "louvain_X_scVI_snn_res.0.6", reduction = "umap.scvi")
+plot_grid(p1, p2)
+
+```
+
+
+## Add cell annotations
+
+NB clustering starts from 1 not 0 with Leiden
+1 - fibroblast
+2 - skeletal muscle
+3 - VEC
+4 - macrophages
+5 - adipocyte
+6 - mural cells
+7 - T cells
+8 - LEC
+9 - satellite cells
+10 - granulocytes
+11 - B cells
+12 - nerve
+13 - B plasma cells
+14 - skeletal muscle 2
+
+
+
+```{r, fig.width = 10, fig.height=7}
+so_0.1 <- so
+so_0.1 <- RenameIdents(so, 
+                           `1` = "Fibroblasts", 
+                           `2` = "Skeletal muscle cells 1", 
+                           `3` = "VEC",
+                           `4` = "Macrophages", 
+                           `5` = "Adipocytes",
+                           `6` = "Mural cells", 
+                           `7` = "T cells", 
+                           `8` = "LEC", 
+                           `9` = "Satellite cells", 
+                           `10` = "Granulocytes",
+                           `11` = "B cells", 
+                           `12` = "Nerve cells",
+                           `13` = "B plasma cells",
+                            `14` = "Skeletal muscle cells 2"
+                           )
+
+# add these Idents as a column in the metadata as well
+so_0.1$cell_annotation_harmony_0.1 <- Idents(so_0.1)
+so$cell_annotation_harmony_0.1 <- Idents(so_0.1)
+
+
+p <- DimPlot(so_0.1, label = TRUE, repel = TRUE, shuffle = TRUE,reduction = umap_name)
+    #scale_colour_viridis_d()
+p
+
+```
+
+```{r}
+ggsave(paste0(directory, "/Annotation_figures/UMAP_annotated_", resolution, ".", ini$file_type), 
+       device = ini$file_type, width = 10, height = 7, bg = "white")
+```
+
+# Resolution 0.2
+
+Annotation at resolution 0.2
+
+```{r}
+
+# set a resolution
+resolution <- 0.2
+so[["seurat_clusters"]] <- so[[paste0(res_prefix, resolution)]]
+Idents(so) <- so$seurat_clusters
+levels(Idents(so))
+DimPlot(so, reduction = umap_name )
+```
+
+## Add cell annotations
+
+1 - slow twitch skeletal muscle
+2 - Fibroblast 1
+3 - Fibroblast 2
+4 - VEC
+5 - macrophages
+6 - fast-twitch muscle cells
+7 - adipocyte
+8 - mural cells
+9 - T cells
+10 - LEC
+11 - satellite cells
+12 - granulocytes  
+13 - B cells
+14 - nerve
+15 - B plasma cells
+16 - slow twitch muscle 2
+
+
+```{r, fig.width = 10, fig.height=7}
+so_0.2 <- so
+so_0.2 <- RenameIdents(so, 
+                           `1` = "Slow-twitch skeletal muscle cells", 
+                           `2` = "Fibroblast 1", 
+                           `3` = "Fibroblast 2",
+                           `4` = "Vascular endothelial cells", 
+                           `5` = "Macrophages", 
+                           `6` = "Fast-twitch skeletal muscle cells", 
+                           `7` = "Adipocytes", 
+                           `8` = "Mural cells", 
+                           `9` = "T cells",
+                           `10` = "Lymphatic endothelial cells", 
+                           `11` = "Satellite cells",
+                           `12` = "Granulocytes",
+                           `13` = "B cells",
+                           `14` = "Nervous system cells",
+                           `15` = "B plasma cells",
+                           `16` = "Slow twitch muscle 2")
+
+# add these Idents as a column in the metadata as well
+so_0.2$cell_annotation_harmony_0.2 <- Idents(so_0.2)
+so$cell_annotation_harmony_0.2 <- Idents(so_0.2)
+
+p <- DimPlot(so_0.2, label = TRUE, repel = TRUE, shuffle = TRUE,reduction = umap_name)
+    #scale_colour_viridis_d()
+p
+
+```
+
+
+
+```{r}
+ggsave(paste0(directory, "/Annotation_figures/UMAP_annotated_", resolution, ".", ini$file_type), 
+       device = ini$file_type, width = 10, height = 7, bg = "white")
+```
+
+
+
+#### Plot decontX by cluster on Vln plot
+
+```{r}
+VlnPlot(so, features = "decontX_contamination", assay = "soupX", pt.size = 0)+
+    #scale_y_log10() +
+    scale_fill_viridis_d()+
+    theme(legend.position="none")+
+    theme_cowplot()+
+    ggtitle("decontX contamination")
+```
+No one cluster has a particularly high decontX score.  
+
+#### Where are the ribosomal genes?
+
+```{r}
+#identify ribosomal genes starting RP
+ribo <- grep(pattern = "^RP[SL][[:digit:]]|^RP[[:digit:]]|^RPSA",
+                  rownames(so),
+                  value=TRUE,) #get list of non-ribosomal genes 
+so[["percent.ribo"]] <- PercentageFeatureSet(object = so, pattern = "^RP[SL][[:digit:]]|^RP[[:digit:]]|^RPSA")
+
+VlnPlot(so, features = "percent.ribo", assay = "soupX")+
+    #scale_y_log10() +
+    scale_fill_viridis_d()+
+    theme(legend.position="none")+
+    theme_cowplot()+
+    ggtitle("% ribosomal genes")
+```
+Cluster 16 has high ribosomal content compared to the other clusters. 
+
+#### Is this cluster from one individual?
+
+```{r}
+DimPlot(subset(so, idents = 16), reduction = umap_name, group.by = "orig.ident")
+
+```
+
+Yes this cluster is from one sample, MSK-1556-ACH-muscle. 
+
+How many cells are in cluster 16?
+
+```{r}
+which(so[[paste0(res_prefix, "0.2")]] == 16) %>% length()
+```
+
+
+> One option is to omit cluster 16 from the object becuase it is just from one individual. Let's see.  
+
+#### Fibroblast naming
+
+What are the main genes for fibroblast subtypes?
+
+```{r, fig.width=10, fig.height=5}
+
+markers_0.2 <- read.table("20240916_17-29_Annotation.dir/Marker_lists/Markers_0.2.txt")
+
+fb_genes <- markers_0.2 %>% 
+    filter (cluster == c(2, 3)) %>% 
+    group_by(cluster) %>%
+    slice_max(n=10, order_by = abs(avg_log2FC)) %>% 
+    pull(gene)
+
+DotPlot(so_0.2, features = fb_genes, assay = "soupX", 
+        idents = c("Fibroblast 1", "Fibroblast 2"))+
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+```
+
+
+#### Can we use the labels NEGR1 and ITGA10 fibroblasts?
+
+```{r}
+FeaturePlot(so_0.2, features = c("NEGR1", "ITGA10"), 
+            reduction = umap_name)
+```
+
+Rename the fibroblasts (for now):
+Fibroblast 1 = NEGR1+
+Fibroblast 2 = ITGA10+
+
+
+```{r}
+so_0.2 <- RenameIdents(so_0.2, 
+                           `Fibroblast 1` = "NEGR1+ fibroblasts", 
+                           `Fibroblast 2` = "ITGA10+ fibroblasts")
+
+so$cell_annotation_scVI_0.2 <- Idents(so_0.2)
+```
+
+
+
+
+```{r, fig.width=10, fig.height=7}
+DimPlot(so_0.2, label = TRUE, repel = TRUE, shuffle = TRUE,reduction = umap_name)
+ggsave(paste0(directory, "/Annotation_figures/UMAP_annotated_ambient_removed_", resolution, ".", ini$file_type), 
+       device = ini$file_type, width = 10, height = 7, bg = "white")
+
+```
+
+## Project the harmony louvain annotations on the scVI umap
+
+
+```{r, fig.width=8, fig.height=6}
+# harmony clusters on scVI umap
+DimPlot(so_0.2, group.by = "louvain_soupX_snn_res.0.2", reduction = umap_name)
+# scVI clusters on harmony umap
+DimPlot(so_0.2, group.by = "leiden_X_scVI_snn_res.0.2", reduction = "harmony.umap")
+
+
+```
+
+
+# Resolution 0.3
+
+Annotation at resolution 0.3
+
+```{r}
+
+# set a resolution
+resolution <- 0.3
+so[["seurat_clusters"]] <- so[[paste0(res_prefix, resolution)]]
+Idents(so) <- so$seurat_clusters
+levels(Idents(so))
+```
+1 - slow twitch muscle 1 -
+2 - fibroblast 1-
+3 - fibroblast 2-
+4 - VEC-
+5 - macrophages - 
+6 - fast twitch -
+7 - adipocyte-
+8 - mural -
+9 - T cells-
+10 - LEC -
+11 - satellite cells
+12 - granulocytes -
+13 - B cells-
+14 - nerve - 
+15 - B plasma cells-
+16 - slow twitch muscle 2
+
+
+
+```{r, fig.width = 10, fig.height=7}
+so_0.3 <- so
+so_0.3 <- RenameIdents(so, 
+                           `1` = "Slow-twitch skeletal muscle cells 1", 
+                           `2` = "Fibroblast 1", 
+                           `3` = "Fibroblast 2",
+                           `4` = "Vascular endothelial cells", 
+                           `5` = "Macrophages", 
+                           `6` = "Fast-twitch skeletal muscle cells", 
+                           `7` = "Adipocytes", 
+                           `8` = "Mural cells", 
+                           `9` = "T cells",
+                           `10` = "Lymphatic endothelial cells", 
+                           `11` = "Satellite cells",
+                           `12` = "Granulocytes",
+                           `13` = "B cells",
+                           `14` = "Nervous system cells",
+                           `15` = "B plasma cells",
+                           `16` = "Slow-twitch 2",
+                           `17` = "Slow twitch skeletal muscle cells 2")
+
+# add these Idents as a column in the metadata as well
+so_0.3$cell_annotation_scVI_0.3 <- Idents(so_0.3)
+so$cell_annotation_scVI_0.3 <- Idents(so_0.3)
+
+p <- DimPlot(so_0.3, label = TRUE, repel = TRUE, shuffle = TRUE,reduction = umap_name)
+    #scale_colour_viridis_d()
+p
+
+```
+Not worth pursuing res 0.3 further. 
+
+
+Save the annotated object with all annotations
+
+```{r, echo=FALSE}
+
+dir.create (paste0(directory, "/RDS_objects.dir"))
+saveRDS(so, paste0(directory, "/RDS_objects.dir/Achilles_integrated_annotated.rds"))
+
+# saveRDS(so_0.2, paste0(directory, "/RDS_objects.dir/Achilles_integrated_annotated_0.2.rds"))
+
+```
+
+

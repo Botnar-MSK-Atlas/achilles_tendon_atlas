@@ -392,7 +392,7 @@ p4 <- VlnPlot(so.scvi, features = "decontX_contamination", assay = "RNA", pt.siz
     theme_cowplot()+
     ggtitle("decontX score")
 
-p4 <- VlnPlot(so.scvi, features = "soupX_fraction", assay = "RNA", pt.size = 0)+
+p5 <- VlnPlot(so.scvi, features = "soupX_fraction", assay = "RNA", pt.size = 0)+
     scale_fill_viridis_d()+
     theme(legend.position="none")+
     theme_cowplot()+

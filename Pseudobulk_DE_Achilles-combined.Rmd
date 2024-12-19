@@ -1,0 +1,522 @@
+---
+title: "Pseudobulk & differential expression"
+author: "Carla Cohen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Pseudobulk and differential expression
+
+The aim of this script is to perform pseudobulk per sample, and then perform differential expression across microanatomy.  
+
+### Set up
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(Seurat)
+library(tidyverse)
+library(DESeq2)
+library(DEGreport)
+library(EnhancedVolcano)
+library(gprofiler2)
+
+# make a new output folder for each run, with the date & time in the directory name
+date <- Sys.Date() %>% str_replace_all("-", "")
+time <- format(Sys.time(), "%X") %>% str_replace_all(":", "-") %>%
+    str_sub(1, 5)
+directory <- paste0(date,"_", time, "_Pseudobulk.dir")
+dir.create(directory, showWarnings = FALSE)
+dir.create(paste0(directory, "/DEseq2_results/"))
+dir.create(paste0(directory, "/MA_plots/"))
+dir.create(paste0(directory, "/Pre-heatmap/"))
+dir.create(paste0(directory, "/Post-heatmap/"))
+dir.create(paste0(directory, "/Pre-PCA/"))
+dir.create(paste0(directory, "/Post-PCA/"))
+
+```
+
+Set the colours 
+
+```{r}
+achilles.colours <- c("#E25822",  # NEGR1hi fib
+                      "#499999",  # Macrophages
+                      "#F28E2B",  # VEC
+                      "#4E79A7",  # slow twitch
+                      "#F3C300",  # Adipocytes
+                      "#E68FAC",  # T cells
+                      "#8DB600",  # Nerve
+                      "#888888",  # LEC
+                      "#A1CAF1",  # Mural
+                      "#BE0032",  # ITGA10hi fib
+                      "#117733",  # granulocytes
+                      "#332288",  # transitional sk musc
+                      "#A55194",  # fast-twitch
+                      "#661100",  # B cells
+                      "#a0785a")  # Satellite cells
+
+names(achilles.colours) <- c("NEGR1hi Fibroblasts", "Macrophages", "Vascular endothelial cells",  "Slow-twitch skeletal muscle cells",  "Adipocytes", "T cells", "Nervous system cells", "Lymphatic endothelial cells", "Mural cells", "ITGA10hi Fibroblasts", "Granulocytes", "Transitional skeletal muscle cells", "Fast-twitch skeletal muscle cells", "B cells", "Satellite cells")
+
+# microanatomy colours
+Okabe_Ito <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#000000")
+ma.cols <-  c(Enth = Okabe_Ito[3], MB = Okabe_Ito[5], MTJ = Okabe_Ito[6], muscle = Okabe_Ito[7])
+
+```
+
+
+Read in Seurat object
+
+```{r}
+so.achilles <- readRDS("/project/tendonhca/shared/chromium/analysis/20231006_achilles/20240119_11-02_Fine_annotation.dir/RDS_objects.dir/Achilles_integrated_annotated.rds")
+so.achilles
+```
+Simplify cell names
+
+```{r}
+df <- data.frame("cell_annotation_update" = unique( so.achilles$cell_annotation_update))
+df$cell_annotation <- c("Adipocyte", 
+                        "Mural", 
+                        "ITGA10Fibroblasts", 
+                        "VEC", 
+                        "NEGR1Fibroblasts", 
+                        "Macrophages", 
+                        "Tcells", 
+                        "LEC", 
+                        "Slowtwitch", 
+                        "Nerve", 
+                        "Fasttwitch", 
+                        "Granulocytes", 
+                        "Satellite", 
+                        "Transitionalmuscle", 
+                        "Bcells")
+df
+
+so.achilles$cell_annotation <- left_join(so.achilles[[]], df)
+```
+Plot UMAP for reference
+
+```{r, fig.width=8, fig.height=10}
+# visualise the distribution of clusters based on sample (patient) 
+cell_plot <- DimPlot(so.achilles, reduction = 'harmony.umap', group.by = 'cell_annotation', label = TRUE)
+cond_plot <- DimPlot(so.achilles, reduction = 'harmony.umap', group.by = 'sample', shuffle = TRUE)
+plot_grid(cell_plot, cond_plot, ncol = 1)
+```
+
+## Pseudobulk
+
+We want to pseudobulk using sample and microanatomy information. We already have this information in the "sample" column in the format MSK0785-Ach-Enth. 
+
+[from Jolet/Marie]
+```{r}
+
+# 1. counts matrix - sample level
+
+#Aggregation of counts to sample level per cell type
+cts <- AggregateExpression(so.achilles, 
+                    group.by = c("cell_annotation", "sample"),
+                    assays = 'soupX',
+                    slot = "counts",
+                    return.seurat = FALSE)
+
+# transpose & convert to df
+cts.t <- as.data.frame(t(cts$soupX))
+
+# get values where to split
+splitRows <- gsub('_.*', '', rownames(cts.t))
+
+# split data.frame into a list of df for each cell type
+cts.split <- split.data.frame(cts.t,
+                 f = factor(splitRows), 
+                 drop = TRUE)
+
+# fix colnames and transpose function
+rownames_change <- function(x){
+  rownames(x) <- gsub('.*_(.*)', '\\1', rownames(x))
+  return(x)
+}
+
+# create a list of df for each cell type
+counts_list <- list()
+for (i in 1:length(names(cts.split))){
+    counts_list[[i]] <- t(rownames_change(cts.split[[i]]))
+}
+
+names(counts_list) <- names(cts.split)
+```
+
+### Generate sample level metadata 
+
+```{r}
+
+colData <- data.frame(sample = unique(so.achilles[["sample"]]))
+colData <- left_join(colData, so.achilles[[]], keep = FALSE, multiple = "first") %>% 
+    select(sample, patient, microanatomical_site, sequencing_date, sex)
+colData
+
+```
+
+
+## Perform DEseq2 on each cell type of interest with MB as the reference
+
+
+```{r}
+# Create a function to run DESeq2
+run_DEseq2_MB <- function (celltype){
+    out <- list()
+    
+    # filter the colData to samples that are present in the counts matrix
+    positions <- which(colData$sample %in% colnames(counts_list[[celltype]]))
+    coldata <- colData[positions, ]
+    
+    # Create DESeq2 object   
+    dds <- DESeqDataSetFromMatrix(countData = round(counts_list[[celltype]]),
+                       colData = coldata,
+                       design = ~ patient + microanatomical_site)
+
+    # filter (keep the genes that have a minimum of 10 reads)
+    keep <- rowSums(counts(dds)) >=10
+    dds <- dds[keep,]
+    dds$microanatomical_site <- relevel(dds$microanatomical_site, ref = "MB")
+    
+    # run DESeq2
+    dds <- DESeq(dds)
+    out[["dds"]] <- dds
+    # Generate results objects 
+    out[["res_EnthvsMB"]] <- results(dds, name = "microanatomical_site_Enth_vs_MB")
+    out[["res_MTJvsMB"]] <- results(dds, name = "microanatomical_site_MTJ_vs_MB")
+    out[["res_musclevsMB"]] <- results(dds, name = "microanatomical_site_muscle_vs_MB")
+    out[["res_EnthvsMB_lfcshrink"]] <- lfcShrink(dds, coef = "microanatomical_site_Enth_vs_MB", type = "apeglm")
+    out[["res_MTJvsMB_lfcshrink"]] <- lfcShrink(dds, coef = "microanatomical_site_MTJ_vs_MB", type = "apeglm")
+    out[["res_musclevsMB_lfcshrink"]] <- lfcShrink(dds, coef = "microanatomical_site_muscle_vs_MB", type = "apeglm")
+
+    return(out)
+
+    # print results summary
+    cat(summary(res_EnthvsMB)) # have to use cat not print
+    cat(summary(res_MTJvsMB))
+    cat(summary(res_musclevsMB))
+    
+}
+
+```
+
+
+Make a list of cell types and apply the function over the list
+
+NB getting the following warning so need to do some data QC to look for additional batch effects
+>   note: fitType='parametric', but the dispersion trend was not well captured by the
+>   function: y = a/x + b, and a local regression fit was automatically substituted.
+>   specify fitType='local' or 'mean' to avoid this message next time.
+
+```{r}
+celltypes_list <- as.list(names(counts_list))
+
+DEseq2_results_cells <- list()
+for (i in 1:length(celltypes_list)){
+    print(paste0("Analyzing celltype: ", celltypes_list[[i]]))
+    DEseq2_results_cells[[i]] <- run_DEseq2_MB(celltypes_list[[i]])
+}
+names(DEseq2_results_cells) <- celltypes_list
+```
+
+Save the files
+
+```{r}
+save_DEseq2_MB <- function (DEseq2_results, celltype){
+    
+    write.csv(DEseq2_results$res_EnthvsMB, 
+              paste0(directory, "/DEseq2_results/", celltype, "_EnthvsMB.csv"))
+    write.csv(DEseq2_results$res_MTJvsMB, 
+              paste0(directory, "/DEseq2_results/", celltype, "_MTJvsMB.csv"))
+    write.csv(DEseq2_results$res_musclevsMB, 
+              paste0(directory, "/DEseq2_results/", celltype, "_musclevsMB.csv"))
+}
+```
+
+```{r}
+
+for (i in 1:length(celltypes_list)){
+    save_DEseq2_MB(DEseq2_results_cells[[i]], celltypes_list[[i]])
+}
+```
+
+## DEseq2 data QC
+
+Plot PCA prior to any normalisation to look for batch effects in the raw data  
+```{r}
+# create plotting function
+plot_pre_PCA <- function(results_obj, celltype){
+    
+    res_list <- results_obj[[celltype]]
+    dds <- res_list$dds
+
+    # Transform counts for data visualization
+    rld <- rlog(dds, blind=TRUE) # using blind=TRUE means we are looking at the data irrespective of the design
+
+    # Plot PCA before correction
+    cat("plotting PCA")
+    data <- plotPCA(rld, intgroup=c("patient", "microanatomical_site", "sequencing_date", "sex"), returnData = TRUE)
+
+    p1 <- ggplot(data, aes(x=PC1, y=PC2, col=microanatomical_site, shape=patient)) + 
+        geom_point(size =3)+
+        scale_colour_manual(values = ma.cols) +
+        theme_classic()+
+        ggtitle("PCA plot for patient & microanatomy")
+    
+    p2 <- ggplot(data, aes(x=PC1, y=PC2, col=microanatomical_site, shape=sequencing_date)) + 
+        geom_point(size =3)+
+        scale_colour_manual(values = ma.cols) +
+        theme_classic()+
+        ggtitle("PCA plot for sequencing date & microanatomy")
+    
+    p3 <- ggplot(data, aes(x=PC1, y=PC2, col=microanatomical_site, shape=sex)) + 
+        geom_point(size =3)+
+        scale_colour_manual(values = ma.cols) +
+        theme_classic()+
+        ggtitle("PCA plot for sex & microanatomy")
+    
+    p <- plot_grid(p1, p2, p3)
+    
+}
+```
+
+Plot heatmaps on raw data
+
+```{r}
+# create plotting heatmap function
+plot_pre_heatmap <- function(results_obj, celltype){
+    
+    res_list <- results_obj[[celltype]]
+    dds <- res_list$dds
+    
+    print(paste0("Analysing cell type: ", celltype))
+    # plot heatmap not considering the design
+    ntd <- normTransform(dds)
+    select <- order(rowMeans(counts(dds,normalized=TRUE)),
+                    decreasing=TRUE)[1:20]
+    df <- as.data.frame(colData(dds)[,c("microanatomical_site", "patient", "sequencing_date", "sex")])
+    pheatmap(assay(ntd)[select,], cluster_rows=FALSE, show_rownames=FALSE,
+             cluster_cols=TRUE, annotation_col=df,
+             filename = paste0(directory, "/Pre-heatmap/", celltype, ".png"), 
+         width = 6, height = 5)
+
+}
+
+```
+
+## Visualise the results of DEseq2
+
+Volcano plots
+
+```{r}
+plot_volcano_MB <- function(results_obj, celltype){
+    
+    DEseq2_results <- results_obj[[celltype]]
+    
+    p1 <- EnhancedVolcano(DEseq2_results$res_EnthvsMB, 
+                lab = rownames(DEseq2_results$res_EnthvsMB), 
+                x = 'log2FoldChange', 
+                y = 'padj', 
+                title = paste0('Enthesis vs MB: ', celltype), 
+                pCutoff = 0.05, 
+                FCcutoff = 1.0,
+                xlim = c(-15, 15),
+                ylim = c(0, -log10(10e-16)),
+                pointSize = 0.5, 
+                labSize = 3.0, 
+                max.overlaps = 10,
+                colAlpha = 1,
+                legendPosition = "bottom")
+    p2 <- EnhancedVolcano(DEseq2_results$res_MTJvsMB, 
+                lab = rownames(DEseq2_results$res_MTJvsMB), 
+                x = 'log2FoldChange', 
+                y = 'padj', 
+                title = paste0('MTJ vs MB: ', celltype), 
+                pCutoff = 0.05, 
+                FCcutoff = 1.0,
+                xlim = c(-15, 15),
+                ylim = c(0, -log10(10e-16)),
+                pointSize = 0.5, 
+                labSize = 3.0, 
+                max.overlaps = 10,
+                colAlpha = 1,
+                legendPosition = "bottom")
+    p3 <- EnhancedVolcano(DEseq2_results$res_musclevsMB, 
+                lab = rownames(DEseq2_results$res_musclevsMB), 
+                x = 'log2FoldChange', 
+                y = 'padj', 
+                pointSize = 0.5,
+                title = paste0('Muscle vs MB: ', celltype), 
+                pCutoff = 0.05, 
+                FCcutoff = 1.0,
+                xlim = c(-15, 15),
+                ylim = c(0, -log10(10e-16)),
+                labSize = 3.0, 
+                colAlpha = 1,
+                max.overlaps = 10,
+                legendPosition = "bottom")
+    p <- plot_grid(p1, p2, p3, ncol = 3)
+    ggsave(paste0(directory, "/Volcano_plots/", celltype, "_MB_Volcano_plots.png"), 
+           device = "png", width = 16, height = 7, bg = "white")
+    #return(p)
+}
+
+```
+
+## Post-DEseq2 data QC
+
+Plot PCA after normalisation
+TO DO Add sex 
+```{r}
+
+plot_post_PCA <- function (results_obj, celltype){
+    
+    DEseq2_results <- results_obj[[celltype]]
+    dds <- DEseq2_results[["dds"]]
+    
+    # access normalised data
+    vsd <- varianceStabilizingTransformation(dds, blind=FALSE) # have to use this function not vst as <1000 genes
+    mat <- assay(vsd)
+    mm <- model.matrix(~microanatomical_site, colData(vsd))
+    mat <- limma::removeBatchEffect(mat, batch=vsd$patient, design=mm)
+    assay(vsd) <- mat
+
+    # Plot PCA before correction
+    data2 <- plotPCA(vsd, intgroup=c("patient", "microanatomical_site", "sequencing_date"), returnData = TRUE)
+    
+    p1 <- ggplot(data2, aes(x=PC1, y=PC2, col=microanatomical_site, shape=patient)) + 
+        geom_point(size =3)+
+        scale_colour_manual(values = ma.cols) +
+        theme_classic()+
+        ggtitle("PCA plot for patient & microanatomy")
+    
+    p2 <- ggplot(data2, aes(x=PC1, y=PC2, col=microanatomical_site, shape=sequencing_date)) + 
+        geom_point(size =3)+
+        scale_colour_manual(values = ma.cols) +
+        theme_classic()+
+        ggtitle("PCA plot for sequencing date & microanatomy")
+    
+    p <- plot_grid(p1, p2)
+    ggsave(paste0(directory, "/Post-PCA/PCA_", celltype, ".png"), width = 12, height = 5 )
+}
+
+plot_post_PCA(DEseq2_results_cells, "Adipocyte")
+```
+
+Plot heatmap after DEseq2 analysis of the top 20 differentially expressed genes after normalisation
+
+```{r}
+
+plot_post_heatmap <- function (results_obj, celltype){
+    
+    print(paste0("Analysing ", celltype))
+    DEseq2_results <- results_obj[[celltype]]
+    dds <- DEseq2_results[["dds"]]
+    
+    # select genes for heatmap
+    # Using results table which has had log2FC shrinkage
+    res_EnthvsMB <- as.data.frame(DEseq2_results$res_EnthvsMB_lfcshrink) %>% 
+        dplyr::filter(padj < 0.05) %>% 
+        arrange(abs(log2FoldChange))%>% 
+        rownames()
+    print(paste0("EnthvsMB: ", length(res_EnthvsMB), " genes"))
+    res_MTJvsMB <- as.data.frame(DEseq2_results$res_MTJvsMB_lfcshrink) %>% 
+        dplyr::filter(padj < 0.05) %>% 
+        arrange(abs(log2FoldChange))%>% 
+        rownames()
+    print(paste0("MTJvsMB: ", length(res_MTJvsMB), " genes"))
+    res_musclevsMB <- as.data.frame(DEseq2_results$res_musclevsMB_lfcshrink) %>% 
+        dplyr::filter(padj < 0.05) %>% 
+        arrange(abs(log2FoldChange))%>% 
+        rownames()
+    print(paste0("musclevsMB: ", length(res_musclevsMB), " genes"))
+    
+    # access normalised data
+    vsd <- varianceStabilizingTransformation(dds, blind=FALSE) # have to use this function not vst as <1000 genes
+    rld <- rlog(dds, blind=FALSE)
+    
+        # select data for relevant genes
+    heatmap_df_EnthvsMB <- as.data.frame(assay(vsd)[rownames(assay(vsd)) %in% res_EnthvsMB[1:50], ])
+    heatmap_df_MTJvsMB <- as.data.frame(assay(vsd)[rownames(assay(vsd)) %in% res_MTJvsMB[1:50], ])
+    heatmap_df_musclevsMB <- as.data.frame(assay(vsd)[rownames(assay(vsd)) %in% res_musclevsMB[1:50], ])
+    
+    # make df of annotation info
+    column_annotation <- as.data.frame(colData(dds)[,c("microanatomical_site", "patient", "sequencing_date")])
+    
+    # plot heatmap if there are >10 significant genes
+    if (length(res_EnthvsMB)>10){
+        pheatmap(heatmap_df_EnthvsMB, cluster_rows = FALSE, scale = "row",
+             annotation_col = column_annotation, show_rownames = FALSE,
+             filename = paste0(directory, "/Post-heatmap/Heatmap_EnthvsMB_", celltype, ".png"), 
+             width = 6, height = 5)    
+    }else{
+        print("EnthvsMB not enough significant genes")
+    }
+    if (length(res_MTJvsMB)>10){
+    pheatmap(heatmap_df_MTJvsMB, cluster_rows = FALSE, scale = "row",
+             annotation_col = column_annotation,show_rownames = FALSE,
+             filename = paste0(directory, "/Post-heatmap/Heatmap_MTJsMB_", celltype, ".png"), 
+             width = 6, height = 5)
+    }else{
+        print("MTJvsMB not enough significant genes")
+    }
+    if (length(res_musclevsMB)>10){
+    pheatmap(heatmap_df_musclevsMB, cluster_rows = FALSE, scale = "row",
+             annotation_col = column_annotation,show_rownames = FALSE,
+             filename = paste0(directory, "/Post-heatmap/Heatmap_musclevsMB_", celltype, ".png"), 
+             width = 6, height = 5)
+    }else{
+        print("musclevsMB not enough significant genes")
+    }
+    
+    
+}
+
+# plot_post_heatmap(DEseq2_results_cells, "LEC")
+```
+
+Run all plotting functions
+```{r}
+plot_list <- list()
+for (i in 1:length(celltypes_list)){
+    plot_list[[i]] <- plot_pre_PCA(DEseq2_results_cells, celltypes_list[[i]])
+    ggsave(plot = plot_list[[i]],
+           file = paste0(directory, "/Pre-PCA/", celltypes_list[[i]], ".png"), 
+           device = "png", width = 12, height = 7, bg = "white")
+    plot_pre_heatmap(DEseq2_results_cells, celltypes_list[[i]])
+    plot_volcano_MB(DEseq2_results_cells, celltypes_list[[i]])
+    plot_post_PCA(DEseq2_results_cells, celltypes_list[[i]])
+    plot_post_heatmap(DEseq2_results_cells, celltypes_list[[i]])
+}
+
+
+```
+
+
+```{r}
+# run plotting function for all cell types and save plots
+plot_list <- list()
+for (i in 1:length(celltypes_list)){
+    plot_list[[i]] <- plot_pre_PCA(DEseq2_results_cells, celltypes_list[[i]])
+    ggsave(plot = plot_list[[i]],
+           file = paste0(directory, "/Pre-PCA/", celltypes_list[[i]], ".png"), 
+           device = "png", width = 12, height = 7, bg = "white")
+}
+
+
+for (i in 1:length(celltypes_list)){
+    plot_pre_heatmap(DEseq2_results_cells, celltypes_list[[i]])
+}
+
+for (i in 1:length(celltypes_list)){
+    plot_volcano_MB(DEseq2_results_cells, celltypes_list[[i]])
+}
+
+for (i in 1:length(celltypes_list)){
+    plot_post_PCA(DEseq2_results_cells, celltypes_list[[i]])
+}
+
+for (i in 1:length(celltypes_list)){
+    plot_post_heatmap(DEseq2_results_cells, celltypes_list[[i]])
+}
+```
+

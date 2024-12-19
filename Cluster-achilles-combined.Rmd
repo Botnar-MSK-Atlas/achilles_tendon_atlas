@@ -1,0 +1,412 @@
+---
+title: "Cluster-achilles"
+author: "Carla Cohen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+
+This workflow is part of the scflow seurat pipeline and performs dimensionality reduction and clustering of individual samples, in order to see if they are good enough quality to be integrated.  
+
+The following parameters can be specified in the yml file:
+* File format (e.g. png, pdf, svg)  
+* Which Ambient-doublet output to use  
+* whether an ambient/doublet filters were used  
+* Number of dimensions for PCA
+* Clustering resolution. The script calculates resolutions from 0.1-1.0 in 0.1 increments. The default is 0.5.  
+
+
+Steps in the workflow  
+*  Read in filtered RDS objects  
+*  Read in sce objects and convert to Seurat objects
+*  Perform Normalisation,  RunPCA, FindNeighbours and RunUMAP. Default parameters are used here, these will be optimised later at integration. 
+* Perform clustering at multiple resolutions
+* Save the RDS files
+*  Visualise variable genes, Elbow Plot, clustree and UMAPs  
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, fig.width = 10, fig.height = 16, message = FALSE) #set optimal fig.width and fig.height here
+
+library(tidyverse)
+library(Seurat)
+library(scater)
+library(cowplot)
+#library(glmGamPoi)
+library(clustree)
+library(yaml)
+library(viridis)
+library(SingleCellExperiment)
+library(celda)
+
+# make a new output folder for each run, with the date & time in the directory name
+date <- Sys.Date() %>% str_replace_all("-", "")
+time <- format(Sys.time(), "%X") %>% str_replace_all(":", "-") %>%
+    str_sub(1, 5)
+directory <- paste0(date,"_", time, "_Cluster.dir")
+dir.create(directory, showWarnings = FALSE)
+
+# Read in the yml file
+ini <- read_yaml("cluster.yml")
+
+```
+
+Print the parameters used
+```{r}
+ini
+```
+
+
+## Import the data & Setup
+
+Decide whether to use samples with ambient RNA/doublets filtered out or not  
+Make a list of files
+
+
+```{r}
+
+if (ini$ambient_filter == TRUE && ini$doublet_filter == TRUE){
+    open_name <- "ambient_doublet_filter"
+    print(open_name)
+} else if (ini$ambient_filter == FALSE && ini$doublet_filter == TRUE) {
+    open_name <- "ambient_calc_doublet_filter"
+    print(open_name)
+} else if (ini$ambient_filter == TRUE && ini$doublet_filter == FALSE){
+    open_name <- "ambient_filtered_doublet_calculated"
+    print(open_name)
+} else if (ini$ambient_filter == FALSE && ini$doublet_filter == FALSE){
+    open_name <- "ambient_doublet_calculated"
+    print(open_name)
+}
+
+#make a list of sample files
+
+file_list <- list.files(paste0(ini$qc_filter, "_Ambient-doublet.dir/RDS_objects.dir/", open_name, "/"), 
+                                 pattern="_SingleCellExp.rds")
+
+names(file_list) <- str_replace(file_list, paste0("_", open_name, "_SingleCellExp.rds"), "")
+
+print ("File list")
+names(file_list)
+
+```
+
+Read in RDS files after filtering, convert to Seurat object
+
+```{r, echo=FALSE, warning = FALSE}
+
+#Make a new list for the sce objects and so
+sce <- list()
+so <- list()
+
+for (i in 1:length(file_list)){
+    # read in sce
+    sce[[i]] <- readRDS(paste0(ini$qc_filter, "_Ambient-doublet.dir/RDS_objects.dir/", open_name, "/",
+                               file_list[[i]]))
+    # Create seurat object
+    so[[i]] <- CreateSeuratObject(counts = counts(sce[[i]]), 
+                   project = mainExpName(sce[[i]]), 
+                   assay = "RNA", 
+                   meta.data = as.data.frame(colData(sce[[i]])))
+    
+    # add the decontX counts
+    so[[i]][["decontXcounts"]] <- CreateAssayObject(counts = decontXcounts(sce[[i]]))
+
+}
+
+so
+```
+
+### Perform Normalisation, dimensionality reduction
+
+Perform the main steps with default parameters and set number of PCs (default 30)  
+
+
+```{r, message=FALSE, warning = FALSE, echo = FALSE}
+
+for (i in 1:length(so)){
+    
+    #cat ("Analysing sample", i, ":", so[[i]]@project.name)
+    #cat ("\n")
+    
+    so[[i]] <- so[[i]] %>% 
+           NormalizeData() %>%
+           FindVariableFeatures() %>% 
+           ScaleData() %>%
+           RunPCA()%>%
+           FindNeighbors(dims = 1:ini$n_dims) %>%
+           RunUMAP(dims = 1:ini$n_dims) 
+        
+    }
+    
+  
+```
+
+
+### Add multiple resolutions of clustering
+Calculate clusters at resolutions 0.1 to 1 with 0.1 intervals.
+
+SC best practise recommends using the Leiden algorithm which has improved performance over the Louvain algorithm. 
+https://www.sc-best-practices.org/cellular_structure/clustering.html
+NB this requires the leidenAlg package
+
+```{r, message=FALSE, warning = FALSE, echo = FALSE}
+
+so <- lapply(so, FindClusters, resolution = seq(0.1, 1, 0.1))
+
+
+```
+
+
+
+
+### Save the RDS objects
+
+```{r, warning=FALSE}
+dir.create (paste0(directory, "/RDS_objects.dir/"))
+
+for(i in 1:length(so)){
+    
+    saveRDS(so[[i]], paste0(directory, "/RDS_objects.dir/", 
+                            so[[i]]@project.name, "_filtered_clustered_SeuratObject.rds"))
+    
+}
+
+```
+
+
+
+### Plot the variable features following normalisation
+
+
+```{r, fig.width=14, fig.height=28, message=FALSE, warning = FALSE}
+plot_list <- list()
+
+for (i in 1:length(so)){
+    
+    
+    p1 <- VariableFeaturePlot(so[[i]], pt.size = 0.2)+
+      scale_colour_viridis_d(begin = 0, end = 0.75)
+    
+    plot_list[[i]] <- LabelPoints(plot = p1, points = VariableFeatures(so[[i]])[1:10], 
+                      repel = TRUE, xnudge = 0, ynudge = 0)+
+        ggtitle(so[[i]]@project.name)
+    
+}
+
+title <- ggdraw() + draw_label("Highly variable genes", fontface='bold', size = 24)
+p <- plot_grid(plotlist = plot_list, label_size = 12, ncol = 3)
+p <- plot_grid(title, p, ncol=1, rel_heights=c(0.05, 1))
+
+p
+
+
+```
+
+```{r, include=FALSE}
+#save the plot
+dir.create(paste0(directory, "/Clustering_Figures.dir/"))
+ggsave(paste0(directory, "/Clustering_Figures.dir/HVG.", ini$file_format), 
+       p, device = ini$file_format, width = 14, height = 28, bg = "white")
+
+
+```
+
+
+
+### ElbowPlot
+
+```{r, fig.width=14, fig.height = 20, message=FALSE}
+plot_list <- list()
+
+for (i in 1:length(so)){
+    
+    plot_list[[i]] <- ElbowPlot(so[[i]], ndims = 50)+
+        ggtitle(so[[i]]@project.name, )
+  
+}
+
+title <- ggdraw() + draw_label("Elbow Plot", fontface='bold', size = 24)
+p <- plot_grid(plotlist = plot_list, label_size = 12, ncol = 3)
+p <- plot_grid(title, p, ncol=1, rel_heights=c(0.05, 1))
+
+p
+
+
+```
+
+
+```{r, include=FALSE}
+#save the plot
+ggsave(paste0(directory, "/Clustering_Figures.dir/Elbow_plot.", ini$file_format), 
+       p, device = ini$file_format, width = 14, height = 20, bg = "white")
+
+
+```
+
+
+### Clustree
+
+```{r, fig.width=12, fig.height=20}
+
+plot_list <- list()
+
+for (i in 1:length(so)){
+    
+    plot_list[[i]] <- clustree(so[[i]]) + 
+               ggtitle(so[[i]]@project.name)
+    
+}
+
+# save as individual plots as they are too big to put on one page
+
+```
+
+
+```{r, include=FALSE}
+#save the plots
+dir.create(paste0(directory, "/Clustering_Figures.dir/Clustree_plots/"))
+
+for(i in 1:length(so)){
+    ggsave(paste0(directory, "/Clustering_Figures.dir/Clustree_plots/", 
+                  so[[i]]@project.name, ".", ini$file_format), 
+       plot = plot_list[[i]], device = ini$file_format, width = 8, height = 10, bg = "white")
+}
+
+
+```
+
+### Plot UMAP with clustering
+
+```{r, fig.width=14, fig.height = 28,message=FALSE}
+plot_list <- list()
+
+for (i in 1:length(so)){
+    
+    # set chosen resolution (default = 0.5)
+    
+    so[[i]][["seurat_clusters"]] <- so[[i]][[paste0("RNA_snn_res.", ini$resolution)]]
+    
+    # plot UMAP
+    plot_list[[i]] <- DimPlot(so[[i]], reduction = "umap", label = TRUE, repel = TRUE) +
+        theme(legend.position="none")+
+        ggtitle(so[[i]]@project.name)
+    
+}
+
+title <- ggdraw() + draw_label(paste0(" Clustering at resolution = ", ini$resolution), fontface='bold', size = 24)
+p <- plot_grid(plotlist = plot_list, label_size = 12, ncol = 3)
+p <- plot_grid(title, p, ncol=1, rel_heights=c(0.05, 1))
+
+p
+
+
+```
+
+```{r, include=FALSE}
+#save the plot
+ggsave(paste0(directory, "/Clustering_Figures.dir/UMAP_plot.", ini$file_format), 
+       p, device = ini$file_format, width = 14, height = 28, bg = "white")
+
+
+```
+
+### Feature plot for mitochondrial content
+
+```{r, fig.width=14, fig.height = 28, message = FALSE}
+
+plot_list <- list()
+
+for (i in 1:length(so)){
+    
+    plot_list[[i]]  <- FeaturePlot(so[[i]], features = "subsets_mito_percent", reduction = "umap")+
+        scale_colour_gradientn(colours = viridis(256, option = "D"), name = "percent_mt", limits = c(0, 5))+
+        ggtitle(so[[i]]@project.name)
+
+}
+
+title <- ggdraw() + draw_label("Percent MT genes on UMAP", fontface='bold', size = 24)
+p <- plot_grid(plotlist = plot_list, label_size = 12, ncol = 3)
+p <- plot_grid(title, p, ncol=1, rel_heights=c(0.1, 1))
+
+p
+
+
+```
+
+
+```{r, include=FALSE}
+#save the plot
+ggsave(paste0(directory, "/Clustering_Figures.dir/UMAP_percent_mt.", ini$file_format), 
+       p, device = ini$file_format, width = 14, height = 28, bg = "white")
+
+
+```
+
+### UMAP QC plots  
+For each sample, plot the UMAP with clusters, percent mt, doublets, ambient RNA 
+
+```{r}
+
+plot_list <- list()
+for (i in 1:length (so)){
+    p_list <- list()
+
+    # clustering
+    p_list[[1]] <- DimPlot(so[[i]], reduction = "umap", label = TRUE, repel = TRUE) +
+        theme(legend.position="none")+
+        ggtitle("clustering")
+    
+    # nUMI
+    p_list[[2]] <- FeaturePlot(so[[i]], features = "sum", reduction = "umap")+
+        scale_colour_gradientn(colours = viridis(256, option = "D"), name = "nUMI")+
+        ggtitle("nUMI")
+    
+    # nFeatures
+    p_list[[3]] <- FeaturePlot(so[[i]], features = "detected", reduction = "umap")+
+        scale_colour_gradientn(colours = viridis(256, option = "D"), name = "nFeatures")+
+        ggtitle("nFeatures")
+
+    # percent mt
+    p_list[[4]] <- FeaturePlot(so[[i]], features = "subsets_mito_percent", reduction = "umap")+
+        scale_colour_gradientn(colours = viridis(256, option = "D"), name = "percent_mt", limits = c(0, 5))+
+        ggtitle("percent mt")
+     
+
+    # decontX_contamination
+    p_list[[5]] <- FeaturePlot(so[[i]], features = "decontX_contamination", reduction = "umap")+
+        scale_colour_gradientn(colours = viridis(256, option = "D"), name = "decontX score")+
+        ggtitle("decontX_contamination")
+    
+    # doublets
+    p_list[[6]] <- DimPlot(so[[i]], reduction = "umap", group.by = "scDblFinder.class") +
+    scale_colour_viridis_d(begin = 0, end = 0.75)+
+        ggtitle("doublet status")
+    
+   
+    
+    title <- ggdraw() + 
+        draw_label(paste0(mainExpName(sce[[i]]), ": ", ncol(sce[[i]]), " cells"), 
+                          fontface='bold', size = 24)
+    p1 <-  plot_grid(plotlist = p_list[1:6], ncol =2)
+    
+    plot_list[[i]] <- plot_grid(title, p1, ncol=1, rel_heights=c(0.1, 1))
+    
+}
+
+
+```
+
+```{r}
+#save the plots
+dir.create(paste0(directory, "/Clustering_Figures.dir/UMAP_QC_plots/"))
+
+for(i in 1:length(so)){
+    ggsave(paste0(directory, "/Clustering_Figures.dir/UMAP_QC_plots/", 
+                  mainExpName(sce[[i]]), ".", ini$file_format), 
+       plot = plot_list[[i]], device = ini$file_format, width = 10, height = 10, bg = "white")
+}
+
+```
+
