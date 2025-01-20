@@ -1,0 +1,313 @@
+---
+title: "Annotation template"
+author: "Carla Cohen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+This is a script to get together all the annotation makers and use them for dotplots. 
+It can be used for future annotations. 
+The annotation lists are all saved in Files.dir/annotation_markers
+These can be updated below as required. 
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(Seurat)
+library(tidyverse)
+
+# make a new output folder for each run, with the date & time in the directory name
+date <- Sys.Date() %>% str_replace_all("-", "")
+time <- format(Sys.time(), "%X") %>% str_replace_all(":", "-") %>%
+    str_sub(1, 5)
+directory <- paste0(date,"_", time, "_Annotation_template.dir")
+dir.create(directory, showWarnings = FALSE)
+dir.create(paste0(directory, "/Marker_dotplots/"))
+dir.create("Files.dir/annotation_markers")
+```
+
+Read in a Seurat object to test plotting
+
+```{r}
+so.achilles <- readRDS("20241106_11-56_Final_annotation.dir/RDS_objects.dir/Achilles_integrated_annotated.rds")
+Idents(so.achilles) <- so.achilles$cell_annotation_scVI_0.1
+```
+
+
+Create marker lists
+
+```{r}
+general_markers <- list("Fibroblasts" = c("COL1A1", "COL1A2", "COL3A1", "COL3A2", "DCN",
+                                          "HMCN1", "NEGR1", "DCLK1", "KAZN", "BICC1", "PRICKLE1",
+                                          "CLU", "COMP", "MMP3", "NOVA1", "CILP", "FBLN1", "PRG4", 
+                                          "POSTN", "CSMD2", "ADAM12", "FN1", "CEMIP"),
+                        "Skeletal Muscle" = c("TRDN", "TTN", "NEB", "TNNT1", "LGR5", "ATP2A2", "DES", "ACTN2"), 
+                        "Macrophages"  = c("F13A1", "CD163", "MRC1", "MSR1","CD14", "CD163L1", "MERTK"), 
+                        "T cells"  = c( "CD247", "SKAP1", "THEMIS", "PTPRC", "IL7R", "CCR7","ANK3"), 
+                        "Granulocytes" = c( "KIT", "CPA3", "IL18R1","CDK15", "MS4A2", "HPGD", "AK5", "ACP5", "MMP9", "GATA2"), 
+                        "B cells" = c("MS4A1", "CD37", "BLNK", "FCRL1", "IGHM"), 
+                        "Plasma cells" = c("CD38", "CD79A", "CD79B", "SDC1", "CD27", "CD78"), 
+                        "VEC" = c( "PECAM1", "PTPRB", "FLT1", "VWF", "ADGRL4", "CD34", "CDH5", "NOTCH4", "TEK"), 
+                        "LEC" = c( "MMRN1", "PROX1", "PKHD1L1","EPHB4", "FLT4", "KDR", "LYVE1", "NRG3",  
+                                "FCN1", "LYZ", "AOAH", "BCL11A", "CUX2", "CLEC4C",  "TENM2", "PTCH2", "APOD", 
+                                "CNTN4", "ABCA10"),
+                        "Mural" = c( "NOTCH3", "PDGFRB", "MYO1B", "EMCHN", "ABCA8", "COL15A1", "CD55", "ELN", "FBN1", 
+                                     "FBLN2", "FBLN5", "KCND2","PDGFRA", "VIT"), 
+                        "Adipocytes"  = c ("PLIN1", "LPL", "GPAM", "TMEM132C", "PLIN4", "AQP7", 
+                                          "ADIPOQ", "PDE3B", "FABP4", "LIPE"), 
+                        "Cycling cells" = c("ASPM", "DIAPH3", "TOP2A"),
+                        "Nervous system cells" = c( "NTRK3", "KANK4", "SLC2A1", "SLC22A3", "CLDN1")
+                        )
+
+general_markers_top5 <- list("Fibroblast" = c("COL1A2", "COL3A1", "DCN", "NEGR1", "COMP"),
+                        "Sk_musc" = c("TRDN", "TTN", "NEB", "DES", "ACTN2"), 
+                        "Macrophage"  = c("F13A1", "CD163", "MRC1", "MSR1","MERTK"), 
+                        "T cell"  = c( "CD247", "SKAP1", "THEMIS", "PTPRC", "IL7R"), 
+                        "Granulocyte" = c("KIT", "CPA3", "IL18R1","CDK15", "MS4A2"), 
+                        "B cell" = c("MS4A1", "CD37", "BLNK", "FCRL1", "IGHM"), 
+                        "Plasma" = c("CD38", "CD79A", "CD79B", "SDC1", "CD27"), 
+                        "VEC" = c("PECAM1", "PTPRB", "FLT1", "VWF", "ADGRL4"), 
+                        "LEC" = c( "MMRN1", "PROX1", "PKHD1L1", "FLT4", "NRG3"),
+                        "Mural" = c( "NOTCH3", "PDGFRB", "MYO1B", "ELN", "FBN1"), 
+                        "Adipocyte"  = c ("PLIN1", "LPL", "GPAM", "AQP7","ADIPOQ"), 
+                        "Cycling" = c("ASPM", "DIAPH3", "TOP2A"),
+                        "Nerve" = c( "NTRK3", "KANK4", "SLC2A1", "SLC22A3", "CLDN1")
+                        )
+
+muscle_markers <- list("Fast twitch" = c("TNNT3", "MYH1", "MYH2", "MYH3","TNNC2", "TNNI2", "ACTN3", "HOMER1", 
+                                    "KCNQ5", "MYLK4", "MYBPC2", "ATP2A1"),
+                       "Transitional" = c("COL22A1", "ADAMTSL1", "CPM", "CSMD1", "FRAS1", "PZP", "RALYL", "SAMD5", "SORBS2", "SPAG16"), 
+                       "Slow twitch"  = c("TNNC1", "TNNI1", "TNNT1", "ATP2A2", "CCR3", "LGR5", "MYH7", "MYH7B", "NEK10", "TECRL"),
+                       "Smooth muscle" = c("ACTA2", "MYH11", "TAGLN", "CRIP2", "MYL9", "RTL8C", "RERGL", "PLAC9", "MFAP4", "LGALS3BP"),
+                       "Satellite cells" = c("PAX7", "CALCR", "CDH4", "CLCN5", "CTNND2", "GREM1"),
+                       "Nerve-associated cells" = c( "NME7", "LHFPL3", "RASGRF1", "ASTN2", "PHYHIPL"),
+                       "NMJ myocytes" = c("CHRNA1", "COLQ", "PCDHG", "PHLDB2", "MUSK", "SCN5A"))
+
+muscle_markers_top5 <- list("Fast" = c("TNNT3", "MYH1", "TNNI2","MYBPC2", "ATP2A1"), 
+                            "Trans" = c("COL22A1", "ADAMTSL1", "CPM", "SORBS2", "SPAG16"), 
+                       "Slow"  = c("TNNC1", "TNNI1", "TNNT1", "ATP2A2", "LGR5"),
+                       "Satellite" = c("PAX7", "CALCR", "CDH4", "CLCN5", "CTNND2"),
+                       "Nerve" = c( "NME7", "LHFPL3", "RASGRF1", "ASTN2", "PHYHIPL"),
+                       "NMJ" = c("CHRNA1", "COLQ", "PCDHG", "PHLDB2", "MUSK", "SCN5A"))
+
+immune_markers <- list("Classical monocytes" = c("CD14", "NCF1", "MS4A6A"),
+                       "Non-classical monocytes" = c("FCGR3A", "LST1", "RPS19", "MS4A7", "CSF1R", "CDKN1C", "LILRB2", "ITGAL"),
+                       "T cells" = c( "CD247", "SKAP1", "THEMIS", "PTPRC", "IL7R", "CCR7","ANK3"), 
+                       "VCANhi DCs/mon" = c("VCAN", "FCN1", "LYZ"), 
+                       "DCs" = c("HLA-DPB1", "HLA-DPA1", "HLA-DQA1", "HLA-DRA", "HLA-DRB1", "CD86", "CD74","CD300A", "IRF7", "IL3RA", "NRP1", "GPAT3", "CIITA"),
+                       "CLEC10A DCs" = c("CLEC10A", "CD1C", "FCER1A", "IL1R2"),
+                       "CLEC9Ahi DCs" = c("CLEC9A", "CADM1", "IDO1", "CLNK", "ZNF366"),
+                       "NK cells" = c("NCAM1", "GNLY", "KLRD1", "CCL5", "MCTP2"),
+                       "pDCs" = c("CLEC4C", "BCL11A", "CUX2", "IRF8", "PLAC8"),
+                       "Granulocytes" = c( "KIT", "CPA3", "IL18R1","CDK15", "MS4A2",
+                                           "HPGD", "GATA2"),
+                       "Osteoclasts" = c("SPP1", "MMP9", "ACP5", "SIGLEC15", "AK5"), 
+                       "B cells" = c("MS4A1", "CD37", "BLNK", "FCRL1", "IGHM"), 
+                       "Plasma cells" = c("CD38", "CD79A", "CD79B", "SDC1", "CD27"),
+                       "MERTKhi LYVE1hi macrophages" = c("CD163", "F13A1","STAB1",
+                                                         "MERTK", "MRC1", "TLR2", "FGF13",
+                                                         "SELENOP", "PDE4D", "NAV2",
+                                                         "ABCA6", "LYVE1", "MARCO"), 
+                       "MERTKhi LYVE1lo macrophages" = c("CTSL", "CTSB", "TPRG1", "HMOX1",
+                                                         "ELL2", "CXCL2", "CXCL3","CXCL8"),
+                       "MERTKlo PTPRGhi macrophages" = c("PTPRG", "MIR99AHG", "PARD3",
+                                                         "KAZN",  "IFI44L"), 
+                       "Dividing cells"= c("ASPM", "DIAPH3", "TOP2A", "RRM2", "CENPE")
+)
+
+myeloid_markers_top5 <- list("Class_mon" = c("CD14", "NCF1", "MS4A6A"),
+                       "Non-class_mon" = c("FCGR3A", "LST1", "CSF1R", "LILRB2", "ITGAL"),
+                       "VCANhi DC/mon" = c("VCAN", "FCN1", "LYZ"), 
+                       "DCs" = c("HLA-DPB1", "HLA-DPA1", "HLA-DQA1", "CD74", "CIITA"),
+                       "CLEC10A DC" = c("CLEC10A", "CD1C", "FCER1A", "IL1R2"),
+                       "CLEC9Ahi DC" = c("CLEC9A", "CADM1", "IDO1", "CLNK", "ZNF366"),
+                       "pDCs" = c("CLEC4C", "BCL11A", "CUX2", "IRF8", "PLAC8"),
+                       "Granulocyte" = c( "KIT", "CPA3", "IL18R1","CDK15", "MS4A2"),
+                       "Osteoclast" = c("SPP1", "MMP9", "ACP5", "SIGLEC15", "AK5"), 
+                       "MERTK+LYVE1+mac" = c("CD163", "F13A1","STAB1",
+                                                         "MERTK", "LYVE1"), 
+                       "MERTK+LYVE1-mac" = c("CTSL", "CTSB", "TPRG1", "HMOX1",
+                                                         "ELL2"),
+                       "MERTK-PTPRG+mac" = c("PTPRG", "MIR99AHG", "PARD3",
+                                                         "KAZN",  "IFI44L"), 
+                       "Dividing"= c("ASPM", "DIAPH3", "TOP2A", "RRM2", "CENPE")
+)
+
+lymphoid_markers_top5 = list("T cell" = c("CD247", "SKAP1", "THEMIS", "PTPRC", "IL7R"), 
+                              "NK cell" = c("NCAM1", "GNLY", "KLRD1", "CCL5", "MCTP2"),
+                              "B cells" = c("MS4A1", "CD37", "BLNK", "FCRL1", "IGHM"), 
+                              "Plasma " = c("CD38", "CD79A", "CD79B", "SDC1", "CD27"))
+
+stromal_markers <- list("Mural" = c("NOTCH3", "PDGFRB", "MYO1B", "DLC1", "CALD1", "EBF2", "COL6A3"),
+                        "Pericytes" = c("COL25A1", "POSTN", "STEAP4", "RGS5"),
+                        "Venular VECs" = c("SELP", "NOSTRIN", "MYRIP", "GNA14", "TACR1", "RAMP3", "LIFR", "ICAM1"),
+                        "Arteliolar VECs" = c("PODXL", "EFNB2", "NEBL", "SYT1", "THSD4", "CXCL12", "SEMA3G", "GJA4", "HEY1"),
+                        "Capillary VECs" = c("COL4A1", "COL4A2", "COL15A1", "DYSF", "ARHGAP18", "LAMB1", "SPARC", "GNG2", "VWA1"),
+                        "vSMCs" = c("MYH11", "TAGLN", "SORBS2", "RCAN2", "LMOD1", "CARMN"),
+                        "Dividing VEC" = c("ASPM", "DIAPH3", "TOP2A", "CENPE", "TPX2", "MELK"),
+                        "LEC" = c( "MMRN1", "PROX1", "EPHB4", "FLT4", "KDR", "LYVE1", "NRG3", "PKHD1L1",  "FCN1", "LYZ", "AOAH",
+  "BCL11A", "CUX2", "CLEC4C",  "TENM2", "PTCH2", "APOD", "CNTN4", "ABCA10"),
+  "Adipocytes"  = c ("PLIN1", "AQP7", "ADIPOQ", "LPL", "GPAM", "TMEM132C", "PLIN4","PDE3B", "FABP4", "LIPE"))
+
+stromal_markers_top5 <- list("Pericytes" = c("PDGFRB","COL25A1", "POSTN", "STEAP4", "RGS5"),
+                        "vSMCs" = c("MYH11", "TAGLN", "SORBS2", "RCAN2", "LMOD1", "CARMN"),
+                        "Venular VECs" = c("SELP", "NOSTRIN", "MYRIP", "GNA14", "TACR1"),
+                        "Arteliolar VECs" = c("PODXL", "EFNB2", "NEBL", "SYT1", "THSD4"),
+                        "Capillary VECs" = c("COL4A1", "COL4A2", "COL15A1", "DYSF", "ARHGAP18"),
+                        "Dividing VEC" = c("ASPM", "DIAPH3", "TOP2A", "CENPE", "TPX2", "MELK"),
+                        "LEC" = c( "MMRN1", "PROX1", "PKHD1L1", "FLT4", "NRG3"),
+                        "Adipocyte"  = c ("PLIN1", "LPL", "GPAM", "AQP7","ADIPOQ"))
+
+
+```
+
+Save the lists of annotation makers
+
+```{r, fig.width=20, fig.height=12}
+
+save_markers <- function(gene_list, name){
+    # make all vectors of genes in the marker lists the same length
+    constant_list <- lapply(gene_list, `length<-`, max(lengths(gene_list)))
+    # unlist and make a df
+    df <- data.frame(t(Reduce(rbind, constant_list)))
+    # add cell types as col names
+    colnames(df) <- names(gene_list)
+    # this df can be saved using write.table
+    write.table(df, paste0("Files.dir/annotation_markers/", name, ".txt"))
+}
+
+
+save_markers(general_markers, "general_markers")
+save_markers(general_markers_top5, "general_markers_top5")
+save_markers(immune_markers, "immune_markers")
+save_markers(myeloid_markers_top5, "myeloid_markers_top5")
+save_markers(lymphoid_markers_top5, "lymphoid_markers_top5")
+save_markers(muscle_markers, "muscle_markers")
+save_markers(muscle_markers_top5, "muscle_markers_top5")
+save_markers(stromal_markers, "stromal_markers")
+save_markers(stromal_markers_top5, "stromal_markers_top5")
+
+rm(general_markers)
+rm(general_markers_top5)
+rm(muscle_markers)
+rm(muscle_markers_top5)
+rm(immune_markers)
+rm(lymphoid_markers_top5)
+rm(myeloid_markers_top5)
+rm(stromal_markers)
+rm(stromal_markers_top5)
+
+```
+
+In future annotation scripts, the code below can be used to quickly make dotplots of groups of annotation markers. 
+
+Read in the files of annotation markers
+
+```{r, fig.width=20, fig.height=15}
+
+# make a vector of the marker lists you want to use
+all_markers <- c("general_markers", "general_markers_top5", 
+                    "muscle_markers", "muscle_markers_top5",
+                    "immune_markers", "myeloid_markers_top5", "lymphoid_markers_top5", 
+                    "stromal_markers", "stromal_markers_top5")
+
+# For each marker list
+# read in the table then make it into a list
+# remove the NAs
+annotation_markers <- list()
+for (i in 1:length(all_markers)) {
+    annotation_markers[[i]] <- as.list(read.table(paste0("Files.dir/annotation_markers/", all_markers[i], ".txt")))
+    annotation_markers[[i]] <-lapply(annotation_markers[[i]], function(x) x[!is.na(x)]) 
+    
+}
+
+names(annotation_markers) <- all_markers
+
+# use each marker list for plotting individually
+
+```
+
+Define the plotting function
+```{r, fig.width=30, fig.height=20}
+
+
+annotation_dotplot <- function (so, genes, category, fig_width = 7, fig_height = 7){
+    p <- DotPlot(so, features = genes, assay = "soupX") + 
+    scale_colour_gradient2(low = "#f7f3f2", mid = "#f2390a", high = "#6e1e0a", midpoint = 1)+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, size = 16))+
+    theme(axis.text.y = element_text(size = 16))+
+    theme(axis.title.x = element_blank())+
+    theme(axis.title.y = element_blank())+
+    ggtitle(category)
+    
+    ggsave(paste0(directory, "/Marker_dotplots/", category," .png"), bg = "white", 
+           width = fig_width, height = fig_height)
+    p
+}
+
+
+```
+
+Plot all general markers at two resolutions
+```{r, fig.width=30, fig.height=20}
+annotation_dotplot(so.achilles, annotation_markers$general_markers, "General_markers", 30, 20)
+```
+
+Plot top 5 general markers
+```{r, fig.width=20, fig.height=10}
+annotation_dotplot(so.achilles, annotation_markers$general_markers_top5, "General_markers_top_5_broad_annotation", 20, 10)
+```
+
+Plot all muscle markers
+
+```{r, fig.width=20, fig.height=10}
+
+annotation_dotplot(so.achilles, annotation_markers$muscle_markers, "Muscle_markers", 20, 10)
+
+```
+
+Plot top 5 muscle markers
+
+```{r, fig.width=20, fig.height=10}
+
+annotation_dotplot(so.achilles, annotation_markers$muscle_markers_top5, "Muscle_markers_top5_fine", 20, 10)
+
+```
+Immune markers
+```{r, fig.width=30, fig.height=10}
+annotation_dotplot(so.achilles, annotation_markers$immune_markers, "Immune_markers", 30, 10)
+
+```
+
+Immune myeloid markers top 5
+
+```{r, fig.width=25, fig.height=10}
+
+annotation_dotplot(so.achilles, annotation_markers$myeloid_markers_top5, "Myeloid_markers_top_5", 25, 10)
+
+
+```
+
+Immune lymphoid markers top 5
+
+```{r, fig.width=15, fig.height=10}
+annotation_dotplot(so.achilles, annotation_markers$lymphoid_markers_top5, "Lymphoid_markers_top_5", 15, 10)
+```
+
+Stromal markers
+```{r, fig.width=30, fig.height=10}
+
+annotation_dotplot(so.achilles, annotation_markers$stromal_markers, "Stromal_markers", 30, 10)
+
+```
+
+
+Top 5 stromal markers
+
+```{r, fig.width=20, fig.height=10}
+
+annotation_dotplot(so.achilles, annotation_markers$stromal_markers_top5, "Stromal_markers", 20, 10)
+
+```
+
+
