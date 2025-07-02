@@ -1,0 +1,28 @@
+###########################################
+#                                         #
+# configuration file for Xenium workflow  #
+#                                         #
+###########################################
+
+
+# Specify the microanatomy being analysed
+microanatomy: "Muscle"
+# Set the transcript filter (what is the minimum number of transcripts per cell)
+transcript_filter: 5
+
+# which resolutions should be used to test clustering
+resolutions: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+
+# which resolution should be used for annotation
+resolution_out: 0.1
+
+# Coordinates to make cropped FOV
+cropped_x: [2000, 3000]
+cropped_y: [1500, 2500]
+
+# Choose the slice
+slice_intercept: -1000
+slice_angle: 1
+equation_x: 1
+equation_y: -1
+
