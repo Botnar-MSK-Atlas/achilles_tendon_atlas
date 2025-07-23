@@ -688,7 +688,7 @@ df <- left_join(df, df.fb)
 
 # make a new column of fine annotation by filling in the values from the other annotations
 df <- df %>% mutate(fine_annotation =
-                  case_when(is.na(predicted.id_fb_fine) ~ predicted.id_broad))
+                  case_when(is.na(predicted.id_fb_fine) ~ predicted.id_integrated_broad))
 
 df <- df %>% mutate(fine_annotation = coalesce(fine_annotation, predicted.id_fb_fine))
 
@@ -697,24 +697,37 @@ so.harmony$fine_annotation <- df$fine_annotation
 
 
 # compare the annotations 
-df.fb <- df %>% filter(predicted.id_broad == "Fibroblasts") %>% 
+df.fb <- df %>% filter(predicted.id_integrated_broad == "Fibroblasts") %>% 
   select(predicted.id_integrated_broad, predicted.id_integrated_fine, predicted.id_fb_fine, fine_annotation) %>%
   filter(str_detect(predicted.id_integrated_fine, "fibroblasts") | predicted.id_integrated_fine == "Chondrocytes")
-table(df.fb$predicted.id_fb_fine, df.fb$predicted.id_integrated_fine)
-```
-```{r}
 
-heatmap(table(df.fb$predicted.id_fb_fine, df.fb$predicted.id_integrated_fine))
+
+df <- as.data.frame(table(df.fb$predicted.id_fb_fine))
+colnames(df) <- c("Cell_type", "predicted.id_fb_fine")
+df2 <- as.data.frame(table(df.fb$predicted.id_integrated_fine))
+colnames(df2) <- c("Cell_type", "predicted.id_integrated_fine")
+df <- left_join(df, df2) %>% arrange(desc(predicted.id_fb_fine))
+df$Cell_type <- factor(df$Cell_type, levels = df$Cell_type)
+df <- df %>% pivot_longer(2:3, names_to = "labels", values_to = "Frequency")
+df
+
+ggplot(df, aes(fill = labels, y = Frequency, x = Cell_type))+
+  geom_bar(position = "dodge", stat = "identity")+
+  theme_classic()+
+  coord_flip()
+
 ```
 
 
 ```{r, fig.width=12, fig.height=5}
 
-DimPlot(so.fb, group.by = "predicted.id_integrated_fine", 
-        cols = achilles.fine.colours, reduction = "umap")
+p1 <- DimPlot(so.fb, group.by = "predicted.id_integrated_fine", 
+        cols = fibroblast.colours.bright, reduction = "umap")
 
-DimPlot(so.fb, group.by = "predicted.id_fb_fine", 
-        cols = achilles.fine.colours, reduction = "umap")
+p2 <- DimPlot(so.fb, group.by = "predicted.id_fb_fine", 
+        cols = fibroblast.colours.bright, reduction = "umap")
+
+plot_grid(p1, p2)
 ```
 
 It hasn't changed things loads but I think it is is improved, by increasing the identification of minor subtypes.

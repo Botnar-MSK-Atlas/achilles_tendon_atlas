@@ -1,0 +1,636 @@
+---
+title: "Xenium integration"
+author: "Carla Cohen"
+date: "2025-06-26"
+output: html_document
+---
+
+
+# Xenium integration
+
+The aim of this script is to integrate all the xenium samples, then do annotation. 
+Might give greater clarify to the annotations. 
+Do we see any cell types that are not present in the single nuc data?
+
+
+Load packages and set up
+```{r}
+
+library(Seurat)
+library(tidyverse)
+library(scCustomize)
+library(readr)
+library(pheatmap)
+library(matrixStats)
+library(spdep)
+library(geojsonR)
+library(clustree)
+library(yaml)
+library(cowplot)
+library(RColorBrewer)
+
+wdir <- "/project/wolf1241/xenium/"
+set.seed(123)
+
+# make a new output folder for each run, with the date & time in the directory name
+date <- Sys.Date() %>% str_replace_all("-", "")
+time <- format(Sys.time(), "%X") %>% str_replace_all(":", "-") %>%
+    str_sub(1, 5)
+directory <- paste0(wdir, date,"_", time, "_Integration.dir")
+dir.create(directory, showWarnings = FALSE)
+dir.create(paste0(directory, "/RDS_objects.dir/"))
+dir.create(paste0(directory, "/Figures/"))
+dir.create(paste0(directory, "/Broad_annotation"))
+dir.create(paste0(directory, "/Fine_annotation"))
+dir.create(paste0(directory, "/Two_fibroblasts_annotation"))
+```
+Set the colours
+
+```{r}
+achilles.colours <- c(# Broad groups
+    "Fibroblasts" = "#B2182B", 
+    "Skeletal muscle cells" = "#88419D", 
+    "Satellite cells" = "#8C96C6",
+    "Mural cells" = "#7FBC41",
+    # Immune
+    "Macrophages" = "#35978F", 
+    "B cells" = "#543005", 
+    "T cells" = "#F6E8C3", 
+    "Plasma cells" = "#01EBD6", 
+    "Granulocytes" = "#80CDC1", 
+    # Stromal
+    "Vascular endothelial cells" = "#F1B6DA",
+    "Lymphatic endothelial cells" = "#C51B7D",
+    "Adipocytes" = "#E6F598", 
+    "Mural" = "#B8E186", 
+    "Nervous system cells" = "#276419", 
+    "Ambient" = "grey")
+
+achilles.2fb.colours <- c(achilles.colours, "COMPhi fibroblasts" = "#F4A582", 
+                          "NEGR1hi fibroblasts" = "#B2182B")
+
+# Fibroblast colours
+
+fibroblast.colours <- brewer.pal(10, "RdGy")
+names(fibroblast.colours) <- c("PRG4hi fibroblasts",
+                               "NEGR1hi VCANhi fibroblasts", 
+                               "Chondrocytes",
+                               "COMPhi THBS4hi fibroblasts",
+                               "NEGR1hi ITGA6hi fibroblasts",
+                               "unused",
+                               "unused",
+                               "COMPhi MMP3hi fibroblasts",
+                               "NEGR1hi COL15A1hi fibroblasts",
+                               "unused")
+
+# fibroblast colours short (matrisome)
+fibroblast.colours.short <- brewer.pal(10, "RdGy")
+names(fibroblast.colours.short) <- c("PRG4.fb",
+                               "NEGR1.VCAN.fb", 
+                               "Chondrocytes",
+                               "COMP.THBS4.fb",
+                               "NEGR1.ITGA6.fb",
+                               "unused",
+                               "unused",
+                               "COMP.MMP3.fb",
+                               "NEGR1.COL15A1.fb",
+                               "unused")
+
+fibroblast.colours.short <- fibroblast.colours.short[names(fibroblast.colours.short) !="unused"]
+
+# Immune colours
+immune.colours <- c(brewer.pal(11, "BrBG"), "#01EBD6")
+
+names(immune.colours) <- c("B cells", 
+                           "Monocytes",
+                           "CLEC9Ahi DCs", 
+                           "MERKhi LYVE1lo macrophages", 
+                           "T cells", 
+                           "Slow twitch skeletal muscle cells",
+                           "CLEC10Ahi DCs",
+                           "Granulocytes",
+                           "MERTKhi LYVE1hi macrophages",
+                           "NK cells", 
+                           "MERTKlo PTPRGhi macrophages",
+                           "Plasma cells"
+)
+
+# Stromal colours
+stromal.colours <- c(brewer.pal(10, "PiYG"), brewer.pal(10, "Spectral")[6]) # add a yellow for adipocytes
+names(stromal.colours) <- c("Arteriolar VEC", #1
+                            "Lymphatic endothelial cells", #2
+                            "Venular VEC", #3
+                            "unused 3", #4
+                            "unused 2", #5
+                            "unused 1", #6
+                            "vSMC", #7
+                            "unused", #8
+                            "Pericytes", #9
+                            "Nervous system cells", #10
+                            "Adipocytes")  #yellow
+
+# Muscle colours
+muscle.colours <- brewer.pal(5, "BuPu")
+names(muscle.colours) <- c("unused", 
+                           "Transitional skeletal muscle cells", 
+                           "Satellite cells", 
+                           "Fast-twitch skeletal muscle cells", 
+                           "Slow-twitch skeletal muscle cells")
+
+# fine annotation colours
+achilles.fine.colours <- c(fibroblast.colours, muscle.colours, stromal.colours, immune.colours)
+
+```
+
+
+Load the objects
+
+```{r, fig.width=10, fig.height=10}
+so.enth <- readRDS(paste0(wdir, "20250625_11-55_Xenium_Achilles_Enthesis.dir/RDS_objects.dir/Enthesis_SeuratObject.rds"))
+so.mb <- readRDS(paste0(wdir, "20250625_12-17_Xenium_Achilles_MB.dir/RDS_objects.dir/MB_SeuratObject.rds"))
+so.mtj <- readRDS(paste0(wdir, "20250625_12-30_Xenium_Achilles_MTJ.dir/RDS_objects.dir/MTJ_SeuratObject.rds"))
+so.musc <- readRDS(paste0(wdir, "20250625_14-14_Xenium_Achilles_Muscle.dir/RDS_objects.dir/Muscle_SeuratObject.rds"))
+
+p1 <- DimPlot(so.enth)
+p2 <- DimPlot(so.mb)
+p3 <- DimPlot(so.mtj)
+p4 <- DimPlot(so.musc)
+plot_grid(p1, p2, p3, p4)
+
+```
+
+```{r}
+# add microanatomical site to metadata
+so.enth$microanatomical_site <- "Enthesis"
+so.mb$microanatomical_site <- "MB"
+so.mtj$microanatomical_site <- "MTJ"
+so.musc$microanatomical_site <- "Muscle"
+
+
+```
+
+
+Merge the objects
+
+```{r}
+so.merge <- merge(so.enth, list(so.mb, so.mtj, so.musc))
+so.merge
+```
+```{r}
+DefaultAssay(so.merge) <- "XENIUM"
+
+so.merge <- SCTransform(so.merge, assay = "XENIUM", clip.range = c(-10, 10))
+so.merge <- RunPCA(so.merge)
+so.merge <- RunUMAP(so.merge, dims = 1:20)
+Idents(so.merge) <- "microanatomical_site"
+DimPlot(so.merge)
+```
+
+Perform Harmony integration
+
+```{r}
+# the merged object has 4 layers, that have come from the merge
+# so.merge@assays$XENIUM@layers
+
+so.harmony <- IntegrateLayers(
+  object = so.merge, 
+  method = HarmonyIntegration,
+  orig.reduction = "pca", 
+  assay = "SCT"
+)
+so.harmony
+```
+Perform dimensionality reduction on the harmony integration
+
+```{r}
+so.harmony <- RunUMAP(so.harmony, reduction = "harmony", dims = 1:20, reduction.name = "harmony.umap")
+```
+
+Plot the merged vs harmony integrated reductions
+
+```{r, fig.width=7, fig.height=10}
+p1 <- DimPlot(so.merge, shuffle = TRUE) + ggtitle("Merged")
+p2 <- DimPlot(so.harmony, reduction = "harmony.umap", shuffle = TRUE)+ ggtitle("Integrated")
+plot_grid(p1, p2, ncol = 1)
+```
+
+```{r, fig.width=10, fig.height=10}
+DimPlot(so.harmony, reduction = "harmony.umap", split.by = "microanatomical_site", ncol = 2)
+```
+
+
+Test the integration without including the muscle
+
+```{r, fig.width=10, fig.height=4}
+so.tendon.merge <- merge(so.enth, list(so.mb, so.mtj))
+DefaultAssay(so.tendon.merge) <- "XENIUM"
+
+so.tendon.merge <- SCTransform(so.tendon.merge, assay = "XENIUM", clip.range = c(-10, 10))
+so.tendon.merge <- RunPCA(so.tendon.merge)
+so.tendon.merge <- RunUMAP(so.tendon.merge, dims = 1:20)
+Idents(so.tendon.merge) <- "microanatomical_site"
+
+so.tendon.harmony <- IntegrateLayers(
+  object = so.tendon.merge, 
+  method = HarmonyIntegration,
+  orig.reduction = "pca", 
+  assay = "SCT"
+)
+
+so.tendon.harmony <- RunUMAP(so.tendon.harmony, reduction = "harmony", dims = 1:20, reduction.name = "harmony.umap")
+
+DimPlot(so.tendon.harmony, reduction = "harmony.umap", split.by = "microanatomical_site", ncol = 3)
+```
+
+
+```{r, fig.width=12, fig.height=4}
+p1 <- DimPlot(so.tendon.merge, shuffle = TRUE) + ggtitle("Merged")
+p2 <- DimPlot(so.tendon.harmony, reduction = "harmony.umap", shuffle = TRUE)+ ggtitle("Integrated")
+plot_grid(p1, p2, ncol = 2)
+```
+
+Proceed with finding clusters using all 4 microanatomies for now.
+
+```{r}
+resolution_test <- seq(0.1, 0.6, 0.1)
+so.harmony <- FindNeighbors(so.harmony, reduction = "harmony", dims = 1:20)
+so.harmony <- FindClusters(so.harmony, resolution = resolution_test)
+```
+Do a clustree to see how the clusters compare 
+
+```{r, fig.width = 8, fig.height=6}
+clustree(so.harmony, prefix = "SCT_snn_res.")
+ggsave(paste0(directory, "/Figures/Clustree.png"), 
+       width = 8, height = 6)
+```
+
+Visualise the clusters in UMAP space at each resolution
+
+```{r, fig.width=9, fig.height=10}
+
+plot_list <- list()
+for (i in seq(1: length(resolution_test))){
+  
+  plot_list[[i]] <- DimPlot(so.harmony, label=T, repel=T, 
+                            group.by = paste0("SCT_snn_res.", resolution_test[i]),
+                            reduction = "harmony.umap")
+}
+
+plot_grid(plotlist = plot_list, ncol = 2)
+ggsave(paste0(directory, "/Figures/UMAP_Cluster_resolutions.png"), 
+       width = 9, height = 10)
+```
+
+Choose reolution 0.2
+```{r, fig.width=12, fig.height=12}
+Idents(so.harmony) <- "SCT_snn_res.0.2"
+p1 <- DimPlot(so.harmony, reduction = "harmony.umap", label = TRUE)
+p2 <- DimPlot(so.harmony, reduction = "harmony.umap", group.by = "predicted.id_2fb", 
+              cols = achilles.2fb.colours)
+p3 <- DimPlot(so.harmony, reduction = "harmony.umap", group.by = "predicted.id_fine", 
+              cols = achilles.fine.colours)
+
+
+pA <- plot_grid(p1, p2, rel_widths = c(1.4, 2))
+plot_grid(pA, p3, ncol = 1)
+```
+
+# Re-do the label transfer on integrated data
+
+Load a single-cell reference dataset.  
+
+```{r}
+so.achilles <- readRDS(paste0(wdir, "data/Achilles_fine_annotation.rds"))
+so.achilles
+```
+
+Visualise what happens in the single cell object if you use only the genes in the spatial dataset for SCT and downstream steps. 
+
+```{r, fig.width=10, fig.height=8}
+ref <- so.achilles
+ref <- SCTransform(ref, residual.features =rownames(so.harmony))
+ref <- RunPCA(ref)
+ref <- RunUMAP(ref, dims=1:20)
+Idents(ref) <- ref$broad_annotation
+DimPlot(ref, label=T, repel=T, cols = achilles.colours)
+
+```
+
+Transfer labels from the ref to the spatial data
+
+```{r}
+
+
+# this does not work on the integrated object because there is a separate SCT assay for each microanatomy
+
+Idents(so.harmony) <- "microanatomical_site"
+so.enth.harmony <- subset(so.harmony, idents = "Enthesis")
+
+# rename the SCT assays to avoid downstream confusion
+# As per this issue
+# https://github.com/satijalab/seurat/issues/9725
+prep_FindMarkers <- function(obj, num_slices = 4) {
+  # Loop through total number slices
+  for (i in 1:num_slices) {
+    slot(object = obj@assays$SCT@SCTModel.list[[i]], name = "umi.assay") <- "XENIUM"
+  }
+  obj <- obj %>% PrepSCTFindMarkers()
+  # Return the modified obj
+  return(obj)}
+
+so.harmony <- prep_FindMarkers(so.harmony)
+
+anchors <- FindTransferAnchors(reference = ref, 
+                               query = so.harmony, 
+                               normalization.method = "SCT")
+
+so.harmony <- TransferData(anchorset = anchors, 
+                       refdata = ref$broad_annotation, 
+                       prediction.assay = TRUE,
+                       weight.reduction = so.harmony[["pca"]], 
+                       query = so.harmony, 
+                       dims=1:30)
+
+```
+
+Where has this info gone?
+Predicted.id and predicted.id.score columns added to metadata. 
+
+
+```{r, fig.width=10, fig.height=8}
+#seurat[[]]
+DimPlot(so.harmony, group.by= "predicted.id", cols = achilles.colours, 
+        reduction = "harmony.umap")
+ggsave(paste0(directory, "/Broad_annotation/UMAP_Predicted_IDs.png"), 
+       width = 10, height = 8)
+FeaturePlot(so.harmony, features = "predicted.id.score", 
+        reduction = "harmony.umap")+scale_color_viridis()
+ggsave(paste0(directory, "/Broad_annotation/UMAP_prediction_scores.png"), 
+       width = 10, height = 8)
+VlnPlot(so.harmony, features = "predicted.id.score", group.by = "predicted.id", 
+        cols = achilles.colours, pt.size = 0)
+ggsave(paste0(directory, "/Broad_annotation/Vln_prediction_scores.png"), 
+       width = 10, height = 6)
+
+# save these results as new columns in the metadata
+so.harmony$predicted.id_integrated_broad <- so.harmony$predicted.id
+so.harmony$predicted.id.score_integrated_broad <- so.harmony$predicted.id.score
+
+# save the results as csv (to use in Xenium Explorer)
+df <- data.frame(cell_id = colnames(so.harmony),
+                 group = so.harmony$predicted.id)
+write.table(df, 
+          paste0(directory, "/Broad_annotation/Predicted.id.csv"),
+          quote = FALSE, 
+          sep = ",",
+          col.names = TRUE,
+          row.names = FALSE)
+
+```
+
+View the predicted cell types on the tissue
+
+```{r, fig.width=10, fig.height=8}
+ImageDimPlot(so.harmony, group.by = "predicted.id", 
+             cols = achilles.colours)
+ggsave(paste0(directory, "/Broad_annotation/Image_Predicted_IDs.png"), 
+       width = 10, height = 8)
+so.harmony
+roi_names <- c("ROI1", "ROI1.2", "ROI1.3", "ROI1.4")
+ma_names <- c("Enthesis", "MB", "MTJ", "Muscle")
+
+for (i in 1:length(roi_names)){
+  ImageDimPlot(so.harmony, fov=roi_names[i], boundaries="segmentation", border.color = "black",group.by = "predicted.id", 
+             cols = achilles.colours )
+  ggsave(paste0(directory, "/Broad_annotation/Image_", ma_names[i], "_Predicted_IDs.png"), 
+       width = 10, height = 8)
+}
+
+```
+
+Look at the distribution of each cell type separately
+
+```{r, fig.width=15, fig.height=10}
+
+for (i in 1:length(roi_names)){
+  ImageDimPlot(so.harmony, fov = ma_names[i], group.by = "predicted.id", split.by = "predicted.id",
+             cols = achilles.colours, size = 2)
+  ggsave(paste0(directory, "/Broad_annotation/Image_cell_types_separated_", ma_names[i], "_Predicted_IDs.png"), 
+       width = 10, height = 8)
+}
+```
+
+Compare old and new predictions
+
+```{r, fig.width=10, fig.height=8}
+df <- so.harmony[[]]
+df <- df %>% 
+  group_by(predicted.id_broad,predicted.id_integrated_broad) %>% 
+  summarise(count1=n()) %>% 
+  mutate(grouppercentage=(count1/sum(count1))*100) 
+
+ggplot(df, aes(y=predicted.id_broad, x=predicted.id_integrated_broad, fill = grouppercentage))+
+    geom_tile()+
+    scale_fill_viridis()+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+```
+
+### Fine annotation
+
+
+```{r, fig.width=15, fig.height=8}
+
+so.harmony <- TransferData(anchorset = anchors, 
+                       refdata = ref$fine_annotation, 
+                       prediction.assay = TRUE,
+                       weight.reduction = so.harmony[["pca"]], 
+                       query = so.harmony, 
+                       dims=1:30)
+
+
+```
+
+
+```{r, fig.width=10, fig.height=8}
+#seurat[[]]
+DimPlot(so.harmony, group.by= "predicted.id", cols = achilles.fine.colours)
+ggsave(paste0(directory, "/Fine_annotation/UMAP_Predicted_IDs.png"), 
+       width = 10, height = 8)
+
+FeaturePlot(so.harmony, features = "predicted.id.score")+scale_color_viridis()
+ggsave(paste0(directory, "/Fine_annotation/UMAP_prediction_scores.png"), 
+       width = 10, height = 8)
+
+VlnPlot(so.harmony, features = "predicted.id.score", group.by = "predicted.id", 
+        cols = achilles.fine.colours, pt.size = 0)+
+  theme(legend.position = "none") 
+ggsave(paste0(directory, "/Fine_annotation/Vln_prediction_scores.png"), 
+       width = 10, height = 6)
+
+# save these results as new columns in the metadata
+so.harmony$predicted.id_integrated_fine <- so.harmony$predicted.id
+so.harmony$predicted.id.score_integrated_fine <- so.harmony$predicted.id.score
+
+# save the results as csv
+df <- data.frame(cell_id = colnames(so.harmony),
+                 group = so.harmony$predicted.id)
+write.table(df, 
+          paste0(directory, "/Fine_annotation/Predicted.id.csv"),
+          quote = FALSE, 
+          sep = ",",
+          col.names = TRUE,
+          row.names = FALSE)
+
+
+```
+
+View the predicted cell types on the tissue
+
+```{r, fig.width=10, fig.height=8}
+
+for (i in 1:length(roi_names)){
+  ImageDimPlot(so.harmony, fov=roi_names[i], boundaries="segmentation", border.color = "black",group.by = "predicted.id", 
+             cols = achilles.fine.colours )
+  ggsave(paste0(directory, "/Fine_annotation/Image_", ma_names[i], "_Predicted_IDs.png"), 
+       width = 10, height = 8)
+}
+
+```
+
+Look at the distribution of each cell type separately
+
+```{r, fig.width=15, fig.height=10}
+
+for (i in 1:length(roi_names)){
+  ImageDimPlot(so.harmony, fov = ma_names[i], group.by = "predicted.id", split.by = "predicted.id",
+             cols = achilles.fine.colours, size = 2)
+  ggsave(paste0(directory, "/Fine_annotation/Image_cell_types_separated_", ma_names[i], "_Predicted_IDs.png"), 
+       width = 15, height = 10)
+}
+```
+
+Compare old and new predictions
+
+```{r, fig.width=10, fig.height=8}
+df <- so.harmony[[]]
+df <- df %>% 
+  group_by(predicted.id_fine,predicted.id_integrated_fine) %>% 
+  summarise(count1=n()) %>% 
+  mutate(grouppercentage=(count1/sum(count1))*100) 
+
+ggplot(df, aes(y=predicted.id_fine, x=predicted.id_integrated_fine, fill = grouppercentage))+
+    geom_tile()+
+    scale_fill_viridis()+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+  
+
+```
+
+
+### Two fibroblasts annotation
+
+
+```{r, fig.width=15, fig.height=8}
+
+so.harmony <- TransferData(anchorset = anchors, 
+                       refdata = ref$`2fb_annotation`, 
+                       prediction.assay = TRUE,
+                       weight.reduction = so.harmony[["pca"]], 
+                       query = so.harmony, 
+                       dims=1:30)
+
+
+```
+
+
+```{r, fig.width=10, fig.height=8}
+#seurat[[]]
+DimPlot(so.harmony, group.by= "predicted.id", cols = achilles.2fb.colours)
+ggsave(paste0(directory, "/Two_fibroblasts_annotation/UMAP_Predicted_IDs.png"), 
+       width = 10, height = 8)
+
+FeaturePlot(so.harmony, features = "predicted.id.score")+scale_color_viridis()
+ggsave(paste0(directory, "/Two_fibroblasts_annotation/UMAP_prediction_scores.png"), 
+       width = 10, height = 8)
+
+VlnPlot(so.harmony, features = "predicted.id.score", group.by = "predicted.id", 
+        cols = achilles.2fb.colours, pt.size = 0)+
+  theme(legend.position = "none") 
+ggsave(paste0(directory, "/Two_fibroblasts_annotation/Vln_prediction_scores.png"), 
+       width = 10, height = 6)
+
+# save these results as new columns in the metadata
+so.harmony$predicted.id_integrated_2fb <- so.harmony$predicted.id
+so.harmony$predicted.id.score_integrated_2fb <- so.harmony$predicted.id.score
+
+# save the results as csv
+df <- data.frame(cell_id = colnames(so.harmony),
+                 group = so.harmony$predicted.id)
+write.table(df, 
+          paste0(directory, "/Two_fibroblasts_annotation/Predicted.id.csv"),
+          quote = FALSE, 
+          sep = ",",
+          col.names = TRUE,
+          row.names = FALSE)
+
+
+```
+
+View the predicted cell types on the tissue
+
+```{r, fig.width=10, fig.height=8}
+
+for (i in 1:length(roi_names)){
+  ImageDimPlot(so.harmony, fov=roi_names[i], boundaries="segmentation", border.color = "black",group.by = "predicted.id", 
+             cols = achilles.2fb.colours )
+  ggsave(paste0(directory, "/Two_fibroblasts_annotation/Image_", ma_names[i], "_Predicted_IDs.png"), 
+       width = 10, height = 8)
+}
+
+```
+
+Look at the distribution of each cell type separately
+
+```{r, fig.width=15, fig.height=10}
+
+for (i in 1:length(roi_names)){
+  ImageDimPlot(so.harmony, fov = ma_names[i], group.by = "predicted.id", split.by = "predicted.id",
+             cols = achilles.2fb.colours, size = 2)
+  ggsave(paste0(directory, "/Two_fibroblasts_annotation/Image_cell_types_separated_", ma_names[i], "_Predicted_IDs.png"), 
+       width = 15, height = 10)
+}
+```
+
+Compare old and new predictions
+
+```{r, fig.width=10, fig.height=8}
+df <- so.harmony[[]]
+df <- df %>% 
+  group_by(predicted.id_2fb,predicted.id_integrated_2fb) %>%  ##grouping by eyecolor and skin color!
+  summarise(count1=n()) %>% 
+  mutate(grouppercentage=(count1/sum(count1))*100) 
+
+ggplot(df, aes(y=predicted.id_2fb, x=predicted.id_integrated_2fb, fill = grouppercentage))+
+    geom_tile()+
+    scale_fill_viridis()+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+  
+
+```
+
+
+
+# Save the object with new annotations
+
+```{r}
+saveRDS(so.harmony, paste0(directory, "/RDS_objects.dir/Achilles_Xenium_integrated.rds"))
+```
+
+
+```{r}
+sessionInfo()
+```

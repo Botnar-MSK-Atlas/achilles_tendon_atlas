@@ -149,7 +149,7 @@ achilles.fine.colours <- c(fibroblast.colours, muscle.colours, stromal.colours, 
 Read in the seurat object that has fine annotation for fibroblasts. 
 
 ```{r}
-so.harmony <- readRDS(paste0(wdir, "20250702_09-51_Fibroblast_annotation.dir/RDS_objects.dir/Achilles_integrated_annotated.rds"))
+so.harmony <- readRDS(paste0(wdir, "20250702_12-14_Fibroblast_annotation.dir/RDS_objects.dir/Achilles_integrated_annotated.rds"))
 
 
 ```
@@ -377,6 +377,8 @@ table(df.im$predicted.id_immune_fine, df.im$predicted.id_integrated_fine)
 
 
 ```{r}
+saveRDS(so.im, paste0(directory, "/RDS_objects.dir/Achilles_immune_subset.rds"))
+
 saveRDS(so.harmony, paste0(directory, "/RDS_objects.dir/Achilles_integrated_annotated.rds"))
 ```
 

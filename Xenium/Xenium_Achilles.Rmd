@@ -156,7 +156,7 @@ Overview of data quality
 
 ```{r}
 
-dir_list <- list.dirs("data/20250521__140618__Shreeya_21052025_Ach_Syn", recursive = FALSE)
+dir_list <- list.dirs(ini$data_dir, recursive = FALSE)
 
 qc_data <- list()
 for (item in dir_list){
@@ -176,13 +176,14 @@ qc_data
 
 ```{r}
 
-data_dir <- paste0(wdir, "data/20250521__140618__Shreeya_21052025_Ach_Syn/output-XETG00160__0032082__", ini$microanatomy, "__20250521__140738")
+data_dir <- paste0(wdir, ini$data_dir, ini$data_folder)
 
-data <- ReadXenium(data_dir, 
+data <- ReadXenium(data_dir,
                    outs = c("matrix", # get the cellxgene matrix
                             "microns"), # transcript coordinates
                    type=c("centroids", # cell centroid coordinates
                           "segmentations")) # cell segmentations
+
 #names(data) # the components are saved as a list
 #names(data$matrix) # the matrix has control components
 #names(data$segmentations) #xy coordinates for each cell
@@ -412,7 +413,7 @@ ggsave(paste0(directory, "/Processing/PC1_2_components.png"),
 Visualise a gene that is one of the top genes in PC1
 
 ```{r}
-FeaturePlot(seurat, "COMP", reduction = "pca") + scale_color_viridis_c()
+FeaturePlot(seurat, "PECAM1", reduction = "pca") + scale_color_viridis_c()
 ggsave(paste0(directory, "/Processing/PCA_COMP.png"))
 ```
 
@@ -426,7 +427,7 @@ ggsave(paste0(directory, "/Processing/PC1_image.png"))
 
 We can plot the expression of high (or low) loading genes to visualise how this correlates with our dimensionality reduction.
 ```{r}
-ImageFeaturePlot(seurat, "COMP", size=.5) + scale_fill_viridis_c()
+ImageFeaturePlot(seurat, "PECAM1", size=.5) + scale_fill_viridis_c()
 ggsave(paste0(directory, "/Processing/COMP_image.png"))
 ```
 
@@ -531,8 +532,9 @@ ggsave(paste0(directory, "/Processing/Image_chosen_res_axes.png"))
 Crop the current assay and add as a new field of view 
 
 ```{r}
-cropped <- Crop(seurat[[ini$microanatomy]], x = ini$cropped_x, 
-                y = ini$cropped_y, coords = "plot")
+cropped <- Crop(seurat[[ini$microanatomy]], x = c(2000, 3000), 
+                y = c(0, 1000),
+                coords = "plot")
 seurat[["ROI1"]] <- cropped
 seurat
 ```
@@ -551,13 +553,13 @@ Look at expression of a particular gene in this new FOV
 
 For example, COMP marks the fibroblasts
 ```{r}
-ImageFeaturePlot(seurat, "COMP", fov="ROI1", boundaries="centroids" , border.color = "black") + scale_fill_viridis_c()
+ImageFeaturePlot(seurat, "ACTA2", fov="ROI1", boundaries="centroids" , border.color = "black") + scale_fill_viridis_c()
 ggsave(paste0(directory, "/Processing/ROI1_COMP.png"))
 ```
 Visualise some molecules. This helps show if the cell segmentation has worked. 
 
 ```{r}
-ImageFeaturePlot(seurat, "COMP", fov="ROI1", boundaries="segmentation", molecules=c("COMP", "CD163"), mols.size = .5, border.color = "black" ) + scale_fill_viridis_c()
+ImageFeaturePlot(seurat, "ACTA2", fov="ROI1", boundaries="segmentation", molecules=c("ACTA2", "CD163"), mols.size = .5, border.color = "black" ) + scale_fill_viridis_c()
 ```
 
 ## Annotation by label transfer
@@ -679,10 +681,10 @@ Compare the distribution of two markers.
 This can help detect poor cell segmentation
 
 ```{r fig.height=5, fig.width=10}
-FeatureScatter(seurat, "COMP", "CD163", jitter=T)
-ggsave(paste0(directory, "/QC_plots/COMP_CD163_jitter.png"))
-FeaturePlot(seurat, c("COMP", "CD163"))
-ggsave(paste0(directory, "/QC_plots/COMP_CD163_featureplots.png"))
+FeatureScatter(seurat, "ACTA2", "CD163", jitter=T)
+ggsave(paste0(directory, "/QC_plots/ACTA2_CD163_jitter.png"))
+FeaturePlot(seurat, c("ACTA2", "CD163"))
+ggsave(paste0(directory, "/QC_plots/ACTA2_CD163_featureplots.png"))
 ```
 
 ### Fine annotation

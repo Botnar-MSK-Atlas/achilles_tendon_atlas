@@ -1,0 +1,120 @@
+---
+title: "Xenium_QC_metrics"
+author: "Carla Cohen"
+date: "2025-07-22"
+output: html_document
+---
+
+# QC metrics
+
+The aim of this script is to compare the basic QC metrics across different runs.
+
+Load packages and set up
+```{r}
+
+
+library(Seurat)
+library(tidyverse)
+library(RColorBrewer)
+library(cowplot)
+
+
+wdir <- "/project/wolf1241/xenium/"
+
+# make a new output folder for each run, with the date & time in the directory name
+date <- Sys.Date() %>% str_replace_all("-", "")
+time <- format(Sys.time(), "%X") %>% str_replace_all(":", "-") %>%
+    str_sub(1, 5)
+directory <- paste0(wdir, date,"_", time, "_Xenium_QC_metrics.dir")
+dir.create(directory, showWarnings = FALSE)
+dir.create(paste0(directory, "/Plots"), showWarnings = FALSE)
+
+#paired_cols <- brewer.pal(4, "Paired")
+paired_cols <- c("#fdbf6f", "#ff7f00", "#cab2d6", "#6a3d9a")
+
+```
+
+## Data quality metrics
+
+Overview of data quality
+
+```{r}
+
+dir_list1 <- list.dirs(paste0(wdir, "/data/20250521__140618__Shreeya_21052025_Ach_Syn"), recursive = FALSE)
+dir_list2 <- list.dirs(paste0(wdir, "/data/20250716__121635__snelling_MSK_panel1_pilot-RUN2"), recursive = FALSE)
+dir_list <- c(dir_list1, dir_list2)
+
+qc_data <- list()
+for (item in dir_list){
+  qc_data[[item]] <- read.csv(paste0(item, "/metrics_summary.csv"))
+}
+
+qc_data <- bind_rows(qc_data) %>% 
+  select(cassette_name, region_name, total_cell_area, total_high_quality_decoded_transcripts, num_cells_detected, fraction_transcripts_assigned, median_genes_per_cell, median_predesigned_genes_per_cell, median_custom_genes_per_cell, median_transcripts_per_cell, median_predesigned_transcripts_per_cell, median_custom_transcripts_per_cell, segmented_cell_stain_frac)
+
+write.csv(qc_data, "QC_summary.csv", quote = FALSE, row.names = FALSE)
+
+qc_data
+```
+Add a better name and which run it was
+```{r}
+
+qc_data$sample <- c("Synovium_1", "Synovium_2", "Synovium_3", "Synovium_4", 
+                    "Synovium_5", "Synovium_6", "Synovium_7", "Synovium_8", 
+                    "Ach_MTJ_1", "Ach_MB_1", "Ach_Enth_1", "Ach_Muscle_1", 
+                    "Ach_MTJ_2", "Ach_rupture", "EHL", "Hamstring", 
+                    "LHBT", "Patella", "Quads_MB", "SSP_OA", 
+                    "SSP_tear", "Tibial_Post")
+
+qc_data$run <- c(rep("Run_1", 12), rep("Run_2", 10))
+qc_data$slide <- c(rep("Slide_1", 8), rep("Slide_2", 4), rep("Slide_1", 5), rep("Slide_2", 5))
+qc_data$run_slide <- paste0(qc_data$run, "_", qc_data$slide)
+
+# make sample a factor
+
+qc_data$sample <- factor(qc_data$sample, levels = qc_data$sample)
+qc_data
+```
+## Plot QC metrics
+
+```{r, fig.width=18, fig.height=20}
+# select columns that are numeric
+cols_to_plot <- qc_data %>% dplyr::select(where(is.numeric)) %>% colnames()
+
+# create a plotting function
+plot_qc_metrics <- function(column){
+  qc_data$my_column <- qc_data[[column]]
+  p <- ggplot(qc_data, aes(x = sample, y = my_column, fill = run_slide))+
+  geom_bar(stat = "identity")+
+  theme_classic()+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  scale_fill_manual(values = paired_cols)+
+    ylab(column)+
+    #theme(legend.position = "none")+
+    ggtitle(column)
+
+ggsave(paste0(directory, "/Plots/", column, ".png"), 
+       width = 7, height = 4)
+  return (p)
+}
+
+# run on all the columns
+plot_list <- list()
+for (column in cols_to_plot){
+  plot_list[[column]] <- plot_qc_metrics(column)
+}
+plot_grid(plotlist = plot_list, ncol = 3)
+
+```
+
+```{r}
+colnames(qc_data)
+qc_data %>% select("cassette_name", "region_name", "sample", "run_slide")
+```
+
+```{r}
+sessionInfo()
+```
+
+
+
