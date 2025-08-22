@@ -1,11 +1,11 @@
 ---
-title: "Immune cell annotation"
+title: "Muscle cell annotation"
 author: "Carla Cohen"
 date: "2025-07-01"
 output: html_document
 ---
 
-# Immune annotation
+# Muscle annotation
 
 The aim of this script is to annotate the clusters after integration, which can be informed by the cell label transfer. 
 
@@ -36,13 +36,13 @@ set.seed(123)
 date <- Sys.Date() %>% str_replace_all("-", "")
 time <- format(Sys.time(), "%X") %>% str_replace_all(":", "-") %>%
     str_sub(1, 5)
-directory <- paste0(wdir, date,"_", time, "_Immune_annotation_.dir")
+directory <- paste0(wdir, date,"_", time, "_Muscle_annotation_.dir")
 dir.create(directory, showWarnings = FALSE)
 dir.create(paste0(directory, "/RDS_objects.dir/"))
 dir.create(paste0(directory, "/Figures/"))
-dir.create(paste0(directory, "/Immune"))
-dir.create(paste0(directory, "/Immune/Heatmaps"))
-dir.create(paste0(directory, "/Immune/Dotplots"))
+dir.create(paste0(directory, "/Muscle"))
+dir.create(paste0(directory, "/Muscle/Heatmaps"))
+dir.create(paste0(directory, "/Muscle/Dotplots"))
 
 
 ```
@@ -119,8 +119,8 @@ names(immune.colours) <- c("B cells",
 )
 
 # Stromal colours
-stromal.colours <- c(brewer.pal(10, "PiYG"), brewer.pal(10, "Spectral")[6]) # add a yellow for adipocytes
-names(stromal.colours) <- c("Arteriolar VEC", #1
+muscle.colours <- c(brewer.pal(10, "PiYG"), brewer.pal(10, "Spectral")[6]) # add a yellow for adipocytes
+names(muscle.colours) <- c("Arteriolar VEC", #1
                             "Lymphatic endothelial cells", #2
                             "Venular VEC", #3
                             "unused 3", #4
@@ -141,25 +141,26 @@ names(muscle.colours) <- c("unused",
                            "Slow-twitch skeletal muscle cells")
 
 # fine annotation colours
-achilles.fine.colours <- c(fibroblast.colours, muscle.colours, stromal.colours, immune.colours)
+achilles.fine.colours <- c(fibroblast.colours, muscle.colours, muscle.colours, immune.colours)
 
 ```
 
 
-Read in the seurat object that has fine annotation for fibroblasts. 
+Read in the seurat object that has fine annotation for fibroblasts and immune cells. 
 
 ```{r}
-so.harmony <- readRDS(paste0(wdir, "20250702_12-14_Fibroblast_annotation.dir/RDS_objects.dir/Achilles_integrated_annotated.rds"))
+so.harmony <- readRDS(paste0(wdir, "20250723_11-23_Stromal_annotation_.dir/RDS_objects.dir/Achilles_integrated_annotated.rds"))
 
 
 ```
 
-## Subset and recluster immune cells
+## Subset and recluster Muscle cells
 
 
 ```{r}
 Idents(so.harmony) <- so.harmony$predicted.id_integrated_broad
-so.im <- subset(so.harmony, idents = c("T cells", "Macrophages", "Granulocytes"))
+unique(so.harmony$predicted.id_integrated_broad)
+so.musc <- subset(so.harmony, idents = c("Skeletal muscle cells", "Satellite cells" ))
 ```
 
 
@@ -167,23 +168,23 @@ Tidy up the metadata
 ```{r}
 
 # remove existing clusters
-resolutionList <- grep("snn_res", colnames(so.im[[]]), value = TRUE)
+resolutionList <- grep("snn_res", colnames(so.musc[[]]), value = TRUE)
 
 for (resolution in resolutionList){
-      so.im[[resolution]] <- NULL
+      so.musc[[resolution]] <- NULL
 }
 
-so.im[["umap"]] <- NULL
+so.musc[["umap"]] <- NULL
 
-so.im
+so.musc
 ```
 
 ```{r}
-DefaultAssay(so.im) <- "XENIUM"
+DefaultAssay(so.musc) <- "XENIUM"
 
-so.im <- SCTransform(so.im, assay = "XENIUM", clip.range = c(-10, 10))
-so.im <- RunPCA(so.im)
-so.im <- RunUMAP(so.im, dims = 1:20)
+so.musc <- SCTransform(so.musc, assay = "XENIUM", clip.range = c(-10, 10))
+so.musc <- RunPCA(so.musc)
+so.musc <- RunUMAP(so.musc, dims = 1:20)
 
 ```
 
@@ -192,26 +193,23 @@ so.im <- RunUMAP(so.im, dims = 1:20)
 ```{r, fig.width=8, fig.height=6}
 so.achilles <- readRDS(paste0(wdir, "data/Achilles_fine_annotation.rds"))
 Idents(so.achilles) <- so.achilles$broad_annotation
-unique(so.achilles$broad_annotation)
-so.immune <- subset(so.achilles, idents = c("T cells", "Macrophages", "Granulocytes", "B cells"))
-# remove skeletal muscle cells
-Idents(so.immune) <- so.immune$fine_annotation
-so.immune <- subset(so.immune, idents = "Slow-twitch skeletal muscle cells", invert = TRUE)
-ref <- so.immune
-ref <- SCTransform(ref, residual.features =rownames(so.im))
+#unique(so.achilles$broad_annotation)
+so.muscle <- subset(so.achilles, idents = c("Skeletal muscle cells", "Satellite cells" ))
+ref <- so.muscle
+ref <- SCTransform(ref, residual.features =rownames(so.musc))
 ref <- RunPCA(ref)
 ref <- RunUMAP(ref, dims=1:20)
 
 Idents(ref) <- ref$fine_annotation
 
-DimPlot(ref, repel=T, cols = immune.colours)
+DimPlot(ref, repel=T, cols = muscle.colours)
 
-ggsave(paste0(directory, "/Immune/Achilles_Immune_UMAP_red_features.png"), 
+ggsave(paste0(directory, "/Muscle/Achilles_Muscle_UMAP_red_features.png"), 
        width = 10, height = 8)
 ```
 
 ```{r, fig.width=10, fig.height=8}
-ps <- AggregateExpression(ref, features = rownames(so.im), normalization.method = "LogNormalize", assays="RNA", return.seurat = T)
+ps <- AggregateExpression(ref, features = rownames(so.musc), normalization.method = "LogNormalize", assays="RNA", return.seurat = T)
 ps <- ScaleData(ps, features=rownames(ps))
 pheatmap(LayerData(ps, layer="scale.data"), show_rownames = F)
 ```
@@ -221,53 +219,50 @@ Transfer labels from the ref to the spatial data
 
 ```{r}
 anchors <- FindTransferAnchors(reference = ref, 
-                               query = so.im, 
+                               query = so.musc, 
                                normalization.method = "SCT")
 
-so.im <- TransferData(anchorset = anchors, 
+so.musc <- TransferData(anchorset = anchors, 
                        refdata = ref$fine_annotation, 
                        prediction.assay = TRUE,
-                       weight.reduction = so.im[["pca"]], 
-                       query = so.im, 
+                       weight.reduction = so.musc[["pca"]], 
+                       query = so.musc, 
                        dims=1:20)
 
 ```
 
 ```{r, fig.width=10, fig.height=8}
 
-immune.colours.bright <- brewer.pal(7, "Dark2")
+muscle.colours.bright <- brewer.pal(4, "Dark2")
 
-names(immune.colours.bright) <- c("B cells", 
-                                  "CLEC10Ahi DCs", 
-                                  "Granulocytes", 
-                                  "MERTKhi LYVE1hi macrophages", 
-                                  "Monocytes", 
-                                  "NK cells", 
-                                  "T cells")
+names(muscle.colours.bright) <- c("Slow-twitch skeletal muscle cells", 
+                                  "Fast-twitch skeletal muscle cells", 
+                                  "Transitional skeletal muscle cells", 
+                                  "Satellite cells")
 
-p1 <- DimPlot(so.im, group.by= "predicted.id", cols = immune.colours.bright, reduction = "umap")
-ggsave(paste0(directory, "/Immune/UMAP_Predicted_IDs.png"), p1,
+p1 <- DimPlot(so.musc, group.by= "predicted.id", cols = muscle.colours.bright, reduction = "umap")
+ggsave(paste0(directory, "/Muscle/UMAP_Predicted_IDs.png"), p1,
        width = 10, height = 8)
-p2 <- FeaturePlot(so.im, features = "predicted.id.score", reduction = "umap")+scale_color_viridis()
-ggsave(paste0(directory, "/Immune/UMAP_prediction_scores.png"), p2,
+p2 <- FeaturePlot(so.musc, features = "predicted.id.score", reduction = "umap")+scale_color_viridis()
+ggsave(paste0(directory, "/Muscle/UMAP_prediction_scores.png"), p2,
        width = 10, height = 8)
-p3 <- VlnPlot(so.im, features = "predicted.id.score", group.by = "predicted.id", 
-        cols = immune.colours.bright, pt.size = 0)+
+p3 <- VlnPlot(so.musc, features = "predicted.id.score", group.by = "predicted.id", 
+        cols = muscle.colours.bright, pt.size = 0)+
   theme(legend.position="none")+
   theme(axis.text.x=element_blank())
-ggsave(paste0(directory, "/Immune/Vln_prediction_scores.png"), p3,
+ggsave(paste0(directory, "/Muscle/Vln_prediction_scores.png"), p3,
        width = 10, height = 6)
 pA <- plot_grid(p2, p3)
 plot_grid(p1, pA, ncol = 1)
 # save these results as new columns in the metadata
-so.im$predicted.id_immune_fine <- so.im$predicted.id
-so.im$predicted.id.score_immune_fine <- so.im$predicted.id.score
+so.musc$predicted.id_muscle_fine <- so.musc$predicted.id
+so.musc$predicted.id.score_muscle_fine <- so.musc$predicted.id.score
 
 # save the results as csv (to use in Xenium Explorer)
-df <- data.frame(cell_id = colnames(so.im),
-                 group = so.im$predicted.id)
+df <- data.frame(cell_id = colnames(so.musc),
+                 group = so.musc$predicted.id)
 write.table(df, 
-          paste0(directory, "/Immune/Predicted.id.csv"),
+          paste0(directory, "/Muscle/Predicted.id.csv"),
           quote = FALSE, 
           sep = ",",
           col.names = TRUE,
@@ -278,12 +273,12 @@ write.table(df,
 How many cells per annotation?
 
 ```{r}
-table(so.im$predicted.id_immune_fine)
+table(so.musc$predicted.id_muscle_fine)
 ```
 Compare the annotations 
 ```{r, fig.width=16, fig.height=5}
-p1 <- DimPlot(so.im, reduction = "umap", group.by = "predicted.id_integrated_fine", cols = immune.colours.bright)
-p2 <- DimPlot(so.im, group.by= "predicted.id_immune_fine", cols = immune.colours.bright, reduction = "umap")
+p1 <- DimPlot(so.musc, reduction = "umap", group.by = "predicted.id_integrated_fine", cols = muscle.colours.bright)
+p2 <- DimPlot(so.musc, group.by= "predicted.id_muscle_fine", cols = muscle.colours.bright, reduction = "umap")
 plot_grid(p1, p2, ncol = 2)
 
 ```
@@ -294,22 +289,17 @@ Only minor changes but looks good.
 
 ```{r, fig.width=15, fig.height=5}
 
-immune_markers <- list("T cell" = c("CD247", "SKAP1", "THEMIS", "PTPRC", "IL7R"), 
-                       #"MERTK+LYVE1-mac" = c("CTSL", "CTSB", "TPRG1", "HMOX1","ELL2"),
-                       #"MERTK-PTPRG+mac" = c("PTPRG", "MIR99AHG", "PARD3",
-                      #                       "KAZN",  "IFI44L"), 
-                       "MERTK+LYVE1+mac" = c("CD163", "F13A1","STAB1",
-                                             "MERTK", "LYVE1"), 
-                       "CLEC10A DC" = c("CLEC10A", "CD1C", "FCER1A", "IL1R2"),
-                       "NK cell" = c("NCAM1", "GNLY", "KLRD1", "CCL5", "MCTP2"),
-                       "Monocytes" = c("FCN1", "VCAN", "FCGR3A", "LST1", "LILRB2"),
-                       "Granulocyte" = c( "KIT", "CPA3", "IL18R1","CDK15", "MS4A2"),
-                       #"Plasma" = c("IGHG1", "MZB1", "XBP1", "PRDM1", "JCHAIN"),
-                       #"CLEC9Ahi DC" = c("CLEC9A", "CADM1", "IDO1", "CLNK", "ZNF366"),
-                       "B cells" = c("MS4A1", "CD37", "BLNK", "FCRL1", "IGHM")
-)
-Idents(so.im) <- so.im$predicted.id_immune_fine
-DotPlot(so.im, features = immune_markers)+
+muscle_markers <- list("Fast twitch" = c("TNNT3", "MYH1", "MYH2", "MYH3","TNNC2", "TNNI2", "ACTN3", "HOMER1", 
+                                    "KCNQ5", "MYLK4", "MYBPC2", "ATP2A1"),
+                       "Transitional" = c("COL22A1", "ADAMTSL1", "CPM", "CSMD1", "FRAS1", "PZP", "RALYL", "SAMD5", "SORBS2", "SPAG16"), 
+                       "Slow twitch"  = c("TNNC1", "TNNI1", "TNNT1", "ATP2A2", "CCR3", "LGR5", "MYH7", "MYH7B", "NEK10", "TECRL"),
+                       "Smooth muscle" = c("ACTA2", "MYH11", "TAGLN", "CRIP2", "MYL9", "RTL8C", "RERGL", "PLAC9", "MFAP4", "LGALS3BP"),
+                       "Satellite cells" = c("PAX7", "CALCR", "CDH4", "CLCN5", "CTNND2", "GREM1"),
+                       "Nerve-associated cells" = c( "NME7", "LHFPL3", "RASGRF1", "ASTN2", "PHYHIPL"),
+                       "NMJ myocytes" = c("CHRNA1", "COLQ", "PCDHG", "PHLDB2", "MUSK", "SCN5A"))
+
+Idents(so.musc) <- so.musc$predicted.id_muscle_fine
+DotPlot(so.musc, features = muscle_markers)+
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
   geom_point(aes(size=pct.exp), shape = 21, colour="black", stroke=0.5) +
   scale_colour_gradient2(low = "#f7f3f2", mid = "#f2390a", high = "#6e1e0a", midpoint = 1)
@@ -324,23 +314,23 @@ Predicted IDs from reference mapping
 roi_names <- c("ROI1", "ROI1.2", "ROI1.3", "ROI1.4")
 ma_names <- c("Enthesis", "MB", "MTJ", "Muscle")
 
-dir.create(paste0(directory, "/Immune/mapping_IDs/"))
+dir.create(paste0(directory, "/Muscle/mapping_IDs/"))
 
 for (i in 1:length(roi_names)){
-  ImageDimPlot(so.im, fov=roi_names[i], boundaries="segmentation", border.color = "black",
-               group.by = "predicted.id_immune_fine", 
-             cols = immune.colours.bright )+
+  ImageDimPlot(so.musc, fov=roi_names[i], boundaries="segmentation", border.color = "black",
+               group.by = "predicted.id_muscle_fine", 
+             cols = muscle.colours.bright )+
     ggtitle(paste0(ma_names[i], " mapping IDs"))
-  ggsave(paste0(directory, "/Immune/mapping_IDs/Image_", ma_names[i], "_ROI_Predicted_FB_IDs.png"), 
+  ggsave(paste0(directory, "/Muscle/mapping_IDs/Image_", ma_names[i], "_ROI_Predicted_FB_IDs.png"), 
        width = 10, height = 8)
 }
 
 for (i in 1:length(roi_names)){
-  ImageDimPlot(so.im, fov=ma_names[i], 
-               group.by = "predicted.id_immune_fine", 
-             cols = immune.colours.bright )+
+  ImageDimPlot(so.musc, fov=ma_names[i], 
+               group.by = "predicted.id_muscle_fine", 
+             cols = muscle.colours.bright )+
     ggtitle(paste0(ma_names[i], " mapping IDs"))
-  ggsave(paste0(directory, "/Immune/mapping_IDs/Image_", ma_names[i], "_full_Predicted_FB_IDs.png"), 
+  ggsave(paste0(directory, "/Muscle/mapping_IDs/Image_", ma_names[i], "_full_Predicted_FB_IDs.png"), 
        width = 10, height = 8)
 }
 
@@ -348,36 +338,36 @@ for (i in 1:length(roi_names)){
 
 ### Put the annotations back into the full object
 
-Need to determine whether subsetting the immune cells gave different IDs from the fine mapping using the whole object.
+Need to determine whether subsetting the Muscle cells gave different IDs from the fine mapping using the whole object.
 
 ```{r}
 df <- so.harmony[[]]
-df.im <- so.im[[]] %>% select(cell_id, predicted.id_immune_fine)
-df <- left_join(df, df.im)
-df %>% select(predicted.id_immune_fine, predicted.id_broad, fine_annotation)
+df.mu <- so.musc[[]] %>% select(cell_id, predicted.id_muscle_fine)
+df <- left_join(df, df.mu)
+df %>% select(predicted.id_muscle_fine, predicted.id_broad, fine_annotation)
 # make a new column of fine annotation by filling in the values from the other annotations
 df <- df %>% mutate(fine_annotation =
-                  case_when(is.na(predicted.id_immune_fine) ~ fine_annotation)) 
+                  case_when(is.na(predicted.id_muscle_fine) ~ fine_annotation)) 
 
-df <- df %>% mutate(fine_annotation = coalesce(fine_annotation, predicted.id_immune_fine))
+df <- df %>% mutate(fine_annotation = coalesce(fine_annotation, predicted.id_muscle_fine))
 
 # add this column to the object
 so.harmony$fine_annotation <- df$fine_annotation
 
 
 # compare the annotations 
-df.im <- df %>% filter(predicted.id_integrated_broad == "T cells" |
-                         predicted.id_integrated_broad==  "Macrophages" | 
-                         predicted.id_integrated_broad== "Granulocytes" ) %>% 
-  select(predicted.id_integrated_broad, predicted.id_integrated_fine, predicted.id_immune_fine, fine_annotation) #%>%
+df.mu <- df %>% filter(predicted.id_integrated_broad == "Skeletal muscle cells" |
+                         predicted.id_integrated_broad== "Satellite cells"
+                         ) %>% 
+  select(predicted.id_integrated_broad, predicted.id_integrated_fine, predicted.id_muscle_fine, fine_annotation) #%>%
   #filter(str_detect(predicted.id_integrated_fine, "fibroblasts") | predicted.id_integrated_fine == "Chondrocytes")
-table(df.im$predicted.id_immune_fine, df.im$predicted.id_integrated_fine)
+table(df.mu$predicted.id_muscle_fine, df.mu$predicted.id_integrated_fine)
 ```
 
 
 
 ```{r}
-saveRDS(so.im, paste0(directory, "/RDS_objects.dir/Achilles_immune_subset.rds"))
+saveRDS(so.musc, paste0(directory, "/RDS_objects.dir/Achilles_muscle_subset.rds"))
 
 saveRDS(so.harmony, paste0(directory, "/RDS_objects.dir/Achilles_integrated_annotated.rds"))
 ```

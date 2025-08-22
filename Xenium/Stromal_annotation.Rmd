@@ -1,11 +1,11 @@
 ---
-title: "Immune cell annotation"
+title: "Stromal cell annotation"
 author: "Carla Cohen"
 date: "2025-07-01"
 output: html_document
 ---
 
-# Immune annotation
+# Stromal annotation
 
 The aim of this script is to annotate the clusters after integration, which can be informed by the cell label transfer. 
 
@@ -36,13 +36,13 @@ set.seed(123)
 date <- Sys.Date() %>% str_replace_all("-", "")
 time <- format(Sys.time(), "%X") %>% str_replace_all(":", "-") %>%
     str_sub(1, 5)
-directory <- paste0(wdir, date,"_", time, "_Immune_annotation_.dir")
+directory <- paste0(wdir, date,"_", time, "_Stromal_annotation_.dir")
 dir.create(directory, showWarnings = FALSE)
 dir.create(paste0(directory, "/RDS_objects.dir/"))
 dir.create(paste0(directory, "/Figures/"))
-dir.create(paste0(directory, "/Immune"))
-dir.create(paste0(directory, "/Immune/Heatmaps"))
-dir.create(paste0(directory, "/Immune/Dotplots"))
+dir.create(paste0(directory, "/Stromal"))
+dir.create(paste0(directory, "/Stromal/Heatmaps"))
+dir.create(paste0(directory, "/Stromal/Dotplots"))
 
 
 ```
@@ -146,20 +146,21 @@ achilles.fine.colours <- c(fibroblast.colours, muscle.colours, stromal.colours, 
 ```
 
 
-Read in the seurat object that has fine annotation for fibroblasts. 
+Read in the seurat object that has fine annotation for fibroblasts and immune cells. 
 
 ```{r}
-so.harmony <- readRDS(paste0(wdir, "20250702_12-14_Fibroblast_annotation.dir/RDS_objects.dir/Achilles_integrated_annotated.rds"))
+so.harmony <- readRDS(paste0(wdir, "20250702_13-21_Immune_annotation_.dir/RDS_objects.dir/Achilles_integrated_annotated.rds"))
 
 
 ```
 
-## Subset and recluster immune cells
+## Subset and recluster Stromal cells
 
 
 ```{r}
 Idents(so.harmony) <- so.harmony$predicted.id_integrated_broad
-so.im <- subset(so.harmony, idents = c("T cells", "Macrophages", "Granulocytes"))
+so.str <- subset(so.harmony, idents = c("Lymphatic endothelial cells", "Adipocytes", "Mural cells", 
+                                       "Vascular endothelial cells", "Nervous system cells"))
 ```
 
 
@@ -167,23 +168,23 @@ Tidy up the metadata
 ```{r}
 
 # remove existing clusters
-resolutionList <- grep("snn_res", colnames(so.im[[]]), value = TRUE)
+resolutionList <- grep("snn_res", colnames(so.str[[]]), value = TRUE)
 
 for (resolution in resolutionList){
-      so.im[[resolution]] <- NULL
+      so.str[[resolution]] <- NULL
 }
 
-so.im[["umap"]] <- NULL
+so.str[["umap"]] <- NULL
 
-so.im
+so.str
 ```
 
 ```{r}
-DefaultAssay(so.im) <- "XENIUM"
+DefaultAssay(so.str) <- "XENIUM"
 
-so.im <- SCTransform(so.im, assay = "XENIUM", clip.range = c(-10, 10))
-so.im <- RunPCA(so.im)
-so.im <- RunUMAP(so.im, dims = 1:20)
+so.str <- SCTransform(so.str, assay = "XENIUM", clip.range = c(-10, 10))
+so.str <- RunPCA(so.str)
+so.str <- RunUMAP(so.str, dims = 1:20)
 
 ```
 
@@ -193,25 +194,23 @@ so.im <- RunUMAP(so.im, dims = 1:20)
 so.achilles <- readRDS(paste0(wdir, "data/Achilles_fine_annotation.rds"))
 Idents(so.achilles) <- so.achilles$broad_annotation
 unique(so.achilles$broad_annotation)
-so.immune <- subset(so.achilles, idents = c("T cells", "Macrophages", "Granulocytes", "B cells"))
-# remove skeletal muscle cells
-Idents(so.immune) <- so.immune$fine_annotation
-so.immune <- subset(so.immune, idents = "Slow-twitch skeletal muscle cells", invert = TRUE)
-ref <- so.immune
-ref <- SCTransform(ref, residual.features =rownames(so.im))
+so.stromal <- subset(so.achilles, idents = c("Lymphatic endothelial cells", "Adipocytes", "Mural cells", 
+                                       "Vascular endothelial cells", "Nervous system cells"))
+ref <- so.stromal
+ref <- SCTransform(ref, residual.features =rownames(so.str))
 ref <- RunPCA(ref)
 ref <- RunUMAP(ref, dims=1:20)
 
 Idents(ref) <- ref$fine_annotation
 
-DimPlot(ref, repel=T, cols = immune.colours)
+DimPlot(ref, repel=T, cols = stromal.colours)
 
-ggsave(paste0(directory, "/Immune/Achilles_Immune_UMAP_red_features.png"), 
+ggsave(paste0(directory, "/Stromal/Achilles_Stromal_UMAP_red_features.png"), 
        width = 10, height = 8)
 ```
 
 ```{r, fig.width=10, fig.height=8}
-ps <- AggregateExpression(ref, features = rownames(so.im), normalization.method = "LogNormalize", assays="RNA", return.seurat = T)
+ps <- AggregateExpression(ref, features = rownames(so.str), normalization.method = "LogNormalize", assays="RNA", return.seurat = T)
 ps <- ScaleData(ps, features=rownames(ps))
 pheatmap(LayerData(ps, layer="scale.data"), show_rownames = F)
 ```
@@ -221,53 +220,53 @@ Transfer labels from the ref to the spatial data
 
 ```{r}
 anchors <- FindTransferAnchors(reference = ref, 
-                               query = so.im, 
+                               query = so.str, 
                                normalization.method = "SCT")
 
-so.im <- TransferData(anchorset = anchors, 
+so.str <- TransferData(anchorset = anchors, 
                        refdata = ref$fine_annotation, 
                        prediction.assay = TRUE,
-                       weight.reduction = so.im[["pca"]], 
-                       query = so.im, 
+                       weight.reduction = so.str[["pca"]], 
+                       query = so.str, 
                        dims=1:20)
 
 ```
 
 ```{r, fig.width=10, fig.height=8}
 
-immune.colours.bright <- brewer.pal(7, "Dark2")
+stromal.colours.bright <- brewer.pal(7, "Dark2")
 
-names(immune.colours.bright) <- c("B cells", 
-                                  "CLEC10Ahi DCs", 
-                                  "Granulocytes", 
-                                  "MERTKhi LYVE1hi macrophages", 
-                                  "Monocytes", 
-                                  "NK cells", 
-                                  "T cells")
+names(stromal.colours.bright) <- c("Lymphatic endothelial cells", 
+                                   "Adipocytes", 
+                                   "vSMC", 
+                                   "Arteriolar VEC", 
+                                   "Pericytes", 
+                                   "Nervous system cells", 
+                                   "Venular VEC")
 
-p1 <- DimPlot(so.im, group.by= "predicted.id", cols = immune.colours.bright, reduction = "umap")
-ggsave(paste0(directory, "/Immune/UMAP_Predicted_IDs.png"), p1,
+p1 <- DimPlot(so.str, group.by= "predicted.id", cols = stromal.colours.bright, reduction = "umap")
+ggsave(paste0(directory, "/Stromal/UMAP_Predicted_IDs.png"), p1,
        width = 10, height = 8)
-p2 <- FeaturePlot(so.im, features = "predicted.id.score", reduction = "umap")+scale_color_viridis()
-ggsave(paste0(directory, "/Immune/UMAP_prediction_scores.png"), p2,
+p2 <- FeaturePlot(so.str, features = "predicted.id.score", reduction = "umap")+scale_color_viridis()
+ggsave(paste0(directory, "/Stromal/UMAP_prediction_scores.png"), p2,
        width = 10, height = 8)
-p3 <- VlnPlot(so.im, features = "predicted.id.score", group.by = "predicted.id", 
-        cols = immune.colours.bright, pt.size = 0)+
+p3 <- VlnPlot(so.str, features = "predicted.id.score", group.by = "predicted.id", 
+        cols = stromal.colours.bright, pt.size = 0)+
   theme(legend.position="none")+
   theme(axis.text.x=element_blank())
-ggsave(paste0(directory, "/Immune/Vln_prediction_scores.png"), p3,
+ggsave(paste0(directory, "/Stromal/Vln_prediction_scores.png"), p3,
        width = 10, height = 6)
 pA <- plot_grid(p2, p3)
 plot_grid(p1, pA, ncol = 1)
 # save these results as new columns in the metadata
-so.im$predicted.id_immune_fine <- so.im$predicted.id
-so.im$predicted.id.score_immune_fine <- so.im$predicted.id.score
+so.str$predicted.id_stromal_fine <- so.str$predicted.id
+so.str$predicted.id.score_stromal_fine <- so.str$predicted.id.score
 
 # save the results as csv (to use in Xenium Explorer)
-df <- data.frame(cell_id = colnames(so.im),
-                 group = so.im$predicted.id)
+df <- data.frame(cell_id = colnames(so.str),
+                 group = so.str$predicted.id)
 write.table(df, 
-          paste0(directory, "/Immune/Predicted.id.csv"),
+          paste0(directory, "/Stromal/Predicted.id.csv"),
           quote = FALSE, 
           sep = ",",
           col.names = TRUE,
@@ -278,12 +277,12 @@ write.table(df,
 How many cells per annotation?
 
 ```{r}
-table(so.im$predicted.id_immune_fine)
+table(so.str$predicted.id_stromal_fine)
 ```
 Compare the annotations 
 ```{r, fig.width=16, fig.height=5}
-p1 <- DimPlot(so.im, reduction = "umap", group.by = "predicted.id_integrated_fine", cols = immune.colours.bright)
-p2 <- DimPlot(so.im, group.by= "predicted.id_immune_fine", cols = immune.colours.bright, reduction = "umap")
+p1 <- DimPlot(so.str, reduction = "umap", group.by = "predicted.id_integrated_fine", cols = stromal.colours.bright)
+p2 <- DimPlot(so.str, group.by= "predicted.id_stromal_fine", cols = stromal.colours.bright, reduction = "umap")
 plot_grid(p1, p2, ncol = 2)
 
 ```
@@ -294,22 +293,18 @@ Only minor changes but looks good.
 
 ```{r, fig.width=15, fig.height=5}
 
-immune_markers <- list("T cell" = c("CD247", "SKAP1", "THEMIS", "PTPRC", "IL7R"), 
-                       #"MERTK+LYVE1-mac" = c("CTSL", "CTSB", "TPRG1", "HMOX1","ELL2"),
-                       #"MERTK-PTPRG+mac" = c("PTPRG", "MIR99AHG", "PARD3",
-                      #                       "KAZN",  "IFI44L"), 
-                       "MERTK+LYVE1+mac" = c("CD163", "F13A1","STAB1",
-                                             "MERTK", "LYVE1"), 
-                       "CLEC10A DC" = c("CLEC10A", "CD1C", "FCER1A", "IL1R2"),
-                       "NK cell" = c("NCAM1", "GNLY", "KLRD1", "CCL5", "MCTP2"),
-                       "Monocytes" = c("FCN1", "VCAN", "FCGR3A", "LST1", "LILRB2"),
-                       "Granulocyte" = c( "KIT", "CPA3", "IL18R1","CDK15", "MS4A2"),
-                       #"Plasma" = c("IGHG1", "MZB1", "XBP1", "PRDM1", "JCHAIN"),
-                       #"CLEC9Ahi DC" = c("CLEC9A", "CADM1", "IDO1", "CLNK", "ZNF366"),
-                       "B cells" = c("MS4A1", "CD37", "BLNK", "FCRL1", "IGHM")
-)
-Idents(so.im) <- so.im$predicted.id_immune_fine
-DotPlot(so.im, features = immune_markers)+
+stromal_markers <- list("Pericytes" = c("PDGFRB","COL25A1", "POSTN", "STEAP4", "RGS5"),
+                        "vSMCs" = c("MYH11", "TAGLN", "SORBS2", "RCAN2", "LMOD1", "CARMN"),
+                        "Venular VECs" = c("SELP", "NOSTRIN", "MYRIP", "GNA14", "TACR1"),
+                        "Arteliolar VECs" = c("PODXL", "EFNB2", "NEBL", "SYT1", "THSD4"),
+                        "Capillary VECs" = c("COL4A1", "COL4A2", "COL15A1", "DYSF", "ARHGAP18"),
+                        "Dividing VEC" = c("ASPM", "DIAPH3", "TOP2A", "CENPE", "TPX2", "MELK"),
+                        "LEC" = c( "MMRN1", "PROX1", "PKHD1L1", "FLT4", "NRG3"),
+                        "Adipocyte"  = c ("PLIN1", "LPL", "GPAM", "AQP7","ADIPOQ")
+                        )
+
+Idents(so.str) <- so.str$predicted.id_stromal_fine
+DotPlot(so.str, features = stromal_markers)+
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
   geom_point(aes(size=pct.exp), shape = 21, colour="black", stroke=0.5) +
   scale_colour_gradient2(low = "#f7f3f2", mid = "#f2390a", high = "#6e1e0a", midpoint = 1)
@@ -324,23 +319,23 @@ Predicted IDs from reference mapping
 roi_names <- c("ROI1", "ROI1.2", "ROI1.3", "ROI1.4")
 ma_names <- c("Enthesis", "MB", "MTJ", "Muscle")
 
-dir.create(paste0(directory, "/Immune/mapping_IDs/"))
+dir.create(paste0(directory, "/Stromal/mapping_IDs/"))
 
 for (i in 1:length(roi_names)){
-  ImageDimPlot(so.im, fov=roi_names[i], boundaries="segmentation", border.color = "black",
-               group.by = "predicted.id_immune_fine", 
-             cols = immune.colours.bright )+
+  ImageDimPlot(so.str, fov=roi_names[i], boundaries="segmentation", border.color = "black",
+               group.by = "predicted.id_stromal_fine", 
+             cols = stromal.colours.bright )+
     ggtitle(paste0(ma_names[i], " mapping IDs"))
-  ggsave(paste0(directory, "/Immune/mapping_IDs/Image_", ma_names[i], "_ROI_Predicted_FB_IDs.png"), 
+  ggsave(paste0(directory, "/Stromal/mapping_IDs/Image_", ma_names[i], "_ROI_Predicted_FB_IDs.png"), 
        width = 10, height = 8)
 }
 
 for (i in 1:length(roi_names)){
-  ImageDimPlot(so.im, fov=ma_names[i], 
-               group.by = "predicted.id_immune_fine", 
-             cols = immune.colours.bright )+
+  ImageDimPlot(so.str, fov=ma_names[i], 
+               group.by = "predicted.id_stromal_fine", 
+             cols = stromal.colours.bright )+
     ggtitle(paste0(ma_names[i], " mapping IDs"))
-  ggsave(paste0(directory, "/Immune/mapping_IDs/Image_", ma_names[i], "_full_Predicted_FB_IDs.png"), 
+  ggsave(paste0(directory, "/Stromal/mapping_IDs/Image_", ma_names[i], "_full_Predicted_FB_IDs.png"), 
        width = 10, height = 8)
 }
 
@@ -348,36 +343,39 @@ for (i in 1:length(roi_names)){
 
 ### Put the annotations back into the full object
 
-Need to determine whether subsetting the immune cells gave different IDs from the fine mapping using the whole object.
+Need to determine whether subsetting the Stromal cells gave different IDs from the fine mapping using the whole object.
 
 ```{r}
 df <- so.harmony[[]]
-df.im <- so.im[[]] %>% select(cell_id, predicted.id_immune_fine)
+df.im <- so.str[[]] %>% select(cell_id, predicted.id_stromal_fine)
 df <- left_join(df, df.im)
-df %>% select(predicted.id_immune_fine, predicted.id_broad, fine_annotation)
+df %>% select(predicted.id_stromal_fine, predicted.id_broad, fine_annotation)
 # make a new column of fine annotation by filling in the values from the other annotations
 df <- df %>% mutate(fine_annotation =
-                  case_when(is.na(predicted.id_immune_fine) ~ fine_annotation)) 
+                  case_when(is.na(predicted.id_stromal_fine) ~ fine_annotation)) 
 
-df <- df %>% mutate(fine_annotation = coalesce(fine_annotation, predicted.id_immune_fine))
+df <- df %>% mutate(fine_annotation = coalesce(fine_annotation, predicted.id_stromal_fine))
 
 # add this column to the object
 so.harmony$fine_annotation <- df$fine_annotation
 
 
 # compare the annotations 
-df.im <- df %>% filter(predicted.id_integrated_broad == "T cells" |
-                         predicted.id_integrated_broad==  "Macrophages" | 
-                         predicted.id_integrated_broad== "Granulocytes" ) %>% 
-  select(predicted.id_integrated_broad, predicted.id_integrated_fine, predicted.id_immune_fine, fine_annotation) #%>%
+df.im <- df %>% filter(predicted.id_integrated_broad == "Lymphatic endothelial cells" |
+                         predicted.id_integrated_broad== "Adipocytes" | 
+                         predicted.id_integrated_broad== "Mural cells" |
+                         predicted.id_integrated_broad== "Vascular endothelial cells" |
+                         predicted.id_integrated_broad==  "Nervous system cells"
+                         ) %>% 
+  select(predicted.id_integrated_broad, predicted.id_integrated_fine, predicted.id_stromal_fine, fine_annotation) #%>%
   #filter(str_detect(predicted.id_integrated_fine, "fibroblasts") | predicted.id_integrated_fine == "Chondrocytes")
-table(df.im$predicted.id_immune_fine, df.im$predicted.id_integrated_fine)
+table(df.im$predicted.id_stromal_fine, df.im$predicted.id_integrated_fine)
 ```
 
 
 
 ```{r}
-saveRDS(so.im, paste0(directory, "/RDS_objects.dir/Achilles_immune_subset.rds"))
+saveRDS(so.str, paste0(directory, "/RDS_objects.dir/Achilles_stromal_subset.rds"))
 
 saveRDS(so.harmony, paste0(directory, "/RDS_objects.dir/Achilles_integrated_annotated.rds"))
 ```

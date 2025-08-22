@@ -1,5 +1,5 @@
 ##############################
-# Figures for Achilles paper #
+# Xenium Figures for Achilles paper #
 ##############################
 
 #--------
@@ -29,20 +29,27 @@ set.seed(123)
 
 directory <- "Achilles_paper_figures.dir"
 dir.create(directory)
+dir.create(paste0(directory, "/Figure_1/"))
+dir.create(paste0(directory, "/Figure_2/"))
+dir.create(paste0(directory, "/Figure_3/"))
 dir.create(paste0(directory, "/Supplementary"))
 dir.create(paste0(directory, "/Supplementary/Figure_S4/"))
 dir.create(paste0(directory, "/Supplementary/Figure_S5/"))
-
+dir.create(paste0(directory, "/Supplementary/Figure_S6/"))
+dir.create(paste0(directory, "/Supplementary/Figure_S7/"))
+dir.create(paste0(directory, "/Supplementary/Figure_S8/"))
 #------------------------
 # set the colours
 #------------------------
+
+
 
 broad.colours <- c("COMPhi MMP3hi fibroblasts" =  "#F9BA73",
                    "COMPhi THBS4hi fibroblasts" = "#44BED0",
                    "NEGR1hi COL15A1hi fibroblasts" = "#41A021" ,
                    "NEGR1hi VCANhi fibroblasts" = "#CD2321",
                    "NEGR1hi ITGA6hi fibroblasts" = "#C19C93",
-                   "Nervous system cells" = "#F67E00",
+                   "Schwann cells" = "#F67E00",
                    "Immune cells" = "#A5DAE6",
                    "Endothelial cells"  ="#DC77C3" ,
                    "Adipocytes" = "#DADB89" ,
@@ -52,35 +59,73 @@ broad.colours <- c("COMPhi MMP3hi fibroblasts" =  "#F9BA73",
                    "PRG4hi fibroblasts" = "#7F7F7F"
 )  
 
-achilles.colours <- c(# Broad groups
-  "Fibroblasts" = "#B2182B", 
-  "Skeletal muscle cells" = "#88419D", 
-  "Satellite cells" = "#8C96C6",
-  "Mural cells" = "#7FBC41",
+
+# using seaborn
+achilles.colours<- c(# Broad groups
+  "Fibroblasts" = "#CD2321", 
+  "Skeletal muscle cells" = "#9267BF", 
+  "Satellite cells" = "#C4B0D6",
+  "Mural cells" = "#9FDF86",
   # Immune
-  "Macrophages" = "#35978F", 
-  "B cells" = "#543005", 
-  "T cells" = "#F6E8C3", 
+  "Macrophages" = "#44BED0", 
+  "B cells" = "#88564A", 
+  "T cells" = "#BBBD00", 
   "Plasma cells" = "#01EBD6", 
-  "Granulocytes" = "#80CDC1", 
+  "Granulocytes" = "#C7C7C7", 
   # Stromal
-  "Vascular endothelial cells" = "#F1B6DA",
-  "Lymphatic endothelial cells" = "#C51B7D",
-  "Adipocytes" = "#E6F598", 
-  "Mural" = "#B8E186", 
-  "Nervous system cells" = "#276419", 
+  "Vascular endothelial cells" = "#F2B6D2",
+  "Lymphatic endothelial cells" = "#DC77C3",
+  "Adipocytes" = "#DADB89", 
+  "Mural" = "#9FDF86", 
+  "Schwann cells" = "#F67E00", 
   "Ambient" = "grey")
 
+
+
 # Muscle colours
-muscle.colours <- brewer.pal(5, "BuPu")
-names(muscle.colours) <- c("unused", 
-                           "Transitional skeletal muscle cells", 
-                           "Satellite cells", 
-                           "Fast-twitch skeletal muscle cells", 
-                           "Slow-twitch skeletal muscle cells")
+
+muscle.colours <- c("Slow-twitch skeletal muscle cells" = "#9267BF",
+                    "Transitional skeletal muscle cells" = "#44BED0", 
+                    "Satellite cells" = "#CD2321", 
+                    "Fast-twitch skeletal muscle cells" = "#BBBD00")
+
+
+# Immune colours
+
+immune.colours <- c("B cells" = "#88564A", 
+                           "Monocytes" = "#C19C93",
+                           "T cells" = "#BBBD00", 
+                           "CLEC10Ahi DCs" = "#B1C7E9",
+                           "Granulocytes" = "#CD2321",
+                           "MERTKhi LYVE1hi macrophages" = "#44BED0",
+                           "NK cells" = "#9FDF86" 
+                           )
+
+# stromal colours
+
+stromal.colours <- c("Lymphatic endothelial cells" = "#F2B6D2", 
+                     "Adipocytes" = "#DADB89",
+                     "Arteriolar VEC" = "#DC77C3",
+                     "Venular VEC" =  "#8E0152",
+                     "vSMC" = "#9FDF86",
+                     "Pericytes" = "#41A021",
+                     "Schwann cells" = "#F67E00")
+
+
 
 
 ma.cols <-  c(Enthesis = "#d37504", MB = "#959295", MTJ = "#359c72", Muscle = "#34688d")
+
+seaborn.colours <- c("#3378B6", "#B1C7E9",
+                     "#F67E00", "#F9BA73",
+                     "#41A021", "#9FDF86", 
+                     "#CD2321", "#F89795", 
+                     "#9267BF", "#C4B0D6",
+                     "#88564A", "#C19C93",
+                     "#DC77C3", "#F2B6D2",
+                     "#7F7F7F", "#C7C7C7", 
+                     "#BBBD00", "#DADB89", 
+                     "#44BED0", "#A5DAE6")
 
 #------------------------
 # Read in the objects
@@ -89,12 +134,188 @@ ma.cols <-  c(Enthesis = "#d37504", MB = "#959295", MTJ = "#359c72", Muscle = "#
 so.harmony <- readRDS(paste0(wdir, "20250708_10-26_Visualisation_.dir/RDS_objects.dir/Achilles_integrated_annotated.rds"))
 so.achilles <- readRDS(paste0(wdir, "data/Achilles_fine_annotation.rds"))
 
-# need to save and read in the subsetted objects.
-# looks like I should also do the fine annotation on the subsets for muscle and stromal cells
+so.fb <- readRDS(paste0(wdir, "20250702_12-14_Fibroblast_annotation.dir/RDS_objects.dir/Achilles_fibroblast_subset.rds"))
+so.im <- readRDS(paste0(wdir, "20250702_13-21_Immune_annotation_.dir/RDS_objects.dir/Achilles_immune_subset.rds"))
+so.str <- readRDS(paste0(wdir, "20250723_11-23_Stromal_annotation_.dir/RDS_objects.dir/Achilles_stromal_subset.rds"))
+so.musc <- readRDS(paste0(wdir, "20250723_11-47_Muscle_annotation_.dir/RDS_objects.dir/Achilles_muscle_subset.rds"))
 
+# rename nervous system cells to schwann cells
+# rename chondrocytes to COMPhi MMP3hi fibroblasts
+
+Idents(so.achilles) <- "broad_annotation"
+so.achilles <- RenameIdents(so.achilles, 
+                       'Nervous system cells' = "Schwann cells")
+so.achilles$broad_annotation <- Idents(so.achilles)
+
+
+Idents(so.harmony) <- "predicted.id_integrated_broad"
+so.harmony <- RenameIdents(so.harmony, 
+                           `Nervous system cells` = "Schwann cells")
+so.harmony$predicted.id_integrated_broad <- Idents(so.harmony)
+
+Idents(so.str) <- "predicted.id_stromal_fine"
+so.str <- RenameIdents(so.str, 
+                           'Nervous system cells' = "Schwann cells")
+so.str$predicted.id_stromal_fine <- Idents(so.str)
+
+Idents(so.fb) <- "predicted.id_fb_fine"
+so.fb <- RenameIdents(so.fb, 
+                      `Chondrocytes` = "COMPhi MMP3hi fibroblasts")
+so.fb$predicted.id_fb_fine <- Idents(so.fb)
+
+# Update the fine annotations in the integrated object
+
+df <- so.harmony[[]]
+df.fb <- so.fb[[]] %>% select(cell_id, predicted.id_fb_fine)
+df.im <- so.im[[]] %>% select(cell_id, predicted.id_immune_fine)
+df.musc <- so.musc[[]] %>% select(cell_id, predicted.id_muscle_fine)
+df.str <- so.str[[]] %>% select(cell_id, predicted.id_stromal_fine)
+df <- left_join(df, df.fb)
+df <- left_join(df, df.im)
+df <- left_join(df, df.musc)
+df <- left_join(df, df.str)
+df <- df %>% select(broad_annotation, predicted.id_fb_fine, predicted.id_immune_fine, predicted.id_muscle_fine, predicted.id_stromal_fine)
+head(df)
+
+# make a new column of fine annotation by filling in the values from the other annotations
+df <- df %>% mutate(fine_annotation = coalesce(predicted.id_fb_fine, 
+                                               predicted.id_immune_fine, 
+                                               predicted.id_muscle_fine, 
+                                               predicted.id_stromal_fine))
+
+# add this column to the object
+so.harmony$fine_annotation <- df$fine_annotation
+
+#-----------------------------------------------------
+# Figure 1E: Export the annotations for Xenium Explorer
+#-----------------------------------------------------
+
+
+# Broad annotation
+df <- data.frame(cell_id = colnames(so.harmony),
+                 group = so.harmony$broad_annotation)
+write.table(df, 
+            paste0(directory, "/Figure_1/Broad_annotation.csv"),
+            quote = FALSE, 
+            sep = ",",
+            col.names = TRUE,
+            row.names = FALSE)
+
+# Fine annotation
+df <- data.frame(cell_id = colnames(so.harmony),
+                 group = so.harmony$fine_annotation)
+write.table(df, 
+            paste0(directory, "/Figure_1/Fine_annotation.csv"),
+            quote = FALSE, 
+            sep = ",",
+            col.names = TRUE,
+            row.names = FALSE)
+
+
+#----------------------------------------------------------
+# Figure 2G: Distributions of fibroblasts across the tendon
+#----------------------------------------------------------
+
+# Plot distribution of a cell type across a tissue slice
+
+metadata <- so.harmony[[]] %>% 
+  filter(microanatomical_site == "MB")
+
+ggplot(metadata, aes(x = x_centroid, y = y_centroid))+
+  geom_abline(slope = -1, intercept = 4000, colour = "grey", size = 6, alpha = 0.4)+
+  geom_abline(slope = -1, intercept = 4000, colour = "black")+
+  geom_point(aes(colour = broad_annotation))+
+  scale_colour_manual(values = broad.colours)+
+  scale_x_continuous(expand = c(0, 0), limits = c(0, 3500)) + 
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 4500))+
+  theme_classic()+
+  theme(legend.position="none")
+
+ggsave(paste0(directory, "/Figure_2/Fibroblasts_across_slice.png"), 
+              width = 10, height = 7, bg = "white")
+
+
+#----------------------------------------------------------
+# Figure 2G: Distributions of fibroblasts across the tendon (lollipop)
+#----------------------------------------------------------
+
+# add column to seurat metadata which sums the x and y coords
+metadata <- metadata %>% mutate (coords_sum = x_centroid + y_centroid)
+
+# filter coords that are adjacent to the slice line
+metadata <- metadata %>% filter (coords_sum > 3900 & coords_sum < 4100)
+
+# add an arbitrary value to each type of fibroblasts and plot
+df <- metadata %>% mutate(celltype = case_when (broad_annotation == 'COMPhi MMP3hi fibroblasts' ~ -1,
+                                                broad_annotation == "NEGR1hi VCANhi fibroblasts" ~ 1,
+                                                broad_annotation == "NEGR1hi ITGA6hi fibroblasts" ~-2, 
+                                                #broad_annotation == "COMPhi THBS4hi fibroblasts" ~4,
+                                                broad_annotation == "NEGR1hi COL15A1hi fibroblasts" ~2 ))
+df %>% 
+  filter(celltype == -1 | celltype == 1 | celltype == -2 | celltype == 2 ) %>%
+  ggplot(aes(x = x_centroid, y = celltype))+
+  geom_segment( aes(x=x_centroid, xend=x_centroid, y=0, yend=celltype), color="grey") +
+  geom_point(aes(colour = broad_annotation))+
+  scale_colour_manual(values = broad.colours)+
+#theme_void()+
+  geom_hline(yintercept = 0)+
+  theme(legend.position="none")+
+  scale_x_continuous()#limits = c(0, 3500))
+
+ggsave(paste0(directory, "/Figure_2/Fibroblasts_lollipop.png"), 
+       width = 10, height = 1, bg = "white")
+
+#----------------------------------------------------------
+# Figure 2H: Distributions of COMP and NEGR1 across the tendon
+#----------------------------------------------------------
+
+# Subset the so to the MB
+so.mb <- subset(so.harmony, microanatomical_site == "MB")
+so.mb[[]] <- so.mb[[]] %>% mutate (coords_sum = x_centroid + y_centroid)
+
+# subset to cells in the slice
+so.mb$cells_slice <- so.mb$coords_sum > 3900 & so.mb$coords_sum < 4100
+so.slice <- subset(so.mb, cells_slice)
+# ImageDimPlot(so.slice, group.by = "broad_annotation")
+
+df$COMP <- GetAssayData(so.slice, assay = "SCT", layer = "scale.data")["COMP",]
+df$NEGR1 <- GetAssayData(so.slice, assay = "SCT", layer = "scale.data")["NEGR1",]
+
+df <- df %>% filter (broad_annotation == 'COMPhi MMP3hi fibroblasts' |
+                     broad_annotation == "NEGR1hi VCANhi fibroblasts" |
+                     broad_annotation == "NEGR1hi ITGA6hi fibroblasts" |  
+                     #broad_annotation == "COMPhi THBS4hi fibroblasts" |
+                     broad_annotation == "NEGR1hi COL15A1hi fibroblasts") 
+
+p1 <- ggplot(df, aes(x = x_centroid, y = COMP))+
+  geom_point(aes(colour = broad_annotation))+
+  #geom_segment( aes(x=x_centroid, xend=x_centroid, y=0, yend=celltype), color="grey") +
+  scale_colour_manual(values = broad.colours)+
+  theme_classic()+
+  geom_smooth(colour = "black")+
+  ylab("scaled expression")+
+  ggtitle("COMP")+
+  theme(legend.position="none")
+
+
+p2 <- ggplot(df, aes(x = x_centroid, y = NEGR1))+
+  geom_point(aes(colour = broad_annotation))+
+  #geom_segment( aes(x=x_centroid, xend=x_centroid, y=0, yend=celltype), color="grey") +
+  scale_colour_manual(values = broad.colours)+
+  theme_classic()+
+  geom_smooth(colour = "black")+
+  ylab("scaled expression")+
+  ggtitle("NEGR1")+
+  theme(legend.position="none")
+
+
+plot_grid(p1, p2, ncol = 1)
+
+ggsave(paste0(directory, "/Figure_2/COMP_NEGR1_across_slice.png"), 
+       width = 8, height = 6, bg = "white")
 
 #--------------------------------------------------
-# Figure S2A: DimPlot of predicted broad annotations
+# Figure S4A: UMAP of predicted broad annotations
 #---------------------------------------------------
 
 do_DimPlot(so.harmony, reduction = "harmony.umap", group.by = "predicted.id_integrated_broad",
@@ -109,7 +330,7 @@ ggsave(paste0(directory, "/Supplementary/Figure_S4/UMAP_predicted_broad.svg"), w
 
 
 #--------------------------------------------------
-# Figure S2B: Cell proportions across microanatomy
+# Figure S4B: Cell proportions across microanatomy
 #---------------------------------------------------
 
 # what are the cell numbers for broad annotations ?
@@ -132,6 +353,7 @@ df.sn <- df.sn %>%
   summarise(snRNAseq=n()) %>% 
   mutate(snRNAseq_percent=(snRNAseq/sum(snRNAseq))*100) %>% 
   arrange(desc(snRNAseq))
+df.sn$broad_annotation <- factor(df.sn$broad_annotation, levels = df.sn$broad_annotation)
 
 df <- left_join(df.sn, df.broad, by = c("broad_annotation" = "predicted.id_integrated_broad"))
 df.number <- df %>% select(broad_annotation, snRNAseq, xenium)
@@ -152,6 +374,7 @@ ggsave((paste0(directory, "/Supplementary/Figure_S4/Cell_numbers.svg")),
        width = 8, height = 5)
 
 df.proportion <- df %>% select(broad_annotation, snRNAseq_percent, xenium_percent)
+df.proportion$broad_annotation <- factor(df.proportion$broad_annotation, levels = df.proportion$broad_annotation)
 df.proportion <- df.proportion %>% pivot_longer(2:3, names_to = "technology", values_to = "percent_cells")
 
 ggplot(df.proportion, aes(y=percent_cells, x=broad_annotation, fill = technology))+
@@ -205,72 +428,29 @@ ggsave((paste0(directory, "/Supplementary/Figure_S4/Xenium_broad_annotation_micr
        width = 8, height = 5)
 
 #--------------------------------------------------
-# Figure S5D: Muscle fine annotation
+# Figure S5D: Fibroblast fine annotation UMAP
 #---------------------------------------------------
 
-Idents(so.harmony) <- "predicted.id_integrated_fine"
-so.musc <- subset(so.harmony, idents = c("Fast-twitch skeletal muscle cells", 
-                                         "Slow-twitch skeletal muscle cells", 
-                                         "Transitional skeletal muscle cells", 
-                                         "Satellite cells"))
 
-do_DimPlot(so.musc, reduction = "harmony.umap", group.by = "predicted.id_integrated_fine",
-           #colors.use = muscle.colours, 
+do_DimPlot(so.fb, reduction = "umap", group.by = "predicted.id_fb_fine",
+           colors.use = broad.colours, 
            plot_cell_borders = TRUE, pt.size = 0.5, 
            legend.position = "right"
 )
 
-ggsave(paste0(directory, "/Supplementary/Figure_S5/UMAP_predicted_muscle.png"), 
+ggsave(paste0(directory, "/Supplementary/Figure_S5/UMAP_predicted_fibroblast.png"), 
        width = 8, height = 4, bg = "white")
-ggsave(paste0(directory, "/Supplementary/Figure_S5/UMAP_predicted_muscle.svg"), width = 10, height = 7, bg = "white")
-
-
-#--------------------------------------------------
-# Figure S6D: Stromal fine annotation
-#---------------------------------------------------
-
-# TODO
-
-so.str <- subset(so.harmony, idents = c("Lymphatic endothelial cells", 
-                                        "Adipocytes", 
-                                        "vSMC", 
-                                        "Arteriolar VEC",
-                                        "Pericytes", 
-                                        "Nervous system cells",
-                                        "Venular VEC"))
-
-do_DimPlot(so.str, reduction = "harmony.umap", group.by = "predicted.id_integrated_fine",
-           #colors.use = muscle.colours, 
-           plot_cell_borders = TRUE, pt.size = 0.5, 
-           legend.position = "right"
-)
-
-ggsave(paste0(directory, "/Supplementary/Figure_S5/UMAP_predicted_stromal.png"), 
-       width = 8, height = 4, bg = "white")
-ggsave(paste0(directory, "/Supplementary/Figure_S5/UMAP_predicted_stromal.svg"), 
+ggsave(paste0(directory, "/Supplementary/Figure_S5/UMAP_predicted_fibroblast.svg"), 
        width = 8, height = 4, bg = "white")
 
 
-
 #--------------------------------------------------
-# Figure S5D: Immune fine annotation
-#---------------------------------------------------
-
-# TODO
-
-#--------------------------------------------------
-# Figure S4D: Fibroblast fine annotation UMAP
-#---------------------------------------------------
-
-# UMAP to do
-
-#--------------------------------------------------
-# Figure S5G: Fibroblast cell proportions in snRNAseq and Xenium
+# Figure S5G-I: Fibroblast cell proportions in snRNAseq and Xenium
 #---------------------------------------------------
 
 Idents(so.harmony) <- so.harmony$predicted.id_integrated_broad
 so.fb <- subset(so.harmony, idents = "Fibroblasts")
-df <- so.fb[[]] %>% select("predicted.id_integrated_broad", "fine_annotation")
+df <- so.fb[[]] %>% select("broad_annotation", "fine_annotation")
 
 df.fine <- df %>% 
   group_by(fine_annotation) %>%  
@@ -279,9 +459,11 @@ df.fine <- df %>%
   arrange(desc(xenium))
 
 df.fine$fine_annotation <- factor(df.fine$fine_annotation, 
-                                  levels = df.fine$fine_annotation)
+                                       levels = df.fine$fine_annotation)
 
-df.sn <- so.achilles[[]] %>% select(fine_annotation)
+Idents(so.achilles) <- so.achilles$broad_annotation
+so.sn.fb <- subset(so.achilles, idents = "Fibroblasts")
+df.sn <- so.sn.fb[[]] %>% select(fine_annotation)
 
 df.sn <- df.sn %>% 
   group_by(fine_annotation) %>%  
@@ -289,7 +471,7 @@ df.sn <- df.sn %>%
   mutate(snRNAseq_percent=(snRNAseq/sum(snRNAseq))*100) %>% 
   arrange(desc(snRNAseq))
 df.sn$fine_annotation <- factor(df.sn$fine_annotation, 
-                                  levels = df.fine$fine_annotation)
+                                levels = df.sn$fine_annotation)
 
 df <- left_join(df.fine, df.sn)
 df.number <- df %>% select(fine_annotation, snRNAseq, xenium)
@@ -304,9 +486,9 @@ ggplot(df.number, aes(y=cell_number, x=fine_annotation, fill = technology))+
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))+
   theme(axis.title.x = element_blank())
 
-ggsave((paste0(directory, "/Supplementary/Figure_S4/Fibroblast_cell_numbers.png")), 
+ggsave((paste0(directory, "/Supplementary/Figure_S5/Fibroblast_cell_numbers.png")), 
        width = 8, height = 5)
-ggsave((paste0(directory, "/Supplementary/Figure_S4/Fibroblast_cell_numbers.svg")), 
+ggsave((paste0(directory, "/Supplementary/Figure_S5/Fibroblast_cell_numbers.svg")), 
        width = 8, height = 5)
 
 df.proportion <- df %>% select(fine_annotation, snRNAseq_percent, xenium_percent)
@@ -319,37 +501,37 @@ ggplot(df.proportion, aes(y=percent_cells, x=fine_annotation, fill = technology)
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))+
   theme(axis.title.x = element_blank())
 
-ggsave((paste0(directory, "/Supplementary/Figure_S4/Fibroblast_cell_percent.png")), 
+ggsave((paste0(directory, "/Supplementary/Figure_S5/Fibroblast_cell_percent.png")), 
        width = 8, height = 5)
-ggsave((paste0(directory, "/Supplementary/Figure_S4/Fibroblast_cell_percent.svg")), 
+ggsave((paste0(directory, "/Supplementary/Figure_S5/Fibroblast_cell_percent.svg")), 
        width = 8, height = 5)
 
 # Cell proportions for broad annotation split by microanatomy
 
 
 df <- so.fb[[]] %>% 
-  select("fine_annotation", "microanatomical_site")%>% 
-  group_by(fine_annotation, microanatomical_site) %>%  
+  select("predicted.id_fb_fine", "microanatomical_site")%>% 
+  group_by(predicted.id_fb_fine, microanatomical_site) %>%  
   summarise(cell_number=n()) %>% 
   mutate(percent_cells=(cell_number/sum(cell_number))*100)
 
 
-df$fine_annotation <- factor(df$fine_annotation, 
-                                           levels = df.fine$fine_annotation)
+df$predicted.id_fb_fine <- factor(df$predicted.id_fb_fine, 
+                                  levels = df.fine$predicted.id_fb_fine)
 
-ggplot(df, aes(y=cell_number, x=fine_annotation, fill = microanatomical_site))+
+ggplot(df, aes(y=cell_number, x=predicted.id_fb_fine, fill = microanatomical_site))+
   geom_bar(stat = "identity")+
   theme_classic()+
   scale_fill_manual(values = ma.cols)+
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))+
   theme(axis.title.x = element_blank())
 
-ggsave((paste0(directory, "/Supplementary/Figure_S4/Xenium_fibroblast_annotation_microanatomy.png")), 
+ggsave((paste0(directory, "/Supplementary/Figure_S/Xenium_fibroblast_annotation_microanatomy.png")), 
        width = 8, height = 5)
-ggsave((paste0(directory, "/Supplementary/Figure_S4/Xenium_fibroblast_annotation_microanatomy.svg")), 
+ggsave((paste0(directory, "/Supplementary/Figure_S5/Xenium_fibroblast_annotation_microanatomy.svg")), 
        width = 8, height = 5)
 
-ggplot(df, aes(y=percent_cells, x=fine_annotation, fill = microanatomical_site))+
+ggplot(df, aes(y=percent_cells, x=predicted.id_fb_fine, fill = microanatomical_site))+
   geom_bar(stat = "identity")+
   theme_classic()+
   scale_fill_manual(values = ma.cols)+
@@ -357,8 +539,70 @@ ggplot(df, aes(y=percent_cells, x=fine_annotation, fill = microanatomical_site))
   labs(x = "", y = "Proportion")+
   labs(fill = "Microanatomical site")
 
-ggsave((paste0(directory, "/Supplementary/Figure_S4/Xenium_fibroblast_microanatomy_percent.png")), 
+ggsave((paste0(directory, "/Supplementary/Figure_S5/Xenium_fibroblast_microanatomy_percent.png")), 
        width = 8, height = 5)
-ggsave((paste0(directory, "/Supplementary/Figure_S4/Xenium_fibroblast_microanatomy_percent.svg")), 
+ggsave((paste0(directory, "/Supplementary/Figure_S5/Xenium_fibroblast_microanatomy_percent.svg")), 
        width = 8, height = 5)
+
+#--------------------------------------------------
+# Figure S6D: Muscle fine annotation
+#---------------------------------------------------
+
+
+do_DimPlot(so.musc, reduction = "umap", group.by = "predicted.id_muscle_fine",
+           colors.use = muscle.colours, 
+           plot_cell_borders = TRUE, pt.size = 0.5, 
+           legend.position = "right"
+)
+
+ggsave(paste0(directory, "/Supplementary/Figure_S6/UMAP_predicted_muscle.png"), 
+       width = 8, height = 4, bg = "white")
+ggsave(paste0(directory, "/Supplementary/Figure_S6/UMAP_predicted_muscle.svg"), width = 10, height = 7, bg = "white")
+
+
+
+#--------------------------------------------------
+# Figure S7D: Stromal fine annotation
+#---------------------------------------------------
+
+
+do_DimPlot(so.str, reduction = "umap", group.by = "predicted.id_stromal_fine",
+           colors.use = stromal.colours, 
+           plot_cell_borders = TRUE, pt.size = 0.5, 
+           legend.position = "right"
+)
+
+ggsave(paste0(directory, "/Supplementary/Figure_S7/UMAP_predicted_stromal.png"), 
+       width = 8, height = 4, bg = "white")
+ggsave(paste0(directory, "/Supplementary/Figure_S7/UMAP_predicted_stromal.svg"), 
+       width = 8, height = 4, bg = "white")
+
+
+
+#--------------------------------------------------
+# Figure S8D: Immune fine annotation
+#---------------------------------------------------
+
+do_DimPlot(so.im, reduction = "umap", group.by = "predicted.id_immune_fine",
+           colors.use = immune.colours, 
+           plot_cell_borders = TRUE, pt.size = 0.5, 
+           legend.position = "right"
+)
+
+ggsave(paste0(directory, "/Supplementary/Figure_S8/UMAP_predicted_immune.png"), 
+       width = 8, height = 4, bg = "white")
+ggsave(paste0(directory, "/Supplementary/Figure_S8/UMAP_predicted_immune.svg"), 
+       width = 8, height = 4, bg = "white")
+
+
+
+#-------------------------------------------------------
+# Record session Info
+#-------------------------------------------------------
+
+
+sink(paste0(directory, "/sessionInfo.txt"))
+sessionInfo()
+sink()
+
 

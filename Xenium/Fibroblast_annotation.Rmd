@@ -744,6 +744,8 @@ DimPlot(so.harmony, group.by = "fine_annotation",
 
 ```{r}
 saveRDS(so.harmony, paste0(directory, "/RDS_objects.dir/Achilles_integrated_annotated.rds"))
+saveRDS(so.fb, paste0(directory, "/RDS_objects.dir/Achilles_fibroblast_subset.rds"))
+
 ```
 
 
