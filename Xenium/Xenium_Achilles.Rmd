@@ -1,0 +1,1107 @@
+---
+title: "Xenium workflow"
+output: html_document
+date: "2024-09-11"
+---
+
+# Achilles Xenium
+
+The aim of this script is to analyse the Xenium data from Achilles tendon.
+
+Load packages and set up
+```{r}
+
+# need seurat > v5.2.1 in order to read the current data format
+
+library(Seurat)
+library(tidyverse)
+library(scCustomize)
+library(readr)
+library(pheatmap)
+library(matrixStats)
+library(spdep)
+library(geojsonR)
+library(clustree)
+library(yaml)
+library(cowplot)
+library(RColorBrewer)
+
+wdir <- "/project/wolf1241/xenium/"
+set.seed(123)
+
+ini <- read_yaml(paste0(wdir, "xenium.yml"))
+
+# make a new output folder for each run, with the date & time in the directory name
+date <- Sys.Date() %>% str_replace_all("-", "")
+time <- format(Sys.time(), "%X") %>% str_replace_all(":", "-") %>%
+    str_sub(1, 5)
+directory <- paste0(wdir, date,"_", time, "_Xenium_Achilles_", ini$microanatomy, ".dir")
+dir.create(directory, showWarnings = FALSE)
+dir.create(paste0(directory, "/RDS_objects.dir/"))
+dir.create(paste0(directory, "/QC_plots/"))
+dir.create(paste0(directory, "/Filtering/"))
+dir.create(paste0(directory, "/Processing/"))
+dir.create(paste0(directory, "/Broad_annotation/"))
+dir.create(paste0(directory, "/Fine_annotation/"))
+dir.create(paste0(directory, "/Two_fibroblasts_annotation/"))
+# print the parameters used
+ini
+```
+
+Set the colours
+
+
+```{r}
+
+achilles.colours <- c(# Broad groups
+    "Fibroblasts" = "#B2182B", 
+    "Skeletal muscle cells" = "#88419D", 
+    "Satellite cells" = "#8C96C6",
+    "Mural cells" = "#7FBC41",
+    # Immune
+    "Macrophages" = "#35978F", 
+    "B cells" = "#543005", 
+    "T cells" = "#F6E8C3", 
+    "Plasma cells" = "#01EBD6", 
+    "Granulocytes" = "#80CDC1", 
+    # Stromal
+    "Vascular endothelial cells" = "#F1B6DA",
+    "Lymphatic endothelial cells" = "#C51B7D",
+    "Adipocytes" = "#E6F598", 
+    "Mural" = "#B8E186", 
+    "Nervous system cells" = "#276419", 
+    "Ambient" = "grey")
+
+achilles.2fb.colours <- c(achilles.colours, "COMPhi fibroblasts" = "#F4A582", 
+                          "NEGR1hi fibroblasts" = "#B2182B")
+
+# Fibroblast colours
+
+fibroblast.colours <- brewer.pal(10, "RdGy")
+names(fibroblast.colours) <- c("PRG4hi fibroblasts",
+                               "NEGR1hi VCANhi fibroblasts", 
+                               "Chondrocytes",
+                               "COMPhi THBS4hi fibroblasts",
+                               "NEGR1hi ITGA6hi fibroblasts",
+                               "unused",
+                               "unused",
+                               "COMPhi MMP3hi fibroblasts",
+                               "NEGR1hi COL15A1hi fibroblasts",
+                               "unused")
+
+# fibroblast colours short (matrisome)
+fibroblast.colours.short <- brewer.pal(10, "RdGy")
+names(fibroblast.colours.short) <- c("PRG4.fb",
+                               "NEGR1.VCAN.fb", 
+                               "Chondrocytes",
+                               "COMP.THBS4.fb",
+                               "NEGR1.ITGA6.fb",
+                               "unused",
+                               "unused",
+                               "COMP.MMP3.fb",
+                               "NEGR1.COL15A1.fb",
+                               "unused")
+
+fibroblast.colours.short <- fibroblast.colours.short[names(fibroblast.colours.short) !="unused"]
+
+# Immune colours
+immune.colours <- c(brewer.pal(11, "BrBG"), "#01EBD6")
+
+names(immune.colours) <- c("B cells", 
+                           "Monocytes",
+                           "CLEC9Ahi DCs", 
+                           "MERKhi LYVE1lo macrophages", 
+                           "T cells", 
+                           "Slow twitch skeletal muscle cells",
+                           "CLEC10Ahi DCs",
+                           "Granulocytes",
+                           "MERTKhi LYVE1hi macrophages",
+                           "NK cells", 
+                           "MERTKlo PTPRGhi macrophages",
+                           "Plasma cells"
+)
+
+# Stromal colours
+stromal.colours <- c(brewer.pal(10, "PiYG"), brewer.pal(10, "Spectral")[6]) # add a yellow for adipocytes
+names(stromal.colours) <- c("Arteriolar VEC", #1
+                            "Lymphatic endothelial cells", #2
+                            "Venular VEC", #3
+                            "unused 3", #4
+                            "unused 2", #5
+                            "unused 1", #6
+                            "vSMC", #7
+                            "unused", #8
+                            "Pericytes", #9
+                            "Nervous system cells", #10
+                            "Adipocytes")  #yellow
+
+# Muscle colours
+muscle.colours <- brewer.pal(5, "BuPu")
+names(muscle.colours) <- c("unused", 
+                           "Transitional skeletal muscle cells", 
+                           "Satellite cells", 
+                           "Fast-twitch skeletal muscle cells", 
+                           "Slow-twitch skeletal muscle cells")
+
+# fine annotation colours
+achilles.fine.colours <- c(fibroblast.colours, muscle.colours, stromal.colours, immune.colours)
+```
+
+
+
+
+## Data quality metrics
+
+Overview of data quality
+
+```{r}
+
+dir_list <- list.dirs(ini$data_dir, recursive = FALSE)
+
+qc_data <- list()
+for (item in dir_list){
+  qc_data[[item]] <- read.csv(paste0(item, "/metrics_summary.csv"))
+}
+
+qc_data <- bind_rows(qc_data) %>% 
+  select(cassette_name, region_name, total_cell_area, total_high_quality_decoded_transcripts, num_cells_detected, fraction_transcripts_assigned, median_genes_per_cell, median_predesigned_genes_per_cell, median_custom_genes_per_cell, median_transcripts_per_cell, median_predesigned_transcripts_per_cell, median_custom_transcripts_per_cell, segmented_cell_stain_frac)
+
+write.csv(qc_data, "QC_summary.csv", quote = FALSE, row.names = FALSE)
+
+qc_data
+```
+## Seurat object set up and QC/filtering
+
+### Load the data using ReadXenium 
+
+```{r}
+
+data_dir <- paste0(wdir, ini$data_dir, ini$data_folder)
+
+data <- ReadXenium(data_dir,
+                   outs = c("matrix", # get the cellxgene matrix
+                            "microns"), # transcript coordinates
+                   type=c("centroids", # cell centroid coordinates
+                          "segmentations")) # cell segmentations
+
+#names(data) # the components are saved as a list
+#names(data$matrix) # the matrix has control components
+#names(data$segmentations) #xy coordinates for each cell
+#names(data$microns) # xy coordinates for each gene
+#names(data$centroids) # xy coordinates for each cell centroid
+
+#dim(data$segmentations) # there are multiple coordinates per cell
+#dim(data$centroids) # one per cell
+```
+Read in additional information about the cells - this gives us pre-calculated information, for example segmented cell or nucleus size for each cell.
+
+```{r}
+cell_meta_data <- read.csv(file.path(data_dir, "cells.csv.gz"))
+rownames(cell_meta_data) <- cell_meta_data$cell_id
+
+# add a column for the microanatomy
+cell_meta_data$microanatomical_site <- ini$microanatomy
+head(cell_meta_data)
+```
+
+#### Create a seurat object with the cellxgene matrix.
+Add the cell coordinates as metadata
+
+
+```{r}
+seurat <- CreateSeuratObject(counts = data$matrix[["Gene Expression"]],
+                                 assay = "XENIUM",
+                                 meta.data = cell_meta_data,
+                             project = "Achilles")
+#seurat[[]]
+```
+#### Add the spatial coordinates to the Seurat object 
+
+Creating the Field of View object can be problematic for large data sets and is optional. 
+
+But it lets you see the position of individual molecules. 
+
+In the SO the centroid info is required. The other parts of the image slot are optional and leaving them out can help improve performance. 
+
+
+```{r}
+# create a FOV object
+coords <- CreateFOV(coords = 
+                      list(centroids = CreateCentroids(data$centroids), 
+                           segmentation = CreateSegmentation(data$segmentations)),
+                    type = c("segmentation", "centroids"),
+                    molecules = data$microns, # skip for large dataset
+                    assay = "XENIUM")
+# add the FOV object to the SO as a new "spatial field of view"
+seurat[[ini$microanatomy]] <- coords # name carefully!
+seurat
+```
+
+#### Add controls to the seurat object
+These are added as separate assays. 
+Still don't understand this very well. 
+Each one is a spare counts matrix of probe names vs cells. 
+
+
+```{r}
+seurat[["Negative.Control.Codeword"]] <- CreateAssayObject(counts = data$matrix[["Negative Control Codeword"]])
+seurat[["Negative.Control.Probe"]] <- CreateAssayObject(counts = data$matrix[["Negative Control Probe"]])
+seurat[["Unassigned.Codeword"]] <- CreateAssayObject(counts = data$matrix[["Unassigned Codeword"]])
+
+seurat
+
+```
+#### Transcripts per cell
+
+
+```{r, fig.width=16, fig.height=10}
+# plot number of counts per cell
+p1 <- ImageFeaturePlot(seurat, "nCount_XENIUM") + scale_fill_viridis_c()
+# Distribution of the number of counts per cell
+p2 <- ggplot(seurat[[]], aes(nCount_XENIUM)) + geom_density()
+print("Distribution of counts per cell")
+quantile(seurat$nFeature_XENIUM, c(0.01, 0.1, 0.5, 0.9, 0.99))
+# Total number of gene detected per cell
+p3 <- ImageFeaturePlot(seurat, "nFeature_XENIUM") + scale_fill_viridis_c()
+# Distribution of the number of features (genes) detected per cell
+p4 <- ggplot(seurat[[]], aes(nFeature_XENIUM)) + geom_density()
+print("Distribution of features per cell")
+quantile(seurat$nFeature_XENIUM, c(0.01, 0.1, 0.5, 0.9, 0.99))
+
+plot_grid(p1, p2, p3, p4)
+ggsave(paste0(directory, "/QC_plots/Counts_features.png"), 
+       width = 16, height = 10)
+```
+
+
+#### Cell size
+
+Visualise the cell area calculated by the cell segmentation algorithm. Here we can examine the spatial organization and potential heterogeneity of cell sizes within your tissue sample
+
+In this case, we can see that as expected, there is generally a correlation between cell area and transcript detection rate. 
+
+However, we also have a group of cells where this is not the case - very large cells but relatively few transcripts. These cells are mainly submucosal stromal cells which are very poorly covered by the panel 10x have used. 
+
+```{r, fig.width=16, fig.height=10}
+# plot cell area
+p1 <- ImageFeaturePlot(seurat, "cell_area") + scale_fill_viridis_c()
+
+# Plot the cell-to-nucleus area ratio
+seurat$cell_nucleus_ratio <- seurat$nucleus_area / seurat$cell_area
+p2 <- ImageFeaturePlot(seurat, "cell_nucleus_ratio") + scale_fill_viridis_c()
+
+# plot cell area distribution
+p3 <- ggplot(seurat[[]], aes(cell_area)) + geom_density()
+
+# Plot cell area vs number of counts
+p4 <- ggplot(seurat[[]], aes(nCount_XENIUM, cell_area)) + geom_point() 
+
+plot_grid(p1, p2, p3, p4)
+ggsave(paste0(directory, "/QC_plots/Cell_size.png"), 
+       width = 16, height = 10)
+
+
+```
+
+
+We can create a filter to remove the overly large/small cells from the analysis.
+
+Visualise the number of counts across small and large cells
+Shows that the smaller cells do indeed have fewer counts.
+These thresholds need to be set carefully, e.g. changing to 10% would lose too many small cells such as T cells.
+
+```{r, fig.width=16, fig.height=10}
+# calculate and add to metadata
+seurat[["SIZE_FILTER_LARGE"]] <- seurat$cell_area < quantile(seurat$cell_area, .99) #calc 99th centile for cell area (TRUE/FALSE)
+seurat[["SIZE_FILTER_SMALL"]] <- seurat$cell_area > quantile(seurat$cell_area, .01)
+
+# visualise which cells would be removed 
+p1 <- ImageDimPlot(seurat, group.by="SIZE_FILTER_LARGE")
+p2 <- ImageDimPlot(seurat, group.by="SIZE_FILTER_SMALL")
+
+p3 <- VlnPlot(seurat, "nFeature_XENIUM", group.by = "SIZE_FILTER_LARGE", pt.size = .1, alpha = .5)+ 
+  labs(title="Large Cell Filter")+
+  ylab("nFeature")
+p4 <- VlnPlot(seurat, "nFeature_XENIUM", group.by = "SIZE_FILTER_SMALL", pt.size = .1, alpha = .5) + 
+  labs(title="Small Cell Filter")+
+  ylab("nFeature")
+
+plot_grid(p1, p2, p3, p4)
+ggsave(paste0(directory, "/QC_plots/Cell_size_filters.png"), 
+       width = 16, height = 10)
+```
+
+
+#### Filtering on transcript abundance
+
+Create a filter for number of transcripts per cell and visualise which cells would be filtered. 
+15 looks too stringent. Use 5 this time. 
+
+```{r}
+seurat$TRANSCRIPT_FILTER <- seurat$nCount_XENIUM >= ini$transcript_filter
+ImageDimPlot(seurat, group.by="TRANSCRIPT_FILTER")
+table(seurat$TRANSCRIPT_FILTER)
+ggsave(paste0(directory, "/QC_plots/Transcript_filter_image.png"))
+
+```
+
+
+#### Visualise negative controls
+
+Create a filter to remove cells that express negative controls 
+
+```{r, fig.width=16, fig.height=10}
+
+p1 <- ImageFeaturePlot(seurat, "nCount_Negative.Control.Codeword") + scale_fill_viridis_c()
+p2 <- ImageFeaturePlot(seurat, "nCount_Negative.Control.Probe") + scale_fill_viridis_c()
+p3 <- ImageFeaturePlot(seurat, "nCount_Unassigned.Codeword") + scale_fill_viridis_c()
+
+seurat$PROBE_FILTER <- seurat$nCount_Unassigned.Codeword == 0 &
+                       seurat$nCount_Negative.Control.Codeword == 0 &
+                       seurat$nCount_Negative.Control.Probe == 0
+p4 <- ImageDimPlot(seurat, group.by="PROBE_FILTER")
+
+plot_grid(p1, p2, p3, p4)
+ggsave(paste0(directory, "/QC_plots/Negative_controls.png"), 
+       width = 16, height = 10)
+```
+
+
+#### Perform the filtering
+Base on any of the above criteria you think are important 
+Here we are using
+- probe filter (expression of negative controls)
+- size filters (large and small cells)
+- transcript filter (nCount > 5)
+
+```{r}
+seurat_unfiltered <- seurat
+seurat <- subset(seurat, PROBE_FILTER & SIZE_FILTER_LARGE & SIZE_FILTER_SMALL & TRANSCRIPT_FILTER)
+seurat
+
+print("Number of cells unfiltered:")
+print(ncol(seurat_unfiltered))
+print("Number of cells filtered:")
+print(ncol(seurat))
+```
+
+
+## Normalisation & dim reduction
+
+Normalise with SCTransform & run PCA
+
+```{r}
+seurat <- SCTransform(seurat, assay = "XENIUM", clip.range = c(-10, 10))
+seurat <- RunPCA(seurat)
+```
+Elbow plot
+
+```{r}
+ElbowPlot(seurat, 50)
+ggsave(paste0(directory, "/QC_plots/Elbow_plot.png"))
+```
+Explore the principle components
+
+```{r fig.height=9, fig.width=14}
+p1 <- PC_Plotting(seurat, dim_number = 1)
+p2 <- PC_Plotting(seurat, dim_number = 2)
+plot_grid(p1, p2)
+ggsave(paste0(directory, "/Processing/PC1_2_components.png"), 
+       width = 14, height = 9)
+```
+
+Visualise a gene that is one of the top genes in PC1
+
+```{r}
+FeaturePlot(seurat, "PECAM1", reduction = "pca") + scale_color_viridis_c()
+ggsave(paste0(directory, "/Processing/PCA_COMP.png"))
+```
+
+Examine the PC loadings spatially. 
+Here, we can see that high PC1 loadings enrich in the tendon body and low PC1 loadings enrich in the vascular region.
+```{r}
+ImageFeaturePlot(seurat, "PC_1") + scale_fill_viridis_c()
+ggsave(paste0(directory, "/Processing/PC1_image.png"))
+```
+
+
+We can plot the expression of high (or low) loading genes to visualise how this correlates with our dimensionality reduction.
+```{r}
+ImageFeaturePlot(seurat, "PECAM1", size=.5) + scale_fill_viridis_c()
+ggsave(paste0(directory, "/Processing/COMP_image.png"))
+```
+
+## Clustering
+
+Run UMAP, Find Neighbours on PCA space and then Find Clusters
+
+```{r}
+seurat <- RunUMAP(seurat, dims = 1:20)
+seurat <- FindNeighbors(seurat, reduction = "pca", dims = 1:20)
+seurat <- FindClusters(seurat, resolution = ini$resolutions)
+
+```
+
+Do a clustree to see how the clusters compare 
+
+```{r, fig.width = 8, fig.height=6}
+clustree(seurat, prefix = "SCT_snn_res.")
+ggsave(paste0(directory, "/Processing/Clustree.png"), 
+       width = 8, height = 6)
+```
+
+
+Visualise the clusters in UMAP space at each resolution
+
+```{r, fig.width=9, fig.height=10}
+plot_list <- list()
+for (i in seq(1:length(ini$resolutions))){
+  
+  plot_list[[i]] <- DimPlot(seurat, label=T, repel=T, group.by = paste0("SCT_snn_res.", ini$resolutions[i]))
+}
+
+plot_grid(plotlist = plot_list, ncol = 2)
+ggsave(paste0(directory, "/Processing/UMAP_Cluster_resolutions.png"), 
+       width = 9, height = 10)
+```
+
+Visualise the clusters in tissue space at each resolution
+
+```{r, fig.width=12, fig.height=11}
+plot_list <- list()
+for (i in seq(1:length(ini$resolutions))){
+  
+  plot_list[[i]] <- ImageDimPlot(seurat, size=.5, 
+                                 group.by = paste0("SCT_snn_res.", ini$resolutions[i]))+
+  ggtitle(paste0("Clustering resolution", ini$resolutions[i]))
+}
+
+plot_grid(plotlist = plot_list, ncol = 2)
+ggsave(paste0(directory, "/Processing/Image_Cluster_resolutions.png"), 
+       width = 12, height = 11)
+
+
+```
+Select a resolution
+```{r}
+resolution <- paste0("SCT_snn_res.", ini$resolution_out)
+Idents(seurat) <- pull(seurat[[resolution]])
+```
+
+Find all markers
+```{r}
+markers <- FindAllMarkers(seurat)
+write.table(markers, paste0(directory, "/Processing/markers.txt"), 
+            sep = "\t", quote = FALSE, col.names = TRUE, row.names = TRUE)
+head(markers)
+```
+Extract top 5 markers per cluster
+```{r}
+top_5 <- Extract_Top_Markers(markers, num_genes = 5, named_vector = FALSE, make_unique = TRUE)
+top_5
+```
+Visualise expression of these markers using a clustered dotplot 
+NB this is a heatmap not a ggplot object
+Cannot get it to save.
+
+```{r fig.height=10, fig.width=7}
+
+Clustered_DotPlot(seurat, features = top_5, k=length(unique(Idents(seurat))), plot_km_elbow = FALSE)
+
+```
+
+```{r, fig.width=8, fig.height=9}
+top_10 <- Extract_Top_Markers(markers, num_genes = 10, named_vector = FALSE, make_unique = TRUE)
+
+DoHeatmap(seurat, features = top_10) +
+  scale_fill_viridis()
+ggsave(paste0(directory, "/Processing/Heatmap.png"), 
+       width = 8, height = 9)
+```
+
+
+#### Visualisation of clusters
+
+Visualise all clusters
+Add the axes to the image plot. Then we can pick regions to zoom in. 
+
+```{r}
+ImageDimPlot(seurat, axes = T)
+ggsave(paste0(directory, "/Processing/Image_chosen_res_axes.png"))
+```
+Crop the current assay and add as a new field of view 
+
+```{r}
+cropped <- Crop(seurat[[ini$microanatomy]], x = c(2000, 3000), 
+                y = c(0, 1000),
+                coords = "plot")
+seurat[["ROI1"]] <- cropped
+seurat
+```
+Now we can limit our visualisations just to this region by specifying the name of the new FOV as an "fov" arguement. 
+
+Also on the zoomed in version we can view the cell segmentations rather than centroids. 
+
+```{r fig.height=6, fig.width=12}
+p1 <- ImageDimPlot(seurat, fov="ROI1", boundaries="segmentation", border.color = "black" )+ ggtitle("ROI1 segmentations")
+p2 <- ImageDimPlot(seurat, fov="ROI1", size = 2)+ ggtitle("ROI1 centroids")
+plot_grid(p1, p2)
+ggsave(paste0(directory, "/Processing/ROI1_clusters_segmentations_centroids.png"),
+       width = 12, height = 6)
+```
+Look at expression of a particular gene in this new FOV
+
+For example, COMP marks the fibroblasts
+```{r}
+ImageFeaturePlot(seurat, "ACTA2", fov="ROI1", boundaries="centroids" , border.color = "black") + scale_fill_viridis_c()
+ggsave(paste0(directory, "/Processing/ROI1_COMP.png"))
+```
+Visualise some molecules. This helps show if the cell segmentation has worked. 
+
+```{r}
+ImageFeaturePlot(seurat, "ACTA2", fov="ROI1", boundaries="segmentation", molecules=c("ACTA2", "CD163"), mols.size = .5, border.color = "black" ) + scale_fill_viridis_c()
+```
+
+## Annotation by label transfer
+
+Load a single-cell reference dataset.  
+
+```{r}
+so.achilles <- readRDS(paste0(wdir, "data/Achilles_fine_annotation.rds"))
+so.achilles
+```
+
+#### Broad annotation
+
+Visualise pre-computed cell labels and clusters in the single cell object
+```{r, fig.width=10, fig.height=8}
+Idents(so.achilles) <- so.achilles$broad_annotation
+
+DimPlot(so.achilles, reduction = "umap.scvi", 
+        cols = achilles.colours, label = TRUE)
+ggsave(paste0(directory, "/Broad_annotation/Achilles_UMAP_broad_annotation.png"), 
+       width = 10, height = 8)
+```
+
+Visualise what happens in the single cell object if you use only the genes in the spatial dataset for SCT and downstream steps. 
+
+
+```{r, fig.width=10, fig.height=8}
+ref <- so.achilles
+ref <- SCTransform(ref, residual.features =rownames(seurat))
+ref <- RunPCA(ref)
+ref <- RunUMAP(ref, dims=1:20)
+DimPlot(ref, label=T, repel=T, cols = achilles.colours)
+ggsave(paste0(directory, "/Broad_annotation/Achilles_UMAP_red_features.png"), 
+       width = 10, height = 8)
+```
+Heatmap of gene panel expression across reference clusters
+We can see that some cell types are underrepresented in the gene panel. 
+This could be useful to do in the experimental design phase. 
+
+```{r, fig.width=10, fig.height=8}
+ps <- AggregateExpression(ref, features = rownames(seurat), normalization.method = "LogNormalize", assays="RNA", return.seurat = T)
+ps <- ScaleData(ps, features=rownames(ps))
+pheatmap(LayerData(ps, layer="scale.data"), show_rownames = F)
+```
+
+Transfer labels from the ref to the spatial data
+
+```{r}
+anchors <- FindTransferAnchors(reference = ref, 
+                               query = seurat, 
+                               normalization.method = "SCT")
+
+seurat <- TransferData(anchorset = anchors, 
+                       refdata = ref$broad_annotation, 
+                       prediction.assay = TRUE,
+                       weight.reduction = seurat[["pca"]], 
+                       query = seurat, 
+                       dims=1:30)
+
+```
+
+Where has this info gone?
+Predicted.id and predicted.id.score columns added to metadata. 
+
+
+```{r, fig.width=10, fig.height=8}
+#seurat[[]]
+DimPlot(seurat, group.by= "predicted.id", cols = achilles.colours)
+ggsave(paste0(directory, "/Broad_annotation/UMAP_Predicted_IDs.png"), 
+       width = 10, height = 8)
+FeaturePlot(seurat, features = "predicted.id.score")+scale_color_viridis()
+ggsave(paste0(directory, "/Broad_annotation/UMAP_prediction_scores.png"), 
+       width = 10, height = 8)
+VlnPlot(seurat, features = "predicted.id.score", group.by = "predicted.id", 
+        cols = achilles.colours, pt.size = 0)
+ggsave(paste0(directory, "/Broad_annotation/Vln_prediction_scores.png"), 
+       width = 10, height = 6)
+
+# save these results as new columns in the metadata
+seurat$predicted.id_broad <- seurat$predicted.id
+seurat$predicted.id.score_broad <- seurat$predicted.id.score
+
+# save the results as csv (to use in Xenium Explorer)
+df <- data.frame(cell_id = colnames(seurat),
+                 group = seurat$predicted.id)
+write.table(df, 
+          paste0(directory, "/Broad_annotation/Predicted.id.csv"),
+          quote = FALSE, 
+          sep = ",",
+          col.names = TRUE,
+          row.names = FALSE)
+
+```
+
+View the predicted cell types on the tissue
+
+```{r, fig.width=10, fig.height=8}
+ImageDimPlot(seurat, group.by = "predicted.id", 
+             cols = achilles.colours)
+ggsave(paste0(directory, "/Broad_annotation/Image_Predicted_IDs.png"), 
+       width = 10, height = 8)
+ImageDimPlot(seurat, fov="ROI1", boundaries="segmentation", border.color = "black",group.by = "predicted.id", 
+             cols = achilles.colours )
+ggsave(paste0(directory, "/Broad_annotation/ROI1_Predicted_IDs.png"), 
+       width = 10, height = 8)
+```
+
+Look at the distribution of each cell type separately
+
+```{r, fig.width=15, fig.height=10}
+ImageDimPlot(seurat, group.by = "predicted.id", split.by = "predicted.id",
+             cols = achilles.colours, size = 2)
+ggsave(paste0(directory, "/Broad_annotation/Image_cell_types_separated.png"), 
+       width = 15, height = 10)
+```
+
+
+Compare the distribution of two markers. 
+This can help detect poor cell segmentation
+
+```{r fig.height=5, fig.width=10}
+FeatureScatter(seurat, "ACTA2", "CD163", jitter=T)
+ggsave(paste0(directory, "/QC_plots/ACTA2_CD163_jitter.png"))
+FeaturePlot(seurat, c("ACTA2", "CD163"))
+ggsave(paste0(directory, "/QC_plots/ACTA2_CD163_featureplots.png"))
+```
+
+### Fine annotation
+
+Visualise the fine annotation having performed the dim reduction with only the genes in the Xenium panel.  
+
+```{r, fig.width=15, fig.height=8}
+Idents(so.achilles) <- so.achilles$fine_annotation
+DimPlot(so.achilles, cols = achilles.fine.colours, reduction = "umap.scvi")
+ggsave(paste0(directory, "/Fine_annotation/Achilles_UMAP_fine_annotation.png"), 
+       width = 15, height = 8)
+```
+
+```{r, fig.width=15, fig.height=8}
+Idents(ref) <- ref$fine_annotation
+DimPlot(ref, cols = achilles.fine.colours)
+ggsave(paste0(directory, "/Fine_annotation/Achilles_UMAP_fine_annotation_red_features.png"), 
+       width = 15, height = 8)
+```
+
+```{r}
+seurat <- TransferData(anchorset = anchors, 
+                       refdata = ref$fine_annotation, 
+                       prediction.assay = TRUE,
+                       weight.reduction = seurat[["pca"]], 
+                       query = seurat, 
+                       dims=1:30)
+
+```
+
+```{r, fig.width=10, fig.height=8}
+#seurat[[]]
+DimPlot(seurat, group.by= "predicted.id", cols = achilles.fine.colours)
+ggsave(paste0(directory, "/Fine_annotation/UMAP_Predicted_IDs.png"), 
+       width = 10, height = 8)
+
+FeaturePlot(seurat, features = "predicted.id.score")+scale_color_viridis()
+ggsave(paste0(directory, "/Fine_annotation/UMAP_prediction_scores.png"), 
+       width = 10, height = 8)
+
+VlnPlot(seurat, features = "predicted.id.score", group.by = "predicted.id", 
+        cols = achilles.fine.colours, pt.size = 0)+
+  theme(legend.position = "none") 
+ggsave(paste0(directory, "/Fine_annotation/Vln_prediction_scores.png"), 
+       width = 10, height = 6)
+
+# save these results as new columns in the metadata
+seurat$predicted.id_fine <- seurat$predicted.id
+seurat$predicted.id.score_fine <- seurat$predicted.id.score
+
+# save the results as csv
+df <- data.frame(cell_id = colnames(seurat),
+                 group = seurat$predicted.id)
+write.table(df, 
+          paste0(directory, "/Fine_annotation/Predicted.id.csv"),
+          quote = FALSE, 
+          sep = ",",
+          col.names = TRUE,
+          row.names = FALSE)
+
+
+```
+
+View the predicted cell types on the tissue
+
+
+```{r, fig.width=10, fig.height=8}
+ImageDimPlot(seurat, group.by = "predicted.id", 
+             cols = achilles.fine.colours)
+ggsave(paste0(directory, "/Fine_annotation/Image_Predicted_IDs.png"), 
+       width = 10, height = 8)
+ImageDimPlot(seurat, fov="ROI1", boundaries="segmentation", border.color = "black",group.by = "predicted.id", 
+             cols = achilles.fine.colours )
+ggsave(paste0(directory, "/Fine_annotation/ROI1_Predicted_IDs.png"), 
+       width = 10, height = 8)
+```
+
+Look at the distribution of each cell type separately
+
+```{r, fig.width=15, fig.height=10}
+ImageDimPlot(seurat, group.by = "predicted.id", split.by = "predicted.id",
+             cols = achilles.fine.colours, size = 2)
+ggsave(paste0(directory, "/Fine_annotation/Image_cell_types_separated.png"), 
+       width = 15, height = 10)
+```
+
+### Looking at 2 types of fibroblasts
+
+```{r, fig.width=10, fig.height=8}
+Idents(so.achilles) <- "2fb_annotation"
+
+DimPlot(so.achilles, reduction = "umap.scvi", label = TRUE, 
+        cols = achilles.2fb.colours)
+ggsave(paste0(directory, "/Two_fibroblasts_annotation/Achilles_UMAP_2fb_annotation.png"), 
+       width = 10, height = 8)
+
+```
+
+```{r, fig.width=10, fig.height=8}
+Idents(ref) <- "2fb_annotation"
+DimPlot(ref, cols = achilles.2fb.colours)
+ggsave(paste0(directory, "/Two_fibroblasts_annotation/Achilles_UMAP_2fb_annotation_red_features.png"), 
+       width = 10, height = 8)
+```
+Even using the reduced number of features we should still be able to distinguish the two subsets of fibroblasts. 
+
+```{r}
+seurat <- TransferData(anchorset = anchors, 
+                       refdata = ref$`2fb_annotation`, 
+                       prediction.assay = TRUE,
+                       weight.reduction = seurat[["pca"]], 
+                       query = seurat, 
+                       dims=1:30)
+
+```
+
+```{r, fig.width=10, fig.height=8}
+#seurat[[]]
+DimPlot(seurat, group.by= "predicted.id", cols = achilles.2fb.colours)
+ggsave(paste0(directory, "/Two_fibroblasts_annotation/UMAP_Predicted_IDs.png"), 
+       width = 10, height = 8)
+
+FeaturePlot(seurat, features = "predicted.id.score")+scale_color_viridis()
+ggsave(paste0(directory, "/Two_fibroblasts_annotation/UMAP_prediction_scores.png"), 
+       width = 10, height = 8)
+
+VlnPlot(seurat, features = "predicted.id.score", group.by = "predicted.id", 
+        cols = achilles.2fb.colours, pt.size = 0)
+ggsave(paste0(directory, "/Two_fibroblasts_annotation/Vln_prediction_scores.png"), 
+       width = 10, height = 6)
+
+# save these results as new columns in the metadata
+seurat$predicted.id_2fb <- seurat$predicted.id
+seurat$predicted.id.score_2fb <- seurat$predicted.id.score
+
+# save the results as csv
+df <- data.frame(cell_id = colnames(seurat),
+                 group = seurat$predicted.id)
+write.table(df, 
+          paste0(directory, "/Broad_annotation/Predicted.id.csv"),
+          quote = FALSE, 
+          sep = ",",
+          col.names = TRUE,
+          row.names = FALSE)
+
+
+```
+
+
+View the predicted cell types on the tissue
+
+
+```{r, fig.width=10, fig.height=8}
+ImageDimPlot(seurat, group.by = "predicted.id", 
+             cols = achilles.2fb.colours)
+ggsave(paste0(directory, "/Two_fibroblasts_annotation/Image_Predicted_IDs.png"), 
+       width = 10, height = 8)
+ImageDimPlot(seurat, fov="ROI1", boundaries="segmentation", border.color = "black",group.by = "predicted.id", 
+             cols = achilles.2fb.colours )
+ggsave(paste0(directory, "/Two_fibroblasts_annotation/ROI1_Predicted_IDs.png"), 
+       width = 10, height = 8)
+```
+
+Look at the distribution of each cell type separately
+
+```{r, fig.width=15, fig.height=10}
+ImageDimPlot(seurat, group.by = "predicted.id", split.by = "predicted.id",
+             cols = achilles.2fb.colours, size = 2)
+ggsave(paste0(directory, "/Two_fibroblasts_annotation/Image_cell_types_separated.png"), 
+       width = 15, height = 10)
+```
+
+
+Plot distribution of a cell type across a tissue slice
+
+```{r}
+#seurat[[]]
+
+ggplot(seurat[[]], aes(x = x_centroid, y = y_centroid))+
+  geom_abline(slope = ini$slice_angle, intercept = ini$slice_intercept, colour = "grey", size = 6, alpha = 0.4)+
+  geom_abline(slope = ini$slice_angle, intercept = ini$slice_intercept, colour = "black")+
+  geom_point(aes(colour = predicted.id_2fb))+
+  scale_colour_manual(values = achilles.2fb.colours)+
+  scale_x_continuous(expand = c(0, 0), limits = c(0, max(seurat$x_centroid))) + 
+  scale_y_continuous(expand = c(0, 0), limits = c(0, max(seurat$y_centroid)))+
+  theme_classic()
+
+ggsave(paste0(directory, "/Two_fibroblasts_annotation/slice_coordinates.png"))
+```
+
+```{r}
+# add column to seurat metadata which sums the x and y coords
+seurat[[]] <- seurat[[]] %>% mutate (coords_sum = ini$equation_x*x_centroid + ini$equation_y*y_centroid)
+
+df <- seurat[[]]
+
+# filter coords that are adjacent to the slice line
+
+if (ini$slice_intercept <0){
+  target <- ini$slice_intercept*-1
+  df <- df %>% filter (coords_sum > target-100 & coords_sum < target +100)
+}else{
+  df <- df %>% filter (coords_sum > ini$slice_intercept-100 & coords_sum < ini$slice_intercept+100)
+}
+
+ggplot(df, aes(x = x_centroid, y = y_centroid))+
+  geom_point(aes(colour = predicted.id_2fb))+
+    geom_abline(slope = ini$slice_angle, intercept = ini$slice_intercept, colour = "grey", size = 6, alpha = 0.4)+
+  geom_abline(slope = ini$slice_angle, intercept = ini$slice_intercept, colour = "black")+
+  scale_x_continuous(expand = c(0, 0), limits = c(0, max(seurat$x_centroid))) + 
+  scale_y_continuous(expand = c(0, 0), limits = c(0, max(seurat$y_centroid)))+
+  scale_colour_manual(values = achilles.2fb.colours)+
+  theme_classic()
+```
+
+
+Subset the so to these cells
+
+```{r}
+# add the filter to the seurat object metadata
+
+if (ini$slice_intercept <0){
+  target <- ini$slice_intercept*-1
+  seurat$cells_slice <- seurat$coords_sum > target-100 & seurat$coords_sum < target +100
+}else{
+    seurat$cells_slice <- seurat$coords_sum > ini$slice_intercept-100 & 
+    seurat$coords_sum < ini$slice_intercept +100
+}
+
+so.slice <- subset(seurat, cells_slice)
+ImageDimPlot(so.slice, group.by = "predicted.id_2fb")
+```
+
+
+```{r, fig.width=8, fig.height=1}
+df %>% mutate(celltype = case_when (predicted.id_2fb == 'COMPhi fibroblasts' ~ 1,
+                                    predicted.id_2fb == "NEGR1hi fibroblasts" ~ -1
+                                    ))%>% 
+  filter(celltype == -1 | celltype ==1) %>%
+  ggplot(aes(x = x_centroid, y = celltype))+
+  geom_segment( aes(x=x_centroid, xend=x_centroid, y=0, yend=celltype), color="grey") +
+  geom_point(aes(colour = predicted.id_2fb))+
+  scale_colour_manual(values = achilles.2fb.colours)+
+  theme_void()+
+  geom_hline(yintercept = 0)
+
+ggsave(paste0(directory, "/Two_fibroblasts_annotation/Fibroblasts_across_slice.png"), 
+       width = 8, height = 1)
+```
+
+In the above cells, what is the expression counts of COMP & NEGR1?
+
+```{r}
+df$COMP <- GetAssayData(so.slice, assay = "SCT", layer = "scale.data")["COMP",]
+df$NEGR1 <- GetAssayData(so.slice, assay = "SCT", layer = "scale.data")["NEGR1",]
+
+df <- df %>% filter (predicted.id_2fb == "COMPhi fibroblasts" | 
+                predicted.id_2fb == "NEGR1hi fibroblasts" ) 
+
+p1 <- ggplot(df, aes(x = x_centroid, y = COMP))+
+  geom_point(aes(colour = predicted.id_2fb))+
+  #geom_segment( aes(x=x_centroid, xend=x_centroid, y=0, yend=celltype), color="grey") +
+  scale_colour_manual(values = achilles.2fb.colours)+
+  theme_classic()+
+  geom_smooth(colour = "black")+
+  ylab("scaled expression")+
+  ggtitle("COMP")
+
+
+p2 <- ggplot(df, aes(x = x_centroid, y = NEGR1))+
+  geom_point(aes(colour = predicted.id_2fb))+
+  #geom_segment( aes(x=x_centroid, xend=x_centroid, y=0, yend=celltype), color="grey") +
+  scale_colour_manual(values = achilles.2fb.colours)+
+  theme_classic()+
+  geom_smooth(colour = "black")+
+  ylab("scaled expression")+
+  ggtitle("NEGR1")
+
+
+plot_grid(p1, p2, ncol = 1)
+
+ggsave(paste0(directory, "/Two_fibroblasts_annotation/NEGR1_COMP_across_slice.png"), 
+       width = 8, height = 5)
+```
+Expression of ITGA10 and DCLK1
+
+```{r}
+df <- so.slice[[]]
+df$ITGA10 <- GetAssayData(so.slice, assay = "SCT", layer = "scale.data")["ITGA10",]
+df$DCLK1 <- GetAssayData(so.slice, assay = "SCT", layer = "scale.data")["DCLK1",]
+
+df <- df %>% filter (predicted.id_2fb == "COMPhi fibroblasts" | 
+                predicted.id_2fb == "NEGR1hi fibroblasts" ) 
+
+p1 <- ggplot(df, aes(x = x_centroid, y = ITGA10))+
+  geom_point(aes(colour = predicted.id_2fb))+
+  #geom_segment( aes(x=x_centroid, xend=x_centroid, y=0, yend=celltype), color="grey") +
+  scale_colour_manual(values = achilles.2fb.colours)+
+  theme_classic()+
+  geom_smooth(colour = "black")+
+  ylab("scaled expression")+
+  ggtitle("ITGA10")
+
+
+p2 <- ggplot(df, aes(x = x_centroid, y = DCLK1))+
+  geom_point(aes(colour = predicted.id_2fb))+
+  #geom_segment( aes(x=x_centroid, xend=x_centroid, y=0, yend=celltype), color="grey") +
+  scale_colour_manual(values = achilles.2fb.colours)+
+  theme_classic()+
+  geom_smooth(colour = "black")+
+  ylab("scaled expression")+
+  ggtitle("DCLK1")
+
+
+plot_grid(p1, p2, ncol = 1)
+
+ggsave(paste0(directory, "/Two_fibroblasts_annotation/ITGA10_DCLK1_across_slice.png"), 
+       width = 8, height = 5)
+```
+
+### How many cells of each identity are present?
+In Xenium and single nuc data at each microanatomy and annotation level?
+
+```{r}
+# set up the objects
+
+Idents(so.achilles) <- "microanatomical_site"
+if (ini$microanatomy == "Enthesis"){
+  so.microanatomy <- subset(so.achilles, idents = "Enth")
+} else if (ini$microanatomy == "Muscle") {
+  so.microanatomy <- subset(so.achilles, idents = "muscle")
+} else  {
+  so.microanatomy <- subset(so.achilles, idents = ini$microanatomy)
+}
+
+Idents(so.microanatomy) <- "patient"
+so.1250 <- subset(so.microanatomy, idents = "MSK1250")
+
+if (ini$microanatomy != "Muscle"){ # 1687 doesn't have sn data
+  so.1687 <- subset(so.microanatomy, idents = "MSK1687")
+}
+
+
+# make the plotting function
+
+cell_number_plot <- function(so, annotation_level, plot_colours, title, save_dir){
+  
+  df <- data.frame(table(so[[annotation_level]])) 
+  colnames(df) <- c("Cell_type", "Frequency")
+  df <- df %>%  arrange(desc(Frequency))
+  # make cell type a factor to plot according to sorted cell frequency
+  df$Cell_type <- factor(df$Cell_type, levels = df$Cell_type)
+  
+  ggplot(df, aes(x = Cell_type, y = Frequency, fill = Cell_type))+
+    geom_bar(stat = "identity")+
+    coord_flip()+
+    theme_classic()+
+    scale_fill_manual(values = plot_colours)+
+    theme(legend.position="none")+
+    theme(axis.title.y=element_blank())+
+      ggtitle(paste0("Cell type frequency: ", title))
+  ggsave(paste0(directory, "/", save_dir, "/Cell_type_frequency_", title, ".png"), 
+         width = 8, height = 5)
+}
+
+
+```
+
+```{r}
+# plot for each object for each annotation level
+
+cell_number_plot(so.microanatomy, "broad_annotation", achilles.colours, 
+                 paste0("Achilles_", ini$microanatomy, "_sn_broad"), "Broad_annotation")
+
+if (ini$microanatomy != "Muscle"){ # 1687 doesn't have sn data
+  cell_number_plot(so.1687, "broad_annotation", achilles.colours, 
+                 paste0("Achilles_1687_", ini$microanatomy, "_sn_broad"), "Broad_annotation")
+}
+cell_number_plot(so.1250, "broad_annotation", achilles.colours, 
+                 paste0("Achilles_1250_", ini$microanatomy, "_sn_broad"), "Broad_annotation")
+cell_number_plot(seurat, "predicted.id_broad", achilles.colours, 
+                 paste0("Xenium_", ini$microanatomy, "_broad"), "Broad_annotation")
+
+
+cell_number_plot(so.microanatomy, "fine_annotation", achilles.fine.colours, 
+                 paste0("Achilles_", ini$microanatomy, "_sn_fine"), "Fine_annotation")
+if (ini$microanatomy != "Muscle"){ # 1687 doesn't have sn data
+  cell_number_plot(so.1687, "fine_annotation", achilles.fine.colours, 
+                 paste0("Achilles_1687_", ini$microanatomy, "_sn_fine"), "Fine_annotation")
+}
+cell_number_plot(so.1250, "fine_annotation", achilles.fine.colours, 
+                 paste0("Achilles_1250_", ini$microanatomy, "_sn_fine"), "Fine_annotation")
+cell_number_plot(seurat, "predicted.id_fine", achilles.fine.colours, 
+                 paste0("Xenium_", ini$microanatomy, "_fine"), "Fine_annotation")
+
+cell_number_plot(so.microanatomy, "2fb_annotation", achilles.2fb.colours, 
+                 paste0("Achilles_", ini$microanatomy, "_sn_2fb"), "Two_fibroblasts_annotation")
+if (ini$microanatomy != "Muscle"){ # 1687 doesn't have sn data
+  cell_number_plot(so.1687, "2fb_annotation", achilles.2fb.colours, 
+                 paste0("Achilles_1687_", ini$microanatomy, "_sn_2fb"), "Two_fibroblasts_annotation")
+}
+cell_number_plot(so.1250, "2fb_annotation", achilles.2fb.colours, 
+                 paste0("Achilles_1250_", ini$microanatomy, "_sn_2fb"), "Two_fibroblasts_annotation")
+cell_number_plot(seurat, "predicted.id_2fb", achilles.2fb.colours, 
+                 paste0("Xenium_", ini$microanatomy, "_2fb"), "Two_fibroblasts_annotation")
+
+```
+
+
+#### Save the spatial seurat object
+
+```{r}
+saveRDS(seurat, paste0(directory, "/RDS_objects.dir/", 
+                       ini$microanatomy, "_SeuratObject.rds"))
+```
+
+```{r}
+sessionInfo()
+```
+
