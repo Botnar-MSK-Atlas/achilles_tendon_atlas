@@ -1,0 +1,773 @@
+---
+title: "Xenium custom panel"
+author: "Carla Cohen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+
+## Script to look at the proposed Xenium custom panel. 
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(Seurat)
+library(cowplot)
+library(viridis)
+library(pheatmap)
+library(zellkonverter)
+library(SingleCellExperiment)
+
+# make a new output folder for each run, with the date & time in the directory name
+date <- Sys.Date() %>% str_replace_all("-", "")
+time <- format(Sys.time(), "%X") %>% str_replace_all(":", "-") %>%
+    str_sub(1, 5)
+directory <- paste0(date,"_", time, "_Xenium_custom_panel.dir")
+dir.create(directory, showWarnings = FALSE)
+dir.create(paste0(directory, "/Marker_dotplots/"))
+dir.create(paste0(directory, "/Xenium_panel_figures/"))
+
+```
+
+
+Read in lists of markers
+
+```{r, fig.width=20, fig.height=15}
+
+# make a vector of the marker lists you want to use
+all_markers <- c("general_markers", "general_markers_top5", 
+                    "muscle_markers", "muscle_markers_top5",
+                    "immune_markers", "myeloid_markers_top5", "lymphoid_markers_top5", 
+                    "stromal_markers", "stromal_markers_top5")
+
+# For each marker list
+# read in the table then make it into a list
+# remove the NAs
+annotation_markers <- list()
+for (i in 1:length(all_markers)) {
+    annotation_markers[[i]] <- as.list(read.table(paste0("Files.dir/annotation_markers/", all_markers[i], ".txt")))
+    annotation_markers[[i]] <-lapply(annotation_markers[[i]], function(x) x[!is.na(x)]) 
+    
+}
+
+names(annotation_markers) <- all_markers
+
+# use each marker list for plotting individually
+
+```
+
+
+## Read in the Xenium panel gene list
+
+```{r}
+xenium_markers <- read.csv("Files.dir/20250205_Xenium_panel.txt", sep = "\t")
+```
+
+## Read in the seurat objects
+
+Achilles: use broad_annotation or fine_annotation
+Quads: use cell_annotation (broad) cluster_id (fine annotation)
+
+```{r}
+so.achilles <- readRDS("20250210_12-13_Fine_annotation.dir/RDS_objects.dir/Achilles_fine_annotation.rds")
+Idents(so.achilles) <- so.achilles$broad_annotation
+so.quads <- readRDS("../20230922_quadriceps/Quads_analysis_RDS/20240523_quads_overall_reannotated.RDS")
+so.test <- subset(so.achilles, downsample = 100)
+my_pal <- DiscretePalette(n=length(unique(so.achilles$fine_annotation)), palette = "polychrome", shuffle = TRUE)
+```
+
+Cenk's bone data
+
+```{r}
+
+# read in the h5ad as sce using zellkonverter
+h5ad.bone <- readH5AD("Files.dir/annotated_cenk_out.h5ad") 
+# convert to seurat
+h5ad.bone@assays
+
+so.bone <- as.Seurat(h5ad.bone, counts = "counts", data = "log1p_norm", project = "Bone")
+# change the name of the assay to RNA
+so.bone[["RNA"]] <- so.bone[["originalexp"]]
+DefaultAssay(so.bone) <- "RNA"
+```
+
+```{r, fig.width=10, fig.height=10}
+Idents(so.bone) <- so.bone$Leiden_res0_2_Manual_Cell_Type
+DimPlot(so.bone, label = TRUE)
+```
+
+
+## Set up functions 
+
+Create dotplot function
+```{r}
+
+annotation_dotplot <- function (so, genes, category, fig_width = 7, fig_height = 7){
+    p <- DotPlot(so, features = genes) + 
+    scale_colour_gradient2(low = "#f7f3f2", mid = "#f2390a", high = "#6e1e0a", midpoint = 1)+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, size = 16))+
+    theme(axis.text.y = element_text(size = 16))+
+    theme(axis.title.x = element_blank())+
+    theme(axis.title.y = element_blank())+
+    ggtitle(category)
+    
+    ggsave(paste0(directory, "/Marker_dotplots/", category," .png"), bg = "white", 
+           width = fig_width, height = fig_height)
+    p
+}
+
+
+```
+
+## Can Xenium panel genes distinguish cell subsets?
+
+Create an analysis function that uses only the xenium panel genes to perform dimensionality reduction and clustering. 
+Plot 
+- UMAP with original labels
+- Heatmap of gene expression across clusters
+- clustering at several resolutions
+Return a seurat object in case further plotting is needed 
+
+```{r, fig.width=10, fig.height=8} 
+analyse_panel <- function(so, genelist, description){
+    dir.name <- paste0(directory, "/", description)
+    dir.create(dir.name)
+    so <- NormalizeData(so) %>% 
+        ScaleData(features = genelist) %>%
+        RunPCA(features = genelist, reduction.name = "xp.pca") %>%
+        RunUMAP(dims=1:20, reduction = "xp.pca", reduction.name = "xp.umap")
+    p <- DimPlot(so, label=T, repel=T, reduction = "xp.umap",  cols = my_pal)
+    ggsave(paste0(dir.name, "/DimPlot_on panel_genes.png"), 
+           width = 20, height = 8, bg = "white")
+    return(so)
+}
+# ref <- analyse_panel(so.test, xenium_markers$Gene, "Test_xenium_panel")
+```
+
+
+Heatmap of gene panel expression across reference clusters
+We can see that some cell types are underrepresented in the gene panel. 
+
+
+```{r, fig.width=8, fig.height=8}
+
+plot_heatmap <- function(so, genelist, description){
+    dir.name <- paste0(directory, "/", description)
+    ps <- AggregateExpression(so, features = genelist, 
+                              normalization.method = "LogNormalize", assays="RNA", return.seurat = T)
+    ps <- ScaleData(ps, features=genelist)
+    pheatmap(ps@assays$RNA@scale.data, show_rownames = F, filename = paste0(dir.name, "/heatmap.png"))
+
+}
+# plot_heatmap(ref, xenium_markers$Gene, "Test_xenium_panel")
+```
+
+
+```{r, fig.width=15, fig.height=6} 
+
+find_clusters <- function(so){
+    
+    # remove existing clusters from metadata
+    resolutionList <- grep("_snn_res", colnames(so[[]]), value = TRUE)
+    print("resolutions before cleanup")
+    print(resolutionList)
+    
+    for (resolution in resolutionList){
+        so[[resolution]] <- NULL
+    }
+    
+    so <- FindNeighbors(so, reduction = "xp.pca")
+    so <- FindClusters(so, resolution = seq(0.1, 0.6, 0.1))
+    
+    print("resolutions after reclustering")
+    print(grep("_snn_res", colnames(so[[]]), value = TRUE))
+    return(so)
+    
+}
+# ref <- find_clusters(ref)
+
+```
+
+
+Plot UMAP for each clustering resolution
+
+```{r, fig.width=10, fig.height=12}
+plot_umaps <- function(so, description){
+    dir.name <- paste0(directory, "/", description)
+    
+    resolutionList <- grep("_snn_res", colnames(so[[]]), value = TRUE)
+    print("resolutions for plotting")
+    print(resolutionList)
+    plot_list <- list()
+    
+    for (resolution in resolutionList){
+          plot_list [[resolution]] <- DimPlot(object = so, label = TRUE, reduction = "xp.umap", 
+                                              group.by = resolution, shuffle = TRUE)
+          }
+    
+    title <- ggdraw() + draw_label("UMAPs of multiple clustering resolutions", fontface='bold', size = 24)
+    p <- plot_grid(plotlist = plot_list, ncol = 2) 
+    p <- plot_grid(title, p, ncol=1, rel_heights=c(0.05, 1))
+    
+    ggsave(paste0(dir.name, "/UMAPs_multiple_resolutions.png"), width = 10, height = 12, bg = "white")
+}
+
+# plot_umaps(ref, "Test_xenium_panel")
+
+```
+
+Combine into one function
+
+```{r}
+analyse_and_plot <- function(so, genelist, description){
+    ref <- analyse_panel(so, genelist, description)
+    plot_heatmap(ref, genelist, description)
+    ref <- find_clusters(ref)
+    plot_umaps(ref, description)
+    return(ref)
+}
+# so.test.ref <- analyse_and_plot(so.test, xenium_markers$Gene, "Test_xenium_panel")
+
+```
+
+Analyse all datasets with the proposed Xenium panel
+
+```{r}
+
+# Achilles broad annotation
+Idents(so.achilles) <- so.achilles$broad_annotation
+so.achilles.broad <- analyse_and_plot(so.achilles, xenium_markers$Gene, "Achilles_broad")
+
+# Achilles fine annotation
+Idents(so.achilles) <- so.achilles$fine_annotation
+so.achilles.fine <- analyse_and_plot(so.achilles, xenium_markers$Gene, "Achilles_fine")
+
+# Achilles fibroblasts
+Idents(so.achilles) <- so.achilles$broad_annotation
+so.achilles.fb <- subset(so.achilles, idents = "Fibroblasts")
+Idents(so.achilles.fb) <- so.achilles.fb$fine_annotation
+so.achilles.fb <- analyse_and_plot(so.achilles.fb, xenium_markers$Gene, "Achilles_fb")
+
+# Achilles muscle
+Idents(so.achilles) <- so.achilles$broad_annotation
+so.achilles.muscle <- subset(so.achilles, idents = "Skeletal muscle cells")
+Idents(so.achilles.muscle) <- so.achilles.muscle$fine_annotation
+so.achilles.muscle <- analyse_and_plot(so.achilles.muscle, xenium_markers$Gene, "Achilles_muscle")
+
+
+
+# Quads broad annotation
+Idents(so.quads) <- so.quads$cell_annotation
+so.quads.broad <- analyse_and_plot(so.quads, xenium_markers$Gene, "Quads_broad")
+
+
+# Quads fine annotation
+Idents(so.quads) <- so.quads$cluster_id
+so.quads.fine <- analyse_and_plot(so.quads, xenium_markers$Gene, "Quads_fine")
+
+# Bone
+so.bone.xen <- analyse_and_plot(so.bone, xenium_markers$Gene, "Bone")
+
+```
+
+For bone we can pick out the main cell subsets but the following are not very easily distinguished:
+- SULF1+ osetoblast
+- Osteocytes
+- Classical osteoblast
+- Myocytes
+
+The classical osteoblasts are quite well represented in the gene panel so focus on adding genes for the other three cell types. 
+
+Find markers that distinguish these cell types. 
+
+```{r}
+bone.markers <- FindAllMarkers(so.bone,
+                               only.pos = TRUE, 
+                               min.pct = 0.25, 
+                               logfc.threshold = 0.25)
+
+bone.markers.top10 <- bone.markers %>% 
+    group_by(cluster) %>% 
+    slice_max(n=10, order_by = abs(avg_log2FC))
+```
+
+Plot the top10 markers for 
+- SULF1+ osetoblast
+- Osteocytes
+- Myocytes 
+
+```{r, fig.width=20, fig.height=14}
+SULF1_Ob <- bone.markers.top10 %>% filter(cluster == "SULF1+ Osteoblast") %>% pull(gene)
+FeaturePlot(so.bone, features = SULF1_Ob)
+Osteocytes <- bone.markers.top10 %>% filter(cluster == "Osteocytes") %>% pull(gene)
+FeaturePlot(so.bone, features = Osteocytes)
+Myocytes <- bone.markers.top10 %>% filter(cluster == "Myocytes") %>% pull(gene)
+FeaturePlot(so.bone, features = Myocytes)
+Mes_prec <- bone.markers.top10 %>% filter(cluster =="Mesenchymal progenitors") %>% pull(gene)
+FeaturePlot(so.bone, features = Mes_prec)
+
+```
+
+
+
+
+```{r, fig.width=10, fig.height=6}
+annotation_dotplot(so.bone, c(SULF1_Ob, "SULF1"), category = "SULF1+ osteoblast markers", fig_width = 10, fig_height = 6)
+annotation_dotplot(so.bone, Osteocytes, category = "Osteocyte markers", fig_width = 10, fig_height = 6)
+annotation_dotplot(so.bone, Myocytes, category = "Myocyte markers", fig_width = 10, fig_height = 6)
+annotation_dotplot(so.bone, Mes_prec, category = "Mesenchymal progenitor markers", fig_width = 10, fig_height = 6)
+```
+
+SULF1+osteoblasts
+
+TNC, NCAM1, RUNX2, ESR1 in panel already
+CNKSR3 most specific?
+
+
+Myocytes
+FN1, COL6A3 in the panel already
+Avoid other collagens
+Could use EPHA3, HMCN1, EDIL3, SGCD, BNC2
+
+Osteocytes PCDH7, CD44, ZNF385B
+
+Mesenchymal progenitors
+PRKG1 Not bad
+RCAN2 No as in muscle 
+INPP4B No as in T cells
+SCL7A2 OK
+EPS8 Not bad 
+
+
+
+Need to check these on the other objects to check that they are not going to be too highly expressed in other samples, especially as they are mostly ECM related. 
+
+
+```{r, fig.width=12, fig.height=7}
+potential_additions <- c("CNKSR3", "EPHA3", "HMCN1", "EDIL3", "SGCD", "BNC2", "PCDH7", "CD44", "ZNF385B", "PRKG1", 
+                         "RCAN2", "INPP4B", "SLC7A2", "EPS8")
+annotation_dotplot(so.bone, potential_additions, "bone_additions")
+annotation_dotplot(so.achilles, potential_additions, "achilles_additions")
+annotation_dotplot(so.quads, potential_additions, "quads_additions")
+
+```
+
+
+SULF1+osteoblasts
+CNKSR3 OK
+
+Myocytes
+EPHA3 OK 
+HMCN1 a bit in fb
+EDIL3 a bit widely expressed 
+SGCD a bit widely expressed 
+BNC2 a bit widely expressed 
+
+Osteocytes 
+PCDH7 OK 
+CD44 - widely expressed 
+ZNF385B - a bit in muscle 
+
+Out of interest plot the annotation markers. 
+
+```{r, fig.width=24, fig.height=8}
+annotation_dotplot(so.bone, annotation_markers$general_markers_top5, category = "Bone_general_markers", fig_width = 20, fig_height = 6)
+annotation_dotplot(so.bone, annotation_markers$stromal_markers_top5, category = "Bone_stromal_markers", fig_width = 20, fig_height = 6)
+annotation_dotplot(so.bone, annotation_markers$muscle_markers_top5, category = "Bone_muscle_markers", fig_width = 20, fig_height = 6)
+annotation_dotplot(so.bone, annotation_markers$immune_markers, category = "Bone_immune_markers", fig_width = 20, fig_height = 6)
+annotation_dotplot(so.bone, annotation_markers$myeloid_markers_top5, category = "Bone_myeloid_markers", fig_width = 20, fig_height = 6)
+annotation_dotplot(so.bone, annotation_markers$lymphoid_markers_top5, category = "Bone_lymphoid_markers", fig_width = 20, fig_height = 6)
+
+```
+
+Update the panel
+
+```{r}
+xenium_update <- c(xenium_markers$Gene, "CNKSR3", "EPHA3", "PCDH7", "SLC7A2")
+```
+
+Analyse all datasets with the updated Xenium panel
+
+```{r}
+
+# Achilles broad annotation
+Idents(so.achilles) <- so.achilles$broad_annotation
+so.achilles.broad <- analyse_and_plot(so.achilles, xenium_update, "Achilles_broad_updated")
+
+# Achilles fine annotation
+Idents(so.achilles) <- so.achilles$fine_annotation
+so.achilles.fine <- analyse_and_plot(so.achilles, xenium_update, "Achilles_fine_updated")
+
+# Achilles fibroblasts
+Idents(so.achilles) <- so.achilles$broad_annotation
+so.achilles.fb <- subset(so.achilles, idents = "Fibroblasts")
+Idents(so.achilles.fb) <- so.achilles.fb$fine_annotation
+so.achilles.fb <- analyse_and_plot(so.achilles.fb, xenium_update, "Achilles_fb_updated")
+
+# Achilles muscle
+Idents(so.achilles) <- so.achilles$broad_annotation
+so.achilles.muscle <- subset(so.achilles, idents = "Skeletal muscle cells")
+Idents(so.achilles.muscle) <- so.achilles.muscle$fine_annotation
+so.achilles.muscle <- analyse_and_plot(so.achilles.muscle, xenium_update, "Achilles_muscle_updated")
+
+
+
+# Quads broad annotation
+Idents(so.quads) <- so.quads$cell_annotation
+so.quads.broad <- analyse_and_plot(so.quads, xenium_update, "Quads_broad_updated")
+
+
+# Quads fine annotation
+Idents(so.quads) <- so.quads$cluster_id
+so.quads.fine <- analyse_and_plot(so.quads, xenium_update, "Quads_fine_updated")
+
+# Bone
+so.bone.xen <- analyse_and_plot(so.bone, xenium_update, "Bone_updated")
+
+```
+
+# Look at cell types without any custom genes
+This will help to prioritise which custom genes are most important
+
+```{r}
+non_custom_genes <- xenium_update[97:473]
+```
+
+
+Analyse all datasets with the non custom Xenium panel
+
+```{r}
+
+# Achilles broad annotation
+Idents(so.achilles) <- so.achilles$broad_annotation
+so.achilles.broad <- analyse_and_plot(so.achilles, non_custom_genes, "Achilles_broad_non-custom")
+
+# Achilles fine annotation
+Idents(so.achilles) <- so.achilles$fine_annotation
+so.achilles.fine <- analyse_and_plot(so.achilles, non_custom_genes, "Achilles_fine_non-custom")
+
+# Achilles fibroblasts
+Idents(so.achilles) <- so.achilles$broad_annotation
+so.achilles.fb <- subset(so.achilles, idents = "Fibroblasts")
+Idents(so.achilles.fb) <- so.achilles.fb$fine_annotation
+so.achilles.fb <- analyse_and_plot(so.achilles.fb, non_custom_genes, "Achilles_fb_non-custom")
+
+# Achilles muscle
+Idents(so.achilles) <- so.achilles$broad_annotation
+so.achilles.muscle <- subset(so.achilles, idents = "Skeletal muscle cells")
+Idents(so.achilles.muscle) <- so.achilles.muscle$fine_annotation
+so.achilles.muscle <- analyse_and_plot(so.achilles.muscle, non_custom_genes, "Achilles_muscle_non-custom")
+
+
+
+# Quads broad annotation
+Idents(so.quads) <- so.quads$cell_annotation
+so.quads.broad <- analyse_and_plot(so.quads, non_custom_genes, "Quads_broad_non-custom")
+
+
+# Quads fine annotation
+Idents(so.quads) <- so.quads$cluster_id
+so.quads.fine <- analyse_and_plot(so.quads, non_custom_genes, "Quads_fine_non-custom")
+
+# Bone
+so.bone.xen <- analyse_and_plot(so.bone, non_custom_genes, "Bone_non-custom")
+
+```
+
+```{r, fig.width = 16, fig.height = 10}
+# re-plot the fine annotations with bigger plot
+
+DimPlot(so.achilles.fine, label=T, repel=T, reduction = "xp.umap",  cols = my_pal)
+ggsave(paste0(directory, "/Achilles_fine_non-custom/DimPlot_on panel_genes_2.png"), 
+           width = 16, height = 10, bg = "white")
+
+Idents(so.quads.fine) <- so.quads.fine$cluster_id
+DimPlot(so.quads.fine, label=T, repel=T, reduction = "xp.umap",  cols = my_pal)
+ggsave(paste0(directory, "/Quads_fine_non-custom/DimPlot_on panel_genes_2.png"), 
+           width = 16, height = 10, bg = "white")
+```
+
+# Re-calc and plot the fine annotations with the updated panel
+
+```{r, fig.width = 16, fig.height = 10}
+so.achilles.fine.updated <- analyse_panel(so.achilles, xenium_update, "Achilles_fine_updated")
+so.quads.fine.updated <- analyse_panel(so.quads, xenium_update, "Quads_fine_updated")
+
+Idents(so.achilles.fine.updated) <- so.achilles.fine.updated$fine_annotation
+DimPlot(so.achilles.fine.updated, label=T, repel=T, reduction = "xp.umap",  cols = my_pal)
+ggsave(paste0(directory, "/Achilles_fine_updated/DimPlot_on panel_genes_2.png"), 
+           width = 16, height = 10, bg = "white")
+
+Idents(so.quads.fine.updated) <- so.quads.fine$cluster_id
+DimPlot(so.quads.fine.updated, label=T, repel=T, reduction = "xp.umap",  cols = my_pal)
+ggsave(paste0(directory, "/Quads_fine_updated/DimPlot_on panel_genes_2.png"), 
+           width = 16, height = 10, bg = "white")
+```
+Check a few other genes to have as spares
+```{r}
+
+FeaturePlot(so.achilles, "LILRB5", reduction = "umap.scvi")
+FeaturePlot(so.achilles, "CDCP1", reduction = "umap.scvi")
+FeaturePlot(so.achilles, "GPNMB", reduction = "umap.scvi")
+FeaturePlot(so.achilles, "FCN1", reduction = "umap.scvi")
+FeaturePlot(so.achilles, "ADAMTSL1", reduction = "umap.scvi")
+
+```
+Check genes that are not in the Xenium database
+
+```{r}
+FeaturePlot(so.quads, "DELEC1")
+FeaturePlot(so.quads, "CHD12")# not found must be CDH12
+FeaturePlot(so.quads, "CDH12")
+FeaturePlot(so.bone, "TNFSF11")
+FeaturePlot(so.achilles, "COTL1")
+
+FeaturePlot(so.achilles, "PIEZO2")
+FeaturePlot(so.achilles, "LEPR")
+FeaturePlot(so.achilles, "LIPA")
+FeaturePlot(so.achilles, "WLS")
+```
+
+```{r}
+
+DotPlot(so.quads, features = "CDH12")
+```
+
+Following Xenium Panel designer recommendations I need to add some genes for the following subsets:
+	- Gene for ADAM12+fibs in quads, foetal fibrillar fb
+	- Gene for chondrocytes
+	- Don't need to add more genes for DC or sk musc as they are already well defined
+Gene for nervous system cells
+
+
+What are the top genes for Quads ADAM12+ fibs?
+
+```{r}
+quads.ADAM12.markers <- FindMarkers(so.quads, 
+                                    ident.1 = "ADAM12hi fibroblasts", 
+                                    ident.2 = NULL,
+                                    assay = "SoupXcounts",
+                                    only.pos = TRUE, 
+                                    min.pct = 0.25, 
+                                    logfc.threshold = 0.25
+                                    )
+
+quads.ADAM12.markers.top20 <- quads.ADAM12.markers %>%  
+                    slice_max(n=20, order_by = abs(avg_log2FC))
+```
+
+```{r, fig.width = 15, fig.height=8}
+annotation_dotplot(so.quads, rownames(quads.ADAM12.markers.top20), "Top20_ADAM12_FB_markers", 15, 8)
+```
+SMOC2 looks like a good choice
+
+
+```{r}
+FeaturePlot(so.quads, "SMOC2")
+FeaturePlot(so.achilles, "SMOC2")
+FeaturePlot(so.bone, "SMOC2")
+```
+
+What are the top genes for Achilles chondrocytes?
+
+```{r}
+achilles.chond.markers <- FindMarkers(so.achilles, 
+                                    ident.1 = "Chondrocytes", 
+                                    ident.2 = NULL,
+                                    assay = "soupX",
+                                    only.pos = TRUE, 
+                                    min.pct = 0.25, 
+                                    logfc.threshold = 0.25
+                                    )
+
+achilles.chond.markers.top20 <- achilles.chond.markers %>%  
+                    slice_max(n=20, order_by = abs(avg_log2FC))
+```
+
+```{r, fig.width = 15, fig.height=8}
+annotation_dotplot(so.achilles, rownames(achilles.chond.markers.top20), "Top20_Ach_Chondrocyes_markers", 15, 8)
+```
+Good candidates are
+GPC6 - too highly expressed 
+ACAN - already in there
+PMEPA1 - prostate cancer gene 
+SDK2 - could be good
+
+
+```{r}
+FeaturePlot(so.quads, "SDK2")
+FeaturePlot(so.achilles, "SDK2")
+FeaturePlot(so.bone, "SDK2")
+```
+
+
+What are the top genes for Achilles nervous system cells?
+
+```{r}
+achilles.nerve.markers <- FindMarkers(so.achilles, 
+                                    ident.1 = "Nervous system cells", 
+                                    ident.2 = NULL,
+                                    assay = "soupX",
+                                    only.pos = TRUE, 
+                                    min.pct = 0.25, 
+                                    logfc.threshold = 0.25
+                                    )
+
+achilles.nerve.markers.top20 <- achilles.nerve.markers %>%  
+                    slice_max(n=20, order_by = abs(avg_log2FC))
+```
+
+```{r, fig.width = 15, fig.height=8}
+annotation_dotplot(so.achilles, rownames(achilles.nerve.markers.top20), "Top20_Ach_Nerve_markers", 15, 8)
+```
+
+
+What are the top genes for Quads nervous system cells?
+
+```{r}
+quads.nerve.markers <- FindMarkers(so.quads, 
+                                    ident.1 = "Nervous system cells", 
+                                    ident.2 = NULL,
+                                    assay = "SoupXcounts",
+                                    only.pos = TRUE, 
+                                    min.pct = 0.25, 
+                                    logfc.threshold = 0.25
+                                    )
+
+quads.nerve.markers.top20 <- quads.nerve.markers %>%  
+                    slice_max(n=20, order_by = abs(avg_log2FC))
+```
+
+```{r, fig.width = 15, fig.height=8}
+annotation_dotplot(so.quads, rownames(quads.nerve.markers.top20), "Top20_Quads_Nerve_markers", 15, 8)
+```
+
+Is there much intersection?
+
+
+```{r, fig.width = 15, fig.height=8}
+annotation_dotplot(so.achilles, rownames(quads.nerve.markers.top20), "Top20_Quads_Nerve_markers_on_Ach", 15, 8)
+annotation_dotplot(so.quads, rownames(achilles.nerve.markers.top20), "Top20_Ach_Nerve_markers_on_Quads", 15, 8)
+
+```
+
+```{r}
+common_nerve_markers_1 <- rownames(achilles.nerve.markers)[which(rownames(achilles.nerve.markers) %in% rownames(quads.nerve.markers))]
+
+common_nerve_markers_2 <- rownames(quads.nerve.markers)[which(rownames(quads.nerve.markers) %in% rownames(achilles.nerve.markers))]
+
+nerve_markers <- c(common_nerve_markers_1, common_nerve_markers_2) %>% unique()
+nerve_markers
+```
+
+```{r, fig.width = 15, fig.height=8}
+annotation_dotplot(so.achilles,nerve_markers, "Nerve_markers_on_Ach", 15, 8)
+annotation_dotplot(so.quads, nerve_markers, "Nerve_markers_on_Quads", 15, 8)
+
+```
+
+SORCS1 looks quite specific. 
+
+Use this instead of NRXN1 as it was recommended to remove as highly expressed. 
+
+
+### Osteoblast markers
+RUNX2 works ok but SP7 and IBSP are not great makers in our data. 
+
+What are the top genes for Quads osteoblasts?
+
+```{r}
+quads.ob.markers <- FindMarkers(so.quads, 
+                                    ident.1 = "Osteoblasts", 
+                                    ident.2 = NULL,
+                                    assay = "SoupXcounts",
+                                    only.pos = TRUE, 
+                                    min.pct = 0.25, 
+                                    logfc.threshold = 0.25
+                                    )
+
+quads.ob.markers.top20 <- quads.ob.markers %>%  
+                    slice_max(n=20, order_by = abs(avg_log2FC))
+```
+
+```{r, fig.width = 15, fig.height=8}
+annotation_dotplot(so.quads, rownames(quads.ob.markers.top20), "Top20_Quads_Ob_markers", 15, 8)
+annotation_dotplot(so.bone, rownames(quads.ob.markers.top20), "Top20_Quads_Ob_markers_on_bone", 15, 8)
+```
+
+Try MMP16 and SATB2
+
+### Fibroblasts
+
+
+What are the top genes for Achilles NEGR1hi COL15A1hi fb and PRG4 fb?
+
+```{r}
+achilles.COL15A1fb.markers <- FindMarkers(so.achilles, 
+                                    ident.1 = "NEGR1hi COL15A1hi fibroblasts", 
+                                    ident.2 = NULL,
+                                    assay = "soupX",
+                                    only.pos = TRUE, 
+                                    min.pct = 0.25, 
+                                    logfc.threshold = 0.25
+                                    )
+
+achilles.COL15A1fb.markers.top20 <- achilles.COL15A1fb.markers %>%  
+                    slice_max(n=20, order_by = abs(avg_log2FC))
+```
+
+```{r, fig.width = 15, fig.height=8}
+annotation_dotplot(so.achilles, rownames(achilles.COL15A1fb.markers.top20), "Top20_Ach_COL15A1fb_markers", 15, 8)
+```
+
+LRRTM4 should work
+
+What are the top genes for Achilles PRG4 fb?
+
+```{r}
+achilles.PRG4fb.markers <- FindMarkers(so.achilles, 
+                                    ident.1 = "PRG4hi fibroblasts", 
+                                    ident.2 = NULL,
+                                    assay = "soupX",
+                                    only.pos = TRUE, 
+                                    min.pct = 0.25, 
+                                    logfc.threshold = 0.25
+                                    )
+
+achilles.PRG4fb.markers.top20 <- achilles.PRG4fb.markers %>%  
+                    slice_max(n=20, order_by = abs(avg_log2FC))
+```
+
+```{r, fig.width = 15, fig.height=8}
+annotation_dotplot(so.achilles, rownames(achilles.PRG4fb.markers.top20), "Top20_Ach_PRG4fb_markers", 15, 8)
+annotation_dotplot(so.quads, rownames(achilles.PRG4fb.markers.top20), "Top20_Ach_PRG4fb_markers_on_Quads", 15, 8)
+```
+
+
+Try CMKLR2
+
+What are the top genes for Quads NR4A1hi fb?
+
+```{r}
+quads.NR4A1fb.markers <- FindMarkers(so.quads, 
+                                    ident.1 = "NR4A1hi fibroblasts", 
+                                    ident.2 = NULL,
+                                    assay = "SoupXcounts",
+                                    only.pos = TRUE, 
+                                    min.pct = 0.25, 
+                                    logfc.threshold = 0.25
+                                    )
+
+quads.NR4A1fb.markers.top20 <- quads.NR4A1fb.markers %>%  
+                    slice_max(n=20, order_by = abs(avg_log2FC))
+```
+
+```{r, fig.width = 15, fig.height=8}
+annotation_dotplot(so.achilles, rownames(quads.NR4A1fb.markers.top20), "Top20_Quads_NR4A1fb_markers_on_Achilles", 15, 8)
+annotation_dotplot(so.quads, rownames(quads.NR4A1fb.markers.top20), "Top20_Quads_NR4A1fb_markers", 15, 8)
+```
+
+Try SEMA4A
+

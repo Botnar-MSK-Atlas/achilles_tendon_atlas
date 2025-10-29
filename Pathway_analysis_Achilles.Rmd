@@ -8,6 +8,7 @@ output: html_document
 # Pathway analysis
 The aim of the script is to use pathway analysis to analyse the outputs of differential gene expression. 
 Specifically this script is to analyse the results of the DEseq2 LRT test of Achilles data where muscle was included.  
+Also where the fibroblasts are treated as one cluster. 
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
@@ -17,7 +18,8 @@ library(BiocGenerics)
 library(clusterProfiler)
 library(msigdbr)
 library(tidyverse)
-#library(enrichplot)
+library(svglite)
+library(org.Hs.eg.db)
 
 date <- Sys.Date() %>% str_replace_all("-", "")
 time <- format(Sys.time(), "%X") %>% str_replace_all(":", "-") %>%
@@ -25,20 +27,26 @@ time <- format(Sys.time(), "%X") %>% str_replace_all(":", "-") %>%
 directory <- paste0(date,"_", time, "_Pathway_Analysis.dir/")
 dir.create(directory)
 
+dir.create(paste0(directory, "Figures"))
+dir.create(paste0(directory, "Results"))
+
+subset_exp <- TRUE # whether to subset pathways to only experimentally validated
+
 ```
 
-## 1. Get gene lists
+## Gene lists to test
 
 ### Read in gene clusters calculated by the DEseq2 LRT test
+20250304_17-29_Pseudobulk.dir
 
 ```{r}
-celltypes <- c("Adipocyte", "Fasttwitch", "Granulocytes", "ITGA10Fibroblasts", 
-               "Macrophages", "Mural", "NEGR1Fibroblasts", "Tcells", "VEC")
+celltypes <- c("Adipocytes", "Skeletalmuscle", "Fibroblasts", 
+               "Macrophages", "Mural","VEC")
 
 clusters <- list()
 
 for (i in seq(1:length(celltypes))){
-    clusters[[i]] <- read.csv(paste0("20240421_20-48_Pseudobulk.dir/Cluster_results/", celltypes[[i]], "_df.csv"))
+    clusters[[i]] <- read.csv(paste0("20250304_17-29_Pseudobulk.dir/Cluster_results/", celltypes[[i]], "_df.csv"))
 }
 names(clusters) <- celltypes
 
@@ -47,187 +55,139 @@ names(clusters) <- celltypes
 #### Genes upregrulated across microanatomy  
 
 Create lists of genes for the following groups:  
-ITGA10 fibroblasts group 2
-NEGR1 fibroblasts group 3
-Fasttwitch muscle group 3
-Macrophages group 2
-T cells group 3
-Granulocytes group 2
-Mural cells group 3
-VEC group 2
+Fibroblast group 1
+Macrophages group 1
+Mural cells group 2
+VEC group 1
 Adipocyte group 1
 
 ```{r}
 
 # genelists
-ITGA10Fibroblasts_2 <- clusters[["ITGA10Fibroblasts"]] %>% filter (cluster == 2) %>% pull (genes)
-NEGR1Fibroblasts_3 <- clusters[["NEGR1Fibroblasts"]] %>% filter (cluster == 3) %>% pull (genes)
-Fasttwitch_3 <- clusters[["Fasttwitch"]] %>% filter (cluster == 3) %>% pull (genes)
-Macrophages_2 <- clusters[["Macrophages"]] %>% filter (cluster == 2) %>% pull (genes)
-Tcells_3 <- clusters[["Tcells"]] %>% filter (cluster == 3) %>% pull (genes)
-Granulocytes_2 <- clusters[["Granulocytes"]] %>% filter (cluster == 2) %>% pull (genes)
-Mural_3 <- clusters[["Mural"]] %>% filter (cluster == 3) %>% pull (genes)
-VEC_2 <- clusters[["VEC"]] %>% filter (cluster == 2) %>% pull (genes)
-Adipocyte_1 <- clusters[["Adipocyte"]] %>% filter (cluster == 1) %>% pull (genes)
+Fibroblasts_1 <- clusters[["Fibroblasts"]] %>% filter (cluster == 1) %>% pull (genes)
+Macrophages_1 <- clusters[["Macrophages"]] %>% filter (cluster == 1) %>% pull (genes)
+Mural_2 <- clusters[["Mural"]] %>% filter (cluster == 2) %>% pull (genes)
+VEC_1 <- clusters[["VEC"]] %>% filter (cluster == 1) %>% pull (genes)
+Adipocytes_1 <- clusters[["Adipocytes"]] %>% filter (cluster == 1) %>% pull (genes)
 
-genelists_upregulated <- list(Adipocyte_1, Fasttwitch_3, Granulocytes_2, ITGA10Fibroblasts_2, Macrophages_2, 
-                              Mural_3, NEGR1Fibroblasts_3, Tcells_3, VEC_2 )
-names(genelists_upregulated) <- names(clusters)
-
+genelists_upregulated <- list(Adipocytes_1, Fibroblasts_1, Macrophages_1, 
+                              Mural_2, VEC_1 )
+names(genelists_upregulated) <- c("Adipocytes", "Fibroblasts", "Macrophages", "Mural","VEC")
 ```
 
 #### Genes downregulated across microanatomy  
 
 Create lists of genes for the following groups:  
-ITGA10 fibroblasts group 4
-NEGR1 fibroblasts group 1
-Fasttwitch muscle group 1
-Macrophages group 3
-T cells group N/A
-Granulocytes group N/A 
-Mural cells group 1
-VEC group 1
-Adipocyte group 3
+Fibroblasts 2
+Skeletal muscle 2
+Macrophages group 2
+Mural cells group 3
+VEC group 3
+Adipocyte group 2
 
 ```{r}
 
 # genelists
-ITGA10Fibroblasts_4 <- clusters[["ITGA10Fibroblasts"]] %>% filter (cluster == 4) %>% pull (genes)
-NEGR1Fibroblasts_1 <- clusters[["NEGR1Fibroblasts"]] %>% filter (cluster == 1) %>% pull (genes)
-Fasttwitch_1 <- clusters[["Fasttwitch"]] %>% filter (cluster == 1) %>% pull (genes)
-Macrophages_3 <- clusters[["Macrophages"]] %>% filter (cluster == 3) %>% pull (genes)
-Mural_1 <- clusters[["Mural"]] %>% filter (cluster == 1) %>% pull (genes)
-VEC_1 <- clusters[["VEC"]] %>% filter (cluster == 1) %>% pull (genes)
-Adipocyte_3 <- clusters[["Adipocyte"]] %>% filter (cluster == 3) %>% pull (genes)
+Fibroblasts_2 <- clusters[["Fibroblasts"]] %>% filter (cluster == 2) %>% pull (genes)
+Skeletalmuscle_2 <- clusters[["Skeletalmuscle"]] %>% filter (cluster == 2) %>% pull (genes)
+Macrophages_2 <- clusters[["Macrophages"]] %>% filter (cluster == 2) %>% pull (genes)
+Mural_3 <- clusters[["Mural"]] %>% filter (cluster == 3) %>% pull (genes)
+VEC_3 <- clusters[["VEC"]] %>% filter (cluster == 3) %>% pull (genes)
+Adipocytes_2 <- clusters[["Adipocytes"]] %>% filter (cluster == 2) %>% pull (genes)
 
-genelists_downregulated <- list(Adipocyte_3, Fasttwitch_1, ITGA10Fibroblasts_4, Macrophages_3, 
-                              Mural_1, NEGR1Fibroblasts_1, VEC_1 )
-names(genelists_downregulated) <- c("Adipocyte", "Fasttwitch", "ITGA10Fibroblasts", "Macrophages", 
-                                  "Mural", "NEGR1Fibroblasts", "VEC")
+genelists_downregulated <- list(Adipocytes_2, Skeletalmuscle_2, Fibroblasts_2, Macrophages_2, 
+                              Mural_3, VEC_3 )
+names(genelists_downregulated) <- c("Adipocytes", "Skeletalmuscle", "Fibroblasts", "Macrophages", 
+                                  "Mural", "VEC")
 ```
+
 
 #### Genes upregrulated in tendon compared to muscle  
 
 Create lists of genes for the following groups:  
-ITGA10 fibroblasts group 1, group 6
-NEGR1 fibroblasts group 2, 7
-Fasttwitch muscle group 2
-Macrophages group 5
-VEC group 4
-Adipocyte group 4
+Fibroblast group 4, 6, 8
+Mural 1
+Macrophages group 3
+
 
 ```{r}
 
 # genelists
-ITGA10Fibroblasts_1 <- clusters[["ITGA10Fibroblasts"]] %>% filter (cluster == 1) %>% pull (genes)
-ITGA10Fibroblasts_6 <- clusters[["ITGA10Fibroblasts"]] %>% filter (cluster == 6) %>% pull (genes)
-ITGA10Fibroblasts_1_6 <- c(ITGA10Fibroblasts_1, ITGA10Fibroblasts_6)
-NEGR1Fibroblasts_2 <- clusters[["NEGR1Fibroblasts"]] %>% filter (cluster == 2) %>% pull (genes)
-NEGR1Fibroblasts_7 <- clusters[["NEGR1Fibroblasts"]] %>% filter (cluster == 7) %>% pull (genes)
-NEGR1Fibroblasts_2_7 <- c(NEGR1Fibroblasts_2, NEGR1Fibroblasts_7)
-Fasttwitch_2 <- clusters[["Fasttwitch"]] %>% filter (cluster == 2) %>% pull (genes)
-Macrophages_5 <- clusters[["Macrophages"]] %>% filter (cluster == 5) %>% pull (genes)
-VEC_4 <- clusters[["VEC"]] %>% filter (cluster == 4) %>% pull (genes)
-Adipocyte_4 <- clusters[["Adipocyte"]] %>% filter (cluster == 4) %>% pull (genes)
+Fibroblast_468 <- clusters[["Fibroblasts"]] %>% filter (cluster == 4 | cluster == 6 | cluster == 8) %>% pull (genes)
+Macrophages_3 <- clusters[["Macrophages"]] %>% filter (cluster == 3) %>% pull (genes)
+Mural_3 <- clusters[["Mural"]] %>% filter (cluster == 3) %>% pull (genes)
 
-genelists_tendon_high <- list(Adipocyte_4, Fasttwitch_2, ITGA10Fibroblasts_1_6, Macrophages_5, 
-                              NEGR1Fibroblasts_2_7, VEC_4 )
-names(genelists_tendon_high) <- c("Adipocyte", "Fasttwitch", "ITGA10Fibroblasts", "Macrophages", 
-                                  "NEGR1Fibroblasts", "VEC")
+genelists_tendon_high <- list(Fibroblast_468, Macrophages_3, Mural_3 )
+names(genelists_tendon_high) <- c("Fibroblasts", "Macrophages", "Mural")
 
 ```
-
 
 #### Genes upregrulated in muscle compared to tendon  
 
 Create lists of genes for the following groups:  
-ITGA10 fibroblasts group 3
-NEGR1 fibroblasts group 6, 8, 10
+Fibroblasts group 10, 5, 9
 
 ```{r}
 
 # genelists
-ITGA10Fibroblasts_3 <- clusters[["ITGA10Fibroblasts"]] %>% filter (cluster == 3) %>% pull (genes)
-NEGR1Fibroblasts_6 <- clusters[["NEGR1Fibroblasts"]] %>% filter (cluster == 6) %>% pull (genes)
-NEGR1Fibroblasts_8 <- clusters[["NEGR1Fibroblasts"]] %>% filter (cluster == 8) %>% pull (genes)
-NEGR1Fibroblasts_10 <- clusters[["NEGR1Fibroblasts"]] %>% filter (cluster == 10) %>% pull (genes)
-NEGR1Fibroblasts_6_8_10 <- c(NEGR1Fibroblasts_6, NEGR1Fibroblasts_8, NEGR1Fibroblasts_10)
+Fibroblast_1059 <- clusters[["Fibroblasts"]] %>% filter (cluster == 10 | cluster == 5 | cluster == 9) %>% pull (genes)
 
-genelists_muscle_high <- list(ITGA10Fibroblasts_3, NEGR1Fibroblasts_6_8_10)
-names(genelists_muscle_high) <- c("ITGA10Fibroblasts", "NEGR1Fibroblasts")
+genelists_muscle_high <- list(Fibroblast_1059)
+names(genelists_muscle_high) <- c("Fibroblasts")
 
 ```
 
-## 2. Access pathway databases  
+## Background gene sets
 
-### Make Hallmark reference list
-```{r}
-#import Hallmark pathway gene list
-Hallmark_reference <- msigdbr(species = "Homo sapiens", category = "H") %>% 
-  dplyr::select(gs_name, gene_symbol)
-
-Hallmark_reference$gs_name <- gsub("_"," ", Hallmark_reference$gs_name)
-Hallmark_reference$gs_name <- tolower(Hallmark_reference$gs_name)
-Hallmark_reference$gs_name <- gsub("(^|[[:space:]])([[:alpha:]])", "\\1\\U\\2", Hallmark_reference$gs_name, perl=TRUE)
-Hallmark_reference$gs_name <- gsub("Hallmark ","", Hallmark_reference$gs_name)
-```
-
-
-### Make GO reference list
-```{r}
-#import GO:BP pathway gene list
-GOBP_reference <- msigdbr(species = "Homo sapiens", category = "C5", subcategory = "GO:BP") %>% 
-  dplyr::select(gs_name, gene_symbol)
-
-GOBP_reference$gs_name <- gsub("GOBP_","", GOBP_reference$gs_name)
-GOBP_reference$gs_name <- gsub("_"," ", GOBP_reference$gs_name)
-GOBP_reference$gs_name <- tolower(GOBP_reference$gs_name)
-GOBP_reference$gs_name <- gsub("(^|[[:space:]])([[:alpha:]])", "\\1\\U\\2", GOBP_reference$gs_name, perl=TRUE)
-```
-
-## 3. Create background gene lists
+Create a specific background gene set of all genes expressed in Seurat object per cell type  
 
 ### Create a set of background genes expressed in the tendon & muscle samples
 
 ```{r}
 # Load seurat object
-so.achilles <- readRDS("/project/tendonhca/shared/chromium/analysis/20231006_achilles/20240119_11-02_Fine_annotation.dir/RDS_objects.dir/Achilles_integrated_annotated.rds")
+so.achilles <- readRDS("20250228_12-50_Fine_annotation.dir/RDS_objects.dir/Achilles_fine_annotation.rds")
 
 ```
+
+Perform pseudobulk & get vector of all expressed genes
+
+```{r}
+#Aggregation of counts to sample level
+cts <- AggregateExpression(so.achilles, 
+                    group.by = c("sample"),
+                    assays = 'soupX',
+                    slot = "counts",
+                    return.seurat = FALSE)
+cts <- as.data.frame(cts$soupX)
+#cts
+
+# keep genes where there are at least 10 counts 
+# expressed_genes_all <- cts %>% filter_all(all_vars(.>2)) %>% rownames()
+v <- rowSums(cts)
+expressed_genes_all <- names(v[v>9])
+length(expressed_genes_all) #34956 genes
+
+```
+
 ### Create custom background gene lists for each cell type
 
 Simplify cell names
 
 ```{r}
-df <- data.frame("cell_annotation_update" = unique( so.achilles$cell_annotation_update))
-df$cell_annotation <- c("Adipocyte", 
-                        "Mural", 
-                        "ITGA10Fibroblasts", 
-                        "VEC", 
-                        "NEGR1Fibroblasts", 
-                        "Macrophages", 
-                        "Tcells", 
-                        "LEC", 
-                        "Slowtwitch", 
-                        "Nerve", 
-                        "Fasttwitch", 
-                        "Granulocytes", 
-                        "Satellite", 
-                        "Transitionalmuscle", 
-                        "Bcells")
-#df
+df <- data.frame("broad_annotation" = levels(so.achilles$broad_annotation))
 
-cell_annotation <- left_join(so.achilles[[]], df)
-rownames(cell_annotation) <- colnames(so.achilles)
-cell_annotation <- cell_annotation %>% select("cell_annotation")
+df$cell_annotation_pseudobulk <- c("Fibroblasts", "Skeletalmuscle", "VEC", "Macrophages", "Mural", "Adipocytes", 
+                                   "Tcells", "LEC", "Satellite", "Granulocyte", "Bcells", "Nerve", "Plasma", "Ambient")
 
-so.achilles <- AddMetaData(so.achilles, metadata = cell_annotation, col.name = "cell_annotation")
+metadata <- so.achilles[[]]
+metadata <- metadata %>% left_join(df, by = "broad_annotation")
+so.achilles <- AddMetaData(so.achilles, metadata$cell_annotation_pseudobulk, "cell_annotation_pseudobulk")
 ```
 
 ```{r}
 #Aggregation of counts to sample level per cell type
 cts <- AggregateExpression(so.achilles, 
-                    group.by = c("cell_annotation", "sample"),
+                    group.by = c("cell_annotation_pseudobulk", "sample"),
                     assays = 'soupX',
                     slot = "counts",
                     return.seurat = FALSE)
@@ -268,24 +228,69 @@ expressed_genes <- list()
 for (i in 1:length(counts_list)){
     v <- rowSums(counts_list[[i]])
     expressed_genes[[i]] <- names(v[v>9])
+    print(names(counts_list)[[i]])
     print(length(expressed_genes[[i]]))
     print(head(expressed_genes[[i]]))
 }
 
 names(expressed_genes) <- names(counts_list)
 
+# print number of genes from 
+```
+
+## Pathway databases
+Access the pathway databases required to perform the enrichment analysis  
+
+### Make Hallmark reference list
+```{r}
+#import Hallmark pathway gene list
+Hallmark_reference <- msigdbr(species = "Homo sapiens", category = "H") %>% 
+  dplyr::select(gs_name, gene_symbol)
+
+Hallmark_reference$gs_name <- gsub("_"," ", Hallmark_reference$gs_name)
+Hallmark_reference$gs_name <- tolower(Hallmark_reference$gs_name)
+Hallmark_reference$gs_name <- gsub("(^|[[:space:]])([[:alpha:]])", "\\1\\U\\2", Hallmark_reference$gs_name, perl=TRUE)
+Hallmark_reference$gs_name <- gsub("Hallmark ","", Hallmark_reference$gs_name)
+```
+
+
+### Make GO reference list
+```{r}
+#import GO:BP pathway gene list
+GOBP_reference <- msigdbr(species = "Homo sapiens", category = "C5", subcategory = "GO:BP") %>% 
+  dplyr::select(gs_name, gene_symbol, gs_exact_source) %>% 
+    dplyr::rename("go_id" = "gs_exact_source")
+
+GOBP_reference$gs_name <- gsub("GOBP_","", GOBP_reference$gs_name)
+GOBP_reference$gs_name <- gsub("_"," ", GOBP_reference$gs_name)
+GOBP_reference$gs_name <- tolower(GOBP_reference$gs_name)
+GOBP_reference$gs_name <- gsub("(^|[[:space:]])([[:alpha:]])", "\\1\\U\\2", GOBP_reference$gs_name, perl=TRUE)
+
+if (subset_exp == TRUE){
+    tb <- toTable(org.Hs.egGO2EG) # contains info on Evidence
+    GOBP_reference <- GOBP_reference %>% left_join(tb, multiple = "all")
+    
+    # keep only pathways with experimental evidence
+    non_exp <- c("ISS", "ISO", "ISA", "ISM", "IGC", "RCA", "ND", "IEA")
+    positions <- which(GOBP_reference$Evidence %in% non_exp)
+    GOBP_reference <- GOBP_reference[-positions,]
+    dim(GOBP_reference) # 19614126        
+}
+
+
 
 ```
 
-## 4. Run Pathway analysis
+
+### Run Pathway analysis
 Hallmark and GOBP databases are used  
 Select groupings for each cell type according to up-and down-regulation across microanatomy. 
-Use the "enricher" function from cluserProfiler.  
+Use the "enricher" function from clusterProfiler.  
 
 Make a function to run the enricher function according to 
 - gene list
 - terms (GOBP/Hallmark)
-- background gene set (universe)
+- background gene set (custom cell)
 
 ```{r}
 
@@ -293,7 +298,7 @@ run_enricher <- function(genelist, description, terms, universe){
     
     results <- list()
     dir.create(paste0(directory, "Results/", description))
-    print(class(universe))
+    #print(class(universe))
     if (class(universe) == "list"){
         my_universe <- universe[[i]]
     }else if (class(universe) == "character"){
@@ -301,18 +306,18 @@ run_enricher <- function(genelist, description, terms, universe){
     }else if (class(universe) == "NULL"){
         my_universe <- NULL
     }
-    print(head(my_universe))
+    # print(head(my_universe))
 
     for(i in 1:length(genelist)){
         current_celltype <- names(genelist[i])
-        print(current_celltype)
+        #print(current_celltype)
         genes <- genelist[[i]]
-        print(head(genes))
+        #print(head(genes))
         
         results[[i]] <- enricher(genes, TERM2GENE = terms, universe = my_universe)
         
-        #saveRDS(results[[i]], 
-        #        paste0(directory, "Results/", description, "/", current_celltype, ".RDS"))    
+        saveRDS(results[[i]], 
+                paste0(directory, "Results/", description, "/", current_celltype, ".RDS"))    
         
     }
     
@@ -322,42 +327,25 @@ run_enricher <- function(genelist, description, terms, universe){
 
 upregulated_GOBP_custom_cell <- run_enricher(genelists_upregulated, "Upregulated_GOBP_custom_cell", 
             GOBP_reference, expressed_genes)
-
 downregulated_GOBP_custom_cell <- run_enricher(genelists_downregulated, "Downregulated_GOBP_custom_cell", 
             GOBP_reference, expressed_genes)
-
 tendon_high_GOBP_custom_cell <- run_enricher(genelists_tendon_high, "Tendon_high_GOBP_custom_cell", 
             GOBP_reference, expressed_genes)
-
 muscle_high_GOBP_custom_cell <- run_enricher(genelists_muscle_high, "muscle_high_GOBP_custom_cell", 
             GOBP_reference, expressed_genes)
 
-upregulated_Hallmark_custom_cell <- run_enricher(genelists_upregulated, "Upregulated_Hallmark_custom_cell", 
-            Hallmark_reference, expressed_genes)
-
-downregulated_Hallmark_custom_cell <- run_enricher(genelists_downregulated, "Downregulated_Hallmark_custom_cell", 
-            Hallmark_reference, expressed_genes)
-
-tendon_high_Hallmark_custom_cell <- run_enricher(genelists_tendon_high, "Tendon_high_Hallmark_custom_cell", 
-            Hallmark_reference, expressed_genes)
-
-muscle_high_Hallmark_custom_cell <- run_enricher(genelists_muscle_high, "muscle_high_Hallmark_custom_cell", 
-            Hallmark_reference, expressed_genes)
-
-
 ```
-
-## 5. Plot results
+Function for plotting results
 
 ```{r}
 
 plot_enricher <- function(enricher_result, description){
     dir.create(paste0(directory, "Figures/", description), showWarnings = FALSE)
     for (i in 1:length(enricher_result)){
-        print(names(enricher_result[i]))
+        #print(names(enricher_result[i]))
         n_pathways <- enricher_result[[i]]@result %>% filter(p.adjust < 0.05) %>% rownames() %>% length()
-        print(n_pathways)
-        print(description)
+        #print(n_pathways)
+        #print(description)
         if (n_pathways > 0){
             dotplot(enricher_result[[i]])+
                 ggtitle(paste0(names(enricher_result[i]), "_", description))
@@ -373,20 +361,15 @@ plot_enricher(upregulated_GOBP_custom_cell, "Upregulated_GOBP_custom_cell")
 plot_enricher(downregulated_GOBP_custom_cell, "Downregulated_GOBP_custom_cell")
 plot_enricher(tendon_high_GOBP_custom_cell, "Tendon_high_GOBP_custom_cell")
 plot_enricher(muscle_high_GOBP_custom_cell, "Muscle_high_GOBP_custom_cell")
-
-plot_enricher(upregulated_Hallmark_custom_cell, "Upregulated_Hallmark_custom_cell")
-plot_enricher(downregulated_Hallmark_custom_cell, "Downregulated_Hallmark_custom_cell")
-plot_enricher(tendon_high_Hallmark_custom_cell, "Tendon_high_Hallmark_custom_cell")
-plot_enricher(muscle_high_Hallmark_custom_cell, "Muscle_high_Hallmark_custom_cell")
-
- 
 ```
 
-## 6.  Additional visualisation
+### Additional visualisation
 
 Dotplot combining results from all cell types. 
 
 ```{r}
+dir.create(paste0(directory, "Figures/Combined_dotplots/"))
+dir.create(paste0(directory, "Results/Combined_results/"))
 
 plot_dotplot <- function(enrichment_results, comparison){
     print(comparison)
@@ -401,15 +384,15 @@ plot_dotplot <- function(enrichment_results, comparison){
     results <- bind_rows(results)
     if (nrow(results) >0){
         # make cell type a factor
-        results$celltype <- factor(results$celltype, levels = c("ITGA10Fibroblasts", "NEGR1Fibroblasts",
-                                                                      "Fasttwitch", "VEC", "Mural", "Adipocyte", 
-                                                                      "Macrophages", "Tcells", "Granulocytes"))
+        results$celltype <- factor(results$celltype, levels = c("Fibroblasts",
+                                                                      "Skeletalmuscle", "VEC", "Mural", "Adipocytes", 
+                                                                      "Macrophages"))
     
         filtered_res <- results %>% 
             mutate(new_col = -log10(p.adjust)) %>% 
             group_by(celltype) %>% 
             slice_min(order_by = p.adjust, n = 10) %>% 
-            select(ID, GeneRatio, p.adjust, Count, celltype, new_col)
+            dplyr::select(ID, GeneRatio, p.adjust, Count, celltype, new_col)
         
         # make IDs a factor
         pathways <- as.data.frame(sort(table(filtered_res$ID)))
@@ -418,7 +401,12 @@ plot_dotplot <- function(enrichment_results, comparison){
             left_join(pathways) %>%
             group_by(pathway_freq) %>%
             arrange(celltype)
-        filtered_res$ID <- factor(filtered_res$ID, levels = rev(unique(filtered_res$ID)))    
+        filtered_res$ID <- factor(filtered_res$ID, levels = rev(unique(filtered_res$ID)))
+        
+        #print(head(filtered_res))
+        write.table(filtered_res, 
+                    paste0(directory, "Results/Combined_results/", comparison, ".txt"), 
+                    sep = "\t", quote = FALSE)
                 
             
         ggplot(filtered_res, aes(x = celltype, y = ID, size = Count, colour = new_col)) +
@@ -432,7 +420,9 @@ plot_dotplot <- function(enrichment_results, comparison){
             scale_y_discrete(position = "right")+
             ggtitle(comparison)
         
-        ggsave (paste0(directory, "/Figures/Combined_dotplots/", comparison, ".png"), 
+        ggsave (paste0(directory, "Figures/Combined_dotplots/", comparison, ".png"), 
+                width = 8, height = 7)
+        ggsave (paste0(directory, "Figures/Combined_dotplots/", comparison, ".svg"), 
                 width = 8, height = 7)
     }else{
         print("no significant results")
@@ -446,24 +436,68 @@ plot_dotplot(downregulated_GOBP_custom_cell, "Downregulated_GOBP_custom_cell")
 plot_dotplot(tendon_high_GOBP_custom_cell, "Tendon_high_GOBP_custom_cell")
 plot_dotplot(muscle_high_GOBP_custom_cell, "Muscle_high_GOBP_custom_cell")
 
-plot_dotplot(upregulated_Hallmark_custom_cell, "Upregulated_Hallmark_custom_cell")
-plot_dotplot(downregulated_Hallmark_custom_cell, "Downregulated_Hallmark_custom_cell")
-plot_dotplot(tendon_high_Hallmark_custom_cell, "Tendon_high_Hallmark_custom_cell")
-plot_dotplot(muscle_high_Hallmark_custom_cell, "Muscle_high_Hallmark_custom_cell")
-    
 ```
-Tree plot
-Could be useful another time but not as useful as the combined plot here.  
-https://yulab-smu.top/biomedical-knowledge-mining-book/enrichplot.html#tree-plot
 
-
-```{r, fig.width=15, fig.height=8}
-#go_results <- GOBP_upregulated[["NEGR1Fibroblasts"]]
-#go_results_x <- pairwise_termsim(go_results)
-#treeplot(go_results_x)
-```
+Dotplot combining results from up and downregulated in fibroblasts
 
 ```{r}
-sessionInfo()
+dir.create(paste0(directory, "Figures/Fibroblast_dotplots/"))
+dir.create(paste0(directory, "Results/Fibroblast_results/"))
+
+
+results_up <- upregulated_GOBP_custom_cell[["Fibroblasts"]]@result %>% 
+            filter(p.adjust < 0.05) %>% 
+            arrange(desc(p.adjust))
+results_up$comparison <- "upregulated"
+results_down <- downregulated_GOBP_custom_cell[["Fibroblasts"]]@result %>% 
+            filter(p.adjust < 0.05) %>% 
+            arrange(desc(p.adjust))
+results_down$comparison <- "downregulated"
+
+results_tendon <- tendon_high_GOBP_custom_cell[["Fibroblasts"]]@result %>% 
+            filter(p.adjust < 0.05) %>% 
+            arrange(desc(p.adjust))
+results_tendon$comparison <- "tendon_high"
+
+# NB muscle high has no sig results
+results <- bind_rows(results_up, results_down, results_tendon)
+# make comparison  a factor
+results$comparison <- factor(results$comparison, levels = c("upregulated", "downregulated", "tendon_high"))
+                             
+filtered_res <- results %>% 
+            mutate(new_col = -log10(p.adjust)) %>% 
+            group_by(comparison) %>% 
+            slice_min(order_by = p.adjust, n = 10) %>% 
+            dplyr::select(ID, GeneRatio, p.adjust, Count, comparison, new_col)
+        
+# make IDs a factor
+pathways <- as.data.frame(sort(table(filtered_res$ID)))
+colnames(pathways) <- c("ID", "pathway_freq")
+filtered_res <- filtered_res %>% 
+            left_join(pathways) %>%
+            group_by(pathway_freq) %>%
+            arrange(comparison)
+filtered_res$ID <- factor(filtered_res$ID, levels = rev(unique(filtered_res$ID)))
+
+write.table(filtered_res, 
+                    paste0(directory, "Results/Fibroblast_results/Fibroblasts_up_vs_down.txt"), 
+                    sep = "\t", quote = FALSE)
+                
+            
+ggplot(filtered_res, aes(x = comparison, y = ID, size = Count, colour = new_col)) +
+            geom_point()+
+            #scale_colour_viridis()+
+            theme_bw()+
+            theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))+
+            theme(axis.title.x = element_blank())+
+            theme(axis.title.y = element_blank())+
+            labs(colour = "-log10(p.adj)")+
+            scale_y_discrete(position = "right")
+        
+ggsave (paste0(directory, "Figures/Combined_dotplots/Fibroblasts_up_vs_down.png"), 
+                width = 8, height = 7)
+ggsave (paste0(directory, "Figures/Combined_dotplots/Fibroblasts_up_vs_down.svg"), 
+                width = 8, height = 7)
+
 ```
 

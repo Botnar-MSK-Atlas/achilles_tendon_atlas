@@ -6,7 +6,8 @@ output: html_document
 ---
 # Pseudobulk and differential expression
 
-The aim of this script is to perform pseudobulk per sample, and then perform differential expression across microanatomy.  
+The aim of this script is to perform pseudobulk per sample, and then perform differential expression across microanatomy. 
+This time within the fibroblast subpopulations. 
 
 ### Workflow:
 
@@ -35,12 +36,14 @@ library(cowplot)
 library(pheatmap)
 library(yaml)
 library(svglite)
+library(viridis)
+library(RColorBrewer)
 
 # make a new output folder for each run, with the date & time in the directory name
 date <- Sys.Date() %>% str_replace_all("-", "")
 time <- format(Sys.time(), "%X") %>% str_replace_all(":", "-") %>%
     str_sub(1, 5)
-directory <- paste0(date,"_", time, "_Pseudobulk.dir")
+directory <- paste0(date,"_", time, "_Pseudobulk_Fibroblasts.dir")
 dir.create(directory, showWarnings = FALSE)
 dir.create(paste0(directory, "/DEseq2_results/"))
 dir.create(paste0(directory, "/Cluster_results/"))
@@ -73,25 +76,40 @@ ini
 Read in Seurat object
 
 ```{r}
-# If using 1 fibroblast type
-so.achilles <- readRDS("20250228_12-50_Fine_annotation.dir/RDS_objects.dir/Achilles_fine_annotation.rds")
+so.fibroblast <- readRDS("20250228_12-50_Fine_annotation.dir/RDS_objects.dir/Achilles_fibroblast_subset.rds")
 ```
 
 Simplify cell names
 
 ```{r}
 
-df <- data.frame("broad_annotation" = levels(so.achilles$broad_annotation))
+df <- data.frame("fine_annotation_fibroblasts" = levels(so.fibroblast$fine_annotation_fibroblasts))
 
-df$cell_annotation_pseudobulk <- c("Fibroblasts", "Skeletalmuscle", "VEC", "Macrophages", "Mural", "Adipocytes", 
-                                   "Tcells", "LEC", "Satellite", "Granulocyte", "Bcells", "Nerve", "Plasma", "Ambient")
-
+df$cell_annotation_pseudobulk <- c("NEGR1.VCAN.fb", "COMP.MMP3.fb", "NEGR1.COL15A1.fb", 
+                                   "Chondrocytes", "NEGR1.ITGA6.fb", "COMP.THBS4.fb", "PRG4.fb")
 df
 
-metadata <- so.achilles[[]]
-metadata <- metadata %>% left_join(df, by = "broad_annotation")
-so.achilles <- AddMetaData(so.achilles, metadata$cell_annotation_pseudobulk, "cell_annotation_pseudobulk")
+metadata <- so.fibroblast[[]]
+metadata <- metadata %>% left_join(df, by = "fine_annotation_fibroblasts")
+so.fibroblast <- AddMetaData(so.fibroblast, metadata$cell_annotation_pseudobulk, "cell_annotation_pseudobulk")
 
+```
+
+How many cells are present at each microanatomy?
+```{r}
+
+so.fibroblast[[]] %>% select(microanatomical_site, cell_annotation_pseudobulk) %>% table()
+```
+
+```{r}
+mtx <- data.frame(so.fibroblast[[]] %>% select(microanatomical_site, cell_annotation_pseudobulk) %>% table())
+ggplot(mtx, aes(cell_annotation_pseudobulk, y = Freq))+
+    geom_bar(aes(fill = microanatomical_site), stat = "identity")+
+    theme_classic()+
+    coord_flip()+
+    theme(axis.title.y = element_blank())+
+    scale_fill_manual(values = ma.cols)
+    
 ```
 
 
@@ -99,9 +117,9 @@ If required, subset the seurat object to remove the muscle samples
 
 ```{r}
 if (ini$subset_muscle == TRUE){
-    so.achilles <- subset(so.achilles, subset = microanatomical_site != "muscle")
+    so.fibroblast <- subset(so.fibroblast, subset = microanatomical_site != "muscle")
 }
-so.achilles
+so.fibroblast
 
 ```
 
@@ -109,8 +127,8 @@ Plot UMAP for reference
 
 ```{r, fig.width=8, fig.height=10}
 # visualise the distribution of clusters based on sample (patient) 
-cell_plot <- DimPlot(so.achilles, reduction = 'umap.scvi', group.by = 'cell_annotation_pseudobulk', label = TRUE)
-cond_plot <- DimPlot(so.achilles, reduction = 'umap.scvi', group.by = 'sample', shuffle = TRUE)
+cell_plot <- DimPlot(so.fibroblast, reduction = 'umap', group.by = 'cell_annotation_pseudobulk', label = TRUE)
+cond_plot <- DimPlot(so.fibroblast, reduction = 'umap', group.by = 'sample', shuffle = TRUE)
 plot_grid(cell_plot, cond_plot, ncol = 1)
 ```
 
@@ -123,7 +141,7 @@ We want to pseudobulk using sample and microanatomy information. We already have
 # 1. counts matrix - sample level
 
 #Aggregation of counts to sample level per cell type
-cts <- AggregateExpression(so.achilles, 
+cts <- AggregateExpression(so.fibroblast, 
                     group.by = c("cell_annotation_pseudobulk", "sample"),
                     assays = 'soupX',
                     slot = "counts",
@@ -161,8 +179,8 @@ NB the order of the sample names needs to be the same in the colData$patient col
 
 ```{r}
 
-colData <- data.frame(sample = unique(so.achilles[["sample"]]))
-colData <- left_join(colData, so.achilles[[]], keep = FALSE, multiple = "first") %>% 
+colData <- data.frame(sample = unique(so.fibroblast[["sample"]]))
+colData <- left_join(colData, so.fibroblast[[]], keep = FALSE, multiple = "first") %>% 
     select(sample, patient, microanatomical_site, sequencing_date, sex)
 rownames(colData) <- colData$sample
 
@@ -172,7 +190,7 @@ rownames(colData) <- colData$sample
 
 ```{r}
 find_celltypes_to_run <- function(celltype){
-    
+    print(celltype)
     positions <- which(colData$sample %in% colnames(counts_list[[celltype]]))
     coldata <- colData[positions, ]
     rownames(coldata) <- coldata$sample
@@ -183,6 +201,11 @@ find_celltypes_to_run <- function(celltype){
     n_mb <- coldata %>% filter(coldata$microanatomical_site =="MB") %>% nrow()
     n_mtj <- coldata %>% filter(coldata$microanatomical_site =="MTJ") %>% nrow()
     n_muscle <- coldata %>% filter(coldata$microanatomical_site =="muscle") %>% nrow()
+    
+    print(paste("Enth", n_enth, sep = ": "))
+    print(paste("MB", n_mb, sep = ": "))
+    print(paste("MTJ", n_mtj, sep = ": "))
+    print(paste("Muscle", n_muscle, sep = ": "))
     
     if (ini$subset_muscle == FALSE){
         if (n_enth <3 | n_mb < 3 | n_mtj < 3 | n_muscle < 3){
@@ -203,7 +226,6 @@ find_celltypes_to_run <- function(celltype){
     }
     return(new_celltype)
 }
-
 ```
 
 ```{r}
@@ -224,6 +246,9 @@ celltypes_list
 # temporarily subset the celltypes list for testing
 # celltypes_list <- celltypes_list[c(1,2)]
 ```
+
+
+
 
 ## Run DEseq2 on all cell types
 
@@ -898,19 +923,8 @@ Plot the summary of results
 DE_Enth.long <- DE_Enth %>% pivot_longer(3:5, values_to = "count", names_to = "type")
 # merge column for cell annotation & comparison
 DE_Enth.long <- DE_Enth.long %>% mutate (cell_annotation_pseudobulk_comparison = paste(cell_annotation_pseudobulk, comparison, sep = "_"))
-DE_Enth.long
+DE_Enth.long$count <- as.integer(DE_Enth.long$count)
 
-DE_Enth.long$cell_annotation_pseudobulk_comparison <- factor(DE_Enth.long$cell_annotation_pseudobulk_comparison, 
-                                 levels = c("Fibroblasts_MBvsEnth", "Fibroblasts_MTJvsEnth", "Fibroblasts_musclevsEnth", 
-                                            "Skeletalmuscle_MBvsEnth", "Skeletalmuscle_MTJvsEnth", "Skeletalmuscle_musclevsEnth",
-                                            "Adipocytes_MBvsEnth", "Adipocytes_MTJvsEnth", "Adipocytes_musclevsEnth",
-                                            "VEC_MBvsEnth", "VEC_MTJvsEnth", "VEC_musclevsEnth", 
-                                            "LEC_MBvsEnth", "LEC_MTJvsEnth", "LEC_musclevsEnth", 
-                                            "Mural_MBvsEnth", "Mural_MTJvsEnth", "Mural_musclevsEnth", 
-                                            "Granulocytes_MBvsEnth", "Granulocytes_MTJvsEnth", "Granulocytes_musclevsEnth", 
-                                            "Macrophages_MBvsEnth", "Macrophages_MTJvsEnth", "Macrophages_musclevsEnth", 
-                                            "Tcells_MBvsEnth", "Tcells_MTJvsEnth", "Tcells_musclevsEnth")
-)
 
 ```
 
@@ -937,18 +951,7 @@ How many DE genes were in each cell type compared to MTJ?
 DE_MTJ.long <- DE_MTJ %>% pivot_longer(3:5, values_to = "count", names_to = "type")
 # merge column for cell annotation & comparison
 DE_MTJ.long <- DE_MTJ.long %>% mutate (cell_annotation_pseudobulk_comparison = paste(cell_annotation_pseudobulk, comparison, sep = "_"))
-DE_MTJ.long
-
-DE_MTJ.long$cell_annotation_pseudobulk_comparison <- factor(DE_MTJ.long$cell_annotation_pseudobulk_comparison, 
-                                 levels = c("Fibroblasts_EnthvsMTJ", "Fibroblasts_MBvsMTJ", "Fibroblasts_musclevsMTJ",
-                                            "Skeletalmuscle_EnthvsMTJ", "Skeletalmuscle_MBvsMTJ", "Skeletalmuscle_musclevsMTJ", 
-                                            "Adipocytes_EnthvsMTJ", "Adipocytes_MBvsMTJ", "Adipocytes_musclevsMTJ", 
-                                            "VEC_EnthvsMTJ", "VEC_MBvsMTJ", "VEC_musclevsMTJ", 
-                                            "LEC_EnthvsMTJ", "LEC_MBvsMTJ", "LEC_musclevsMTJ", 
-                                            "Mural_EnthvsMTJ", "Mural_MBvsMTJ", "Mural_musclevsMTJ", 
-                                            "Granulocytes_EnthvsMTJ","Granulocytes_MBvsMTJ", "Granulocytes_musclevsMTJ", 
-                                            "Macrophages_EnthvsMTJ", "Macrophages_MBvsMTJ" , "Macrophages_musclevsMTJ", 
-                                            "Tcells_EnthvsMTJ", "Tcells_MBvsMTJ", "Tcells_musclevsMTJ"))
+DE_MTJ.long$count <- as.integer(DE_MTJ.long$count)
 
 ```
 
@@ -965,6 +968,11 @@ ggplot(DE_MTJ.long, aes(x = cell_annotation_pseudobulk_comparison, y = count))+
 ggsave(paste0(directory, "/Number_DEgenes_vs_MB.png"), width = 12, height = 6)
 ggsave(paste0(directory, "/Number_DEgenes_vs_MB.png"), width = 12, height = 6)
 ```
+
+
+
+
+
 Show which packages were used
 ```{r}
 sessionInfo()

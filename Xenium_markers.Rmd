@@ -8,6 +8,7 @@ output: html_document
 Aim to design Xenium panels. 
 Updated 18/7/2024 following the extra soupX clean up of Achilles data. 
 
+
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE)
 knitr::opts_chunk$set(fig.width=10, fig.height=10) 

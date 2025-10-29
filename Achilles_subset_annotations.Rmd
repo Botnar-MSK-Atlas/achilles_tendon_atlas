@@ -1,0 +1,171 @@
+---
+title: "Achilles subset annotations"
+author: "Carla Cohen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+This is a script to plot all the annotation markers on any of the four subsets: fibroblasts, muscle, immune and stromal. 
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(Seurat)
+library(tidyverse)
+library(yaml)
+# make a new output folder for each run, with the date & time in the directory name
+date <- Sys.Date() %>% str_replace_all("-", "")
+time <- format(Sys.time(), "%X") %>% str_replace_all(":", "-") %>%
+    str_sub(1, 5)
+ini <- read_yaml("subset_annotations.yml")
+directory <- paste0(date,"_", time, "_", ini$cell_type, "_Subset_Annotation.dir")
+dir.create(directory, showWarnings = FALSE)
+dir.create(paste0(directory, "/Marker_dotplots/"))
+dir.create(paste0(directory, "/Annotation_figures/"))
+
+
+
+
+```
+
+
+Set up some parameters
+```{r}
+if (ini$integration_method == "harmony"){
+    umap_name <- "harmony.umap"
+    prefix_name <- "soupX_snn_res."
+} else if (ini$integration_method == "scVI"){
+    umap_name <- "umap"
+    prefix_name <- paste0(ini$cluster_method, "_X_scVI_snn_res.")
+}
+
+print(umap_name)
+print(prefix_name)
+```
+
+Read in subsetted Seurat objects 
+
+```{r}
+so <- readRDS(ini$seurat_object)
+Idents(so) <- so[[paste0(prefix_name, ini$subset_resolution)]]
+so
+
+```
+
+```{r}
+DimPlot(so, reduction = umap_name)
+ggsave(paste0(directory, "/Annotation_figures/Unlabelled_UMAP_res_", ini$subset_resolution, ".png"), 
+       width = 7, height = 5, bg = "white")
+```
+
+
+Read in the files of annotation markers
+
+```{r, fig.width=20, fig.height=15}
+
+# make a vector of the marker lists you want to use
+all_markers <- c("general_markers", "general_markers_top5", 
+                    "muscle_markers", "muscle_markers_top5",
+                    "immune_markers", "myeloid_markers_top5", "lymphoid_markers_top5", 
+                    "stromal_markers", "stromal_markers_top5")
+
+# For each marker list
+# read in the table then make it into a list
+# remove the NAs
+annotation_markers <- list()
+for (i in 1:length(all_markers)) {
+    annotation_markers[[i]] <- as.list(read.table(paste0("Files.dir/annotation_markers/", all_markers[i], ".txt")))
+    annotation_markers[[i]] <-lapply(annotation_markers[[i]], function(x) x[!is.na(x)]) 
+    
+}
+
+names(annotation_markers) <- all_markers
+
+# use each marker list for plotting individually
+
+```
+
+Define the plotting function
+```{r, fig.width=30, fig.height=20}
+
+
+annotation_dotplot <- function (so, genes, category, fig_width = 7, fig_height = 7){
+    p <- DotPlot(so, features = genes, assay = "soupX") + 
+    scale_colour_gradient2(low = "#f7f3f2", mid = "#f2390a", high = "#6e1e0a", midpoint = 1)+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, size = 16))+
+    theme(axis.text.y = element_text(size = 16))+
+    theme(axis.title.x = element_blank())+
+    theme(axis.title.y = element_blank())+
+    ggtitle(paste0(ini$cell_type, " ", ini$subset_resolution, ": ", category))
+    
+    ggsave(paste0(directory, "/Marker_dotplots/", category," .png"), bg = "white", 
+           width = fig_width, height = fig_height)
+    p
+}
+
+
+```
+
+Plot all general markers at two resolutions
+```{r, fig.width=30, fig.height=20}
+annotation_dotplot(so, annotation_markers$general_markers, "General_markers", 30, 20)
+```
+
+Plot top 5 general markers
+```{r, fig.width=20, fig.height=10}
+annotation_dotplot(so, annotation_markers$general_markers_top5, "General_markers_top_5_broad_annotation", 20, 10)
+```
+
+Plot all muscle markers
+
+```{r, fig.width=20, fig.height=10}
+
+annotation_dotplot(so, annotation_markers$muscle_markers, "Muscle_markers", 20, 10)
+
+```
+
+Plot top 5 muscle markers
+
+```{r, fig.width=20, fig.height=10}
+
+annotation_dotplot(so, annotation_markers$muscle_markers_top5, "Muscle_markers_top5_fine", 20, 10)
+
+```
+Immune markers
+```{r, fig.width=30, fig.height=10}
+annotation_dotplot(so, annotation_markers$immune_markers, "Immune_markers", 30, 10)
+
+```
+
+Immune myeloid markers top 5
+
+```{r, fig.width=25, fig.height=10}
+
+annotation_dotplot(so, annotation_markers$myeloid_markers_top5, "Myeloid_markers_top_5", 25, 10)
+
+
+```
+
+Immune lymphoid markers top 5
+
+```{r, fig.width=15, fig.height=10}
+annotation_dotplot(so, annotation_markers$lymphoid_markers_top5, "Lymphoid_markers_top_5", 15, 10)
+```
+
+Stromal markers
+```{r, fig.width=30, fig.height=10}
+
+annotation_dotplot(so, annotation_markers$stromal_markers, "Stromal_markers", 30, 10)
+
+```
+
+
+Top 5 stromal markers
+
+```{r, fig.width=20, fig.height=10}
+
+annotation_dotplot(so, annotation_markers$stromal_markers_top5, "Stromal_markers", 20, 10)
+
+```
+
+

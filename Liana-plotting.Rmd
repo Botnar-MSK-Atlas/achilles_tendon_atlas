@@ -1,0 +1,628 @@
+---
+title: "Liana"
+author: "Carla Cohen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+
+Analysis of cell-cell interactions in Achilles data using liana 
+
+https://saezlab.github.io/liana/articles/liana_tutorial.html
+
+Liana is performed on 7 methods and aggregated in the script Liana.R.
+Here we read in the results and plot.
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(Seurat)
+library(cowplot)
+#library(magrittr)
+library(liana)
+library(circlize)
+# library(SCpubr)
+library(CrossTalkeR)
+library(EnhancedVolcano)
+library(pheatmap)
+
+# make a new output folder for each run, with the date & time in the directory name
+date <- Sys.Date() %>% str_replace_all("-", "")
+time <- format(Sys.time(), "%X") %>% str_replace_all(":", "-") %>%
+    str_sub(1, 5)
+directory <- paste0(date,"_", time, "_Liana-plotting.dir")
+dir.create(directory, showWarnings = FALSE)
+
+```
+
+
+
+
+### Read in Liana results
+
+```{r}
+liana_res <- read.table("20250903_10-53_Liana.dir/Liana_aggregate_results_fibroblast_annotation.txt", header = TRUE, sep = "\t")
+```
+
+Make groups of cell types
+
+```{r}
+fibroblasts <- c("COMP.MMP3.fb", 
+                                  "COMP.THBS4.fb", "NEGR1.VCAN.fb", 
+                                  "NEGR1.COL15A1.fb", 
+                                  "NEGR1.ITGA6.fb", 
+                                  "PRG4.fb", "Chondrocytes")
+stromal <- c("VEC", "Mural cells", "Adipocytes", "LEC", "Schwann cells")
+immune <- c("Macrophages", "NK cells", "Granulocytes", "B cells", "T cells")
+muscle <- c("Skeletal muscle cells", "Satellite cells")
+```
+
+### Read in the snRNAseq data and update the annotations 
+
+```{r}
+# read in the data
+so.achilles <- readRDS("20250228_12-50_Fine_annotation.dir/RDS_objects.dir/Achilles_fine_annotation.rds")
+
+# Make a mid-level annotation with fine annotation of fibroblasts and broad annotation of other cell types
+
+metadata <- so.achilles[[]] %>% select(fine_annotation, broad_annotation)
+df <- data.frame(fine_annotation = unique(metadata$fine_annotation))
+df$fine_annotation_short <- df$fine_annotation %>% 
+    str_replace("Nervous system cells", "Schwann cells") %>% 
+    str_replace("NEGR1hi VCANhi fibroblasts", "NEGR1.VCAN.fb") %>% 
+    str_replace("NEGR1hi ITGA6hi fibroblasts", "NEGR1.ITGA6.fb") %>% 
+    str_replace("COMPhi THBS4hi fibroblasts"  , "COMP.THBS4.fb") %>% 
+    str_replace("PRG4hi fibroblasts", "PRG4.fb") %>% 
+    str_replace("NEGR1hi COL15A1hi fibroblasts", "NEGR1.COL15A1.fb") %>% 
+    str_replace("COMPhi MMP3hi fibroblasts" , "COMP.MMP3.fb") %>% 
+    str_replace("Lymphatic endothelial cells", "LEC") %>% 
+    str_replace("Slow-twitch skeletal muscle cells", "Slow muscle") %>%
+    str_replace("Fast-twitch skeletal muscle cells", "Fast muscle") %>%
+    str_replace("Transitional skeletal muscle cells", "Transitional muscle")
+
+df$fibroblast_annotation <- df$fine_annotation_short %>% 
+    str_replace("MERTKhi LYVE1hi macrophages", "Macrophages") %>%
+    str_replace("MERKhi LYVE1lo macrophages", "Macrophages") %>%
+    str_replace("MERTKlo PTPRGhi macrophages", "Macrophages") %>%
+    str_replace("CLEC10Ahi DCs", "Macrophages") %>%
+    str_replace("Monocytes", "Macrophages") %>%
+    str_replace("CLEC9Ahi DCs", "Macrophages") %>%
+    str_replace("Venular VEC", "VEC") %>%
+    str_replace("Arteriolar VEC", "VEC") %>%
+    str_replace("vSMC", "Mural cells") %>%
+    str_replace("Pericytes", "Mural cells") %>%
+    str_replace("Slow muscle", "Skeletal muscle cells") %>%
+    str_replace("Fast muscle", "Skeletal muscle cells") %>%
+    str_replace("Transitional muscle", "Skeletal muscle cells") %>%
+    str_replace("Plasma cells", "B cells") 
+    
+metadata <- left_join(metadata, df)
+so.achilles <- AddMetaData(so.achilles, metadata$fibroblast_annotation, "fibroblast_annotation")
+so.achilles <- AddMetaData(so.achilles, metadata$fine_annotation_short, "fine_annotation_short")
+
+# select fibroblast and stromal subsets
+Idents(so.achilles) <- so.achilles$fibroblast_annotation
+so.fb <- subset(so.achilles, idents = fibroblasts)
+so.stromal <- subset(so.achilles, idents = stromal)
+```
+
+
+### Heaptmap showing overview of all interactions
+
+```{r, fig.width=10, fig.height=10}
+liana_trunc <- liana_res %>%
+   # only keep interactions concordant between methods
+  filter(aggregate_rank <= 0.01) # note that these pvals are already corrected
+
+heat_freq(liana_trunc)
+
+```
+> Overall most interactions are Schwann cells, Adipocytes, LEC, PRG4.fb, COMP.THBS4 fb. 
+
+Version of heatmap with clustering
+
+```{r, fig.width=7, fig.height=7}
+mtx <- liana_trunc %>% 
+    select(source, target) %>% 
+    mutate(interaction = paste0(source, "_", target)) %>% 
+    group_by(interaction, .drop = FALSE) %>% 
+    count(.drop = FALSE) %>%
+    as.data.frame() %>%
+    separate_wider_delim("interaction", "_", names = c("source", "target")) %>% 
+    pivot_wider(names_from = "target", values_from = "n") %>% 
+    column_to_rownames("source") %>% 
+    as.matrix()
+
+pheatmap(mtx, 
+         colorRampPalette(brewer.pal(n = 7, name = "OrRd"))(100))
+
+```
+```{r, fig.width=7, fig.height=7}
+mtx <- liana_trunc %>% 
+    filter (source == "COMP.MMP3.fb" | source == "NEGR1.VCAN.fb" | source == "VEC" | source == "LEC"| source == "Mural") %>%
+    filter (target == "COMP.MMP3.fb" | target == "NEGR1.VCAN.fb" | target == "VEC" | target == "LEC" | target == "Mural") %>%
+    select(source, target) %>% 
+    mutate(interaction = paste0(source, "_", target)) %>% 
+    group_by(interaction, .drop = FALSE) %>% 
+    count(.drop = FALSE) %>%
+    as.data.frame() %>%
+    separate_wider_delim("interaction", "_", names = c("source", "target")) %>% 
+    pivot_wider(names_from = "target", values_from = "n") %>% 
+    column_to_rownames("source") %>% 
+    as.matrix()
+
+pheatmap(mtx, 
+         colorRampPalette(brewer.pal(n = 7, name = "OrRd"))(100)) # source is rows, target is columns
+mtx
+```
+
+### Are there any interactions involving TGFB?
+
+```{r}
+liana_trunc %>% filter(receptor.complex == "TGFBR1")
+liana_trunc %>% filter(receptor.complex == "TGFBR2")
+liana_trunc %>% filter(receptor.complex == "TGFBR3")
+liana_trunc %>% filter(ligand.complex == "TGFB1")
+liana_trunc %>% filter(ligand.complex == "TGFB2")
+
+liana_trunc %>% filter(ligand.complex == "TGFB1" & receptor.complex == "TGFBR3")
+```
+Expression of genes in the TGFB-FLI1 pathway
+```{r}
+Idents(so.achilles) <- so.achilles$fibroblast_annotation
+DotPlot(so.fb, features = c("TGFB1", "TGFB2", "TGFBR1", "TGFBR2", "TGFBR3", "ABL1", 
+                               "PRKCD", "FLI1", "PCAF", "EP300", "CREBBP", "COL1A2", "COL1A1" ),
+        assay = "soupX")+
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+DotPlot(so.stromal, features = c("TGFB1", "TGFB2", "TGFBR1", "TGFBR2", "TGFBR3", "ABL1", 
+                               "PRKCD", "FLI1", "PCAF", "EP300", "CREBBP", "COL1A2", "COL1A1" ),
+        assay = "soupX")+
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+
+DotPlot(so.achilles, features = c("TGFB1", "TGFB2", "TGFBR1", "TGFBR2", "TGFBR3", "ABL1", 
+                               "PRKCD", "FLI1", "PCAF", "EP300", "CREBBP", "COL1A2", "COL1A1" ),
+        assay = "soupX")+
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+```
+Read in the genes in the Fli-1 regulon
+
+```{r, fig.width=15, fig.height=5}
+FLI1_regulon <- read.table("../Alina_SCENIC_Achilles/results/adult_achilles_regulons/FLI1(+).txt") %>% pull(V1)
+
+DotPlot(so.fb, features = FLI1_regulon,
+        assay = "soupX")+
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+```
+
+
+
+
+## Dotplots of individual cell types
+
+### Fibroblasts as the source cell type.
+
+
+```{r, fig.width=20, fig.height=14}
+
+liana_res %>%
+    filter(natmi.edge_specificity>0.1) %>% # add a specificity filter
+  liana_dotplot(source_groups = fibroblasts,
+                target_groups = fibroblasts,
+                ntop = 50)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+liana_res %>%
+    filter(natmi.edge_specificity>0.1) %>% # add a specificity filter
+  liana_dotplot(source_groups = fibroblasts,
+                target_groups = immune,
+                ntop = 50)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+liana_res %>%
+   filter(natmi.edge_specificity>0.1) %>% # add a specificity filter
+  liana_dotplot(source_groups = fibroblasts,
+                target_groups = stromal,
+                ntop = 20)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+liana_res %>%
+   filter(natmi.edge_specificity>0.05) %>% # add a specificity filter
+  liana_dotplot(source_groups = fibroblasts,
+                target_groups = muscle,
+                ntop = 50)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+```
+PRG4 & Chondrocytes
+> Will not focus on PRG4 fb or Chondrocytes as they are not a big player in the story. 
+> Could check literature for Chondrocyte-PRG4 interactions, PRG4-macrophages (PRG4-TLR2) and PRG4-granulcotyes (PRG4-CD44)
+> PRG4/chondrocytes also interact with LEC (FN1 - FLT4 for both)
+
+Immune cells
+> COMP.MMP3 have no interactions with immune cells (even though there are a few tissue-resident macrophages in the tendon, might come up with fine annotation?)  
+> NEGR1.VCAN1.fb also interact with macrophages (VCAN-TLR2)
+
+Schwann cells
+> NEGR1.ITGA6.fb NLGN1 --> Schwann cells NRXN1. Described in literature and see below. 
+
+COMP.THBS4.fb 
+> COMP.THBS4.fb interact with Adipocytes and LEC via THBS4-CD36. Check literature. 
+
+Muscle 
+> Might be better at fine annotation
+
+
+
+### Fibroblasts as the receiving cell type
+
+```{r, fig.width=20, fig.height=14}
+
+liana_res %>%
+    filter(natmi.edge_specificity>0.1) %>% # add a specificity filter
+  liana_dotplot(source_groups = immune,
+                target_groups = fibroblasts,
+                ntop = 50)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+liana_res %>%
+    filter(natmi.edge_specificity>0.1) %>% # add a specificity filter
+  liana_dotplot(source_groups = stromal,
+                target_groups = fibroblasts,
+                ntop = 50)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+liana_res %>%
+    filter(natmi.edge_specificity>0.05) %>% # add a specificity filter
+  liana_dotplot(source_groups = muscle,
+                target_groups = fibroblasts,
+                ntop = 50)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+```
+
+### Fibroblasts vs VEC
+
+```{r, fig.width=10, fig.height=10}
+liana_res %>%
+    filter(natmi.edge_specificity>0.1) %>% # add a specificity filter
+  liana_dotplot(source_groups = fibroblasts,
+                target_groups = "VEC",
+                ntop = 50)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+liana_res %>%
+    filter(natmi.edge_specificity>0.1) %>% # add a specificity filter
+  liana_dotplot(source_groups = "VEC",
+                target_groups = fibroblasts,
+                ntop = 50)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+liana_res %>%
+    filter(natmi.edge_specificity>0.1) %>% # add a specificity filter
+  liana_dotplot(source_groups = "NEGR1.COL15A1.fb",
+                target_groups = stromal,
+                ntop = 50)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+```
+
+> We see COL15A1 MMP2 --> VEC PECAM1 (in muscle presumably)
+> Also Fb SCARA5 --> VEC VWF
+
+Validate by Vln plots and check expression across microanatomy
+Fibroblasts: MMP2, SCARA5
+VEC: PECAM1, VWF
+
+```{r, fig.width=12, fig.height=4}
+p1 <- VlnPlot(so.fb, c("MMP2", "SCARA5"), assay = "soupX", pt.size = 0)
+p2 <- VlnPlot(so.stromal, c("PECAM1", "VWF"), assay = "soupX", pt.size = 0)
+plot_grid(p1, p2)
+
+p3 <- VlnPlot(so.fb, c("MMP2", "SCARA5"), assay = "soupX", group.by = "microanatomical_site", pt.size = 0)
+p4 <- VlnPlot(so.stromal, c("PECAM1", "VWF"), assay = "soupX", group.by = "microanatomical_site", pt.size = 0)
+plot_grid(p3, p4)
+```
+
+These interactions do seem to be fairly specific although the VEC are less in muscle and the COL15A1.fb are much more in muscle. 
+So conclusion is that COL15A1.fb in muscle support VEC via the MMP2-PECAM1 interaction, 
+and VCAN.fb suppor VEC via SCARA5-VWF. 
+Check literature about the biology of these. 
+Don't include the microanatomy Vln plots as they are a bit confusing. 
+
+MMP2 can cleave PECAM-1 on the endothelial cells, leading to e.g. diabetic retinopathy https://pmc.ncbi.nlm.nih.gov/articles/PMC6385619/#ack1
+MMP2 expression increases in tendon rupture: https://pubmed.ncbi.nlm.nih.gov/18425559/
+
+SCARA5 is a scavenger receptor for VWF. Well described, and SCARA5 is increased in fibrosis: https://www.biorxiv.org/content/10.1101/2025.01.14.632962v2.full
+
+
+
+
+### Fibroblasts vs LEC
+
+```{r, fig.width=20, fig.height=14}
+liana_res %>%
+    filter(natmi.edge_specificity>0.1) %>% # add a specificity filter
+  liana_dotplot(source_groups = fibroblasts,
+                target_groups = "LEC",
+                ntop = 50)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+liana_res %>%
+    filter(natmi.edge_specificity>0.1) %>% # add a specificity filter
+  liana_dotplot(source_groups = "LEC",
+                target_groups = fibroblasts,
+                ntop = 50)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+```
+
+> THBS4-CD36 
+> NRG3-EGFR (COL15A1.fb)
+
+Validate by Vln plots and check expression across microanatomy
+Fibroblasts: THBS4, EGFR
+VEC: CD36, NRG3
+
+```{r, fig.width=12, fig.height=4}
+p1 <- VlnPlot(so.fb, c("THBS4", "EGFR"), assay = "soupX")
+p2 <- VlnPlot(so.stromal, c("CD36", "NRG3"), assay = "soupX")
+plot_grid(p1, p2)
+
+p3 <- VlnPlot(so.fb, c("THBS4", "EGFR"), assay = "soupX", group.by = "microanatomical_site")
+p4 <- VlnPlot(so.stromal, c("CD36", "NRG3"), assay = "soupX", group.by = "microanatomical_site")
+plot_grid(p3, p4)
+```
+
+EGFR is not particularly specific to the COL15A1 fb but the NRG3 is definitely on in the LEC. However the expression is mostly in the muscle which makes sense. 
+EGFR (ERBb2) promotes human lymphatic endothelial cell migration and tube formation in vitro 
+https://pmc.ncbi.nlm.nih.gov/articles/PMC3745787/#S15 and it is known to bind to NRG3. 
+More study needed to determine the effects on the fibroblasts and the LEC. 
+
+THSB4-CD36 is described more in the VEC than LEC, indeed LEC are described as no expression CD36 in vivo. https://pmc.ncbi.nlm.nih.gov/articles/PMC3179333/
+So remains to be seen what is going on here. 
+
+### Fibroblasts vs Mural
+
+```{r, fig.width=20, fig.height=14}
+liana_res %>%
+    filter(natmi.edge_specificity>0.05) %>% # add a specificity filter
+  liana_dotplot(source_groups = fibroblasts,
+                target_groups = "Mural cells",
+                ntop = 50)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+liana_res %>%
+    filter(natmi.edge_specificity>0.05) %>% # add a specificity filter
+  liana_dotplot(source_groups = "Mural cells",
+                target_groups = fibroblasts,
+                ntop = 50)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+```
+
+Nothing worth looking into further I don't think. 
+
+
+### Fibroblasts vs Schwann cells
+
+```{r, fig.width=20, fig.height=14}
+liana_res %>%
+    filter(natmi.edge_specificity>0.1) %>% # add a specificity filter
+  liana_dotplot(source_groups = fibroblasts,
+                target_groups = "Schwann cells",
+                ntop = 50)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+liana_res %>%
+    filter(natmi.edge_specificity>0.1) %>% # add a specificity filter
+  liana_dotplot(source_groups = "Schwann cells",
+                target_groups = fibroblasts,
+                ntop = 50)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+```
+
+
+```{r, fig.width=12, fig.height=4}
+p1 <- VlnPlot(so.fb, c("NLGN1"), assay = "soupX")
+p2 <- VlnPlot(so.stromal, c("NRXN1"), assay = "soupX")
+plot_grid(p1, p2)
+
+p3 <- VlnPlot(so.fb, c("NLGN1"), assay = "soupX", group.by = "microanatomical_site")
+p4 <- VlnPlot(so.stromal, c("NRXN1"), assay = "soupX", group.by = "microanatomical_site")
+plot_grid(p3, p4)
+```
+
+This is a nicely specific interaction, but not in a particular microanatomy. 
+
+Previously documented interaction on fb/Schwann cells: 
+NRXN1/NLGN1 Neurexin 1 neuroligin 1 on fibroblasts and non-myelinated Schwann cells observed by ligand-receptor interaction analysis in Plexiform Neurofibroma. https://pmc.ncbi.nlm.nih.gov/articles/PMC10537467/
+
+
+
+
+
+### Adipocytes vs fibroblasts 
+
+
+```{r, fig.width=20, fig.height=14}
+liana_res %>%
+    filter(natmi.edge_specificity>0.05) %>% # add a specificity filter
+  liana_dotplot(source_groups = fibroblasts,
+                target_groups = "Adipocytes",
+                ntop = 50)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+liana_res %>%
+    filter(natmi.edge_specificity>0.05) %>% # add a specificity filter
+  liana_dotplot(source_groups = "Adipocytes",
+                target_groups = fibroblasts,
+                ntop = 50)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+```
+
+```{r, fig.width=12, fig.height=4}
+p1 <- VlnPlot(so.fb, c("LEPR", "LRP1", "CD44"), assay = "soupX", pt.size = 0)
+p2 <- VlnPlot(so.stromal, c("LEP", "LPL"), assay = "soupX")
+plot_grid(p1, p2)
+
+p3 <- VlnPlot(so.fb, c("NLGN1"), assay = "soupX", group.by = "microanatomical_site")
+p4 <- VlnPlot(so.stromal, c("NRXN1"), assay = "soupX", group.by = "microanatomical_site")
+plot_grid(p3, p4)
+```
+
+Not particularly striking!
+
+
+## Fine annotation analysis
+
+```{r}
+liana_res <- read.table("20250903_10-53_Liana.dir/Liana_aggregate_results_fine_annotation.txt", header = TRUE, sep = "\t")
+
+muscle <- c("Fast muscle", "Slow muscle", "Transitional muscle", "Satellite cells")
+stromal <- c("vSMC", "Venular VEC", "Arteriolar VEC", "LEC", "Adipocytes", "Pericytes", "Schwann cells")
+immune <- df %>% filter(fibroblast_annotation == "Macrophages" | 
+                           fibroblast_annotation == "T cells" | 
+                            fibroblast_annotation == "B cells" |
+                            fibroblast_annotation == "NK cells") %>% 
+    pull(fine_annotation_short)
+```
+
+### Heaptmap showing overview of all interactions
+
+```{r, fig.width=10, fig.height=10}
+liana_trunc <- liana_res %>%
+   # only keep interactions concordant between methods
+  filter(aggregate_rank <= 0.01) # note that these pvals are already corrected
+
+heat_freq(liana_trunc)
+
+```
+> Overall most interactions are Schwann cells, Adipocytes, LEC, PRG4.fb, COMP.THBS4 fb. Similar to broad annotation analysis. 
+
+Version of heatmap with clustering
+
+```{r, fig.width=10, fig.height=10}
+mtx <- liana_trunc %>% 
+    select(source, target) %>% 
+    mutate(interaction = paste0(source, "_", target)) %>% 
+    group_by(interaction, .drop = FALSE) %>% 
+    count(.drop = FALSE) %>%
+    as.data.frame() %>%
+    separate_wider_delim("interaction", "_", names = c("source", "target")) %>% 
+    pivot_wider(names_from = "target", values_from = "n") %>% 
+    column_to_rownames("source") %>% 
+    as.matrix()
+
+pheatmap(mtx, 
+         colorRampPalette(brewer.pal(n = 7, name = "OrRd"))(100))
+
+```
+
+
+## Dotplots of individual cell types
+
+### Fibroblasts as the source cell type.
+
+
+```{r, fig.width=20, fig.height=14}
+
+liana_res %>%
+  filter(natmi.edge_specificity>0.05) %>% # add a specificity filter
+  liana_dotplot(source_groups = fibroblasts,
+                target_groups = fibroblasts,
+                ntop = 50)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+liana_res %>%
+  filter(natmi.edge_specificity>0.05) %>% # add a specificity filter
+  liana_dotplot(source_groups = fibroblasts,
+                target_groups = immune,
+                ntop = 50)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+liana_res %>%
+  filter(natmi.edge_specificity>0.05) %>% # add a specificity filter
+  liana_dotplot(source_groups = fibroblasts,
+                target_groups = stromal,
+                ntop = 50)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+liana_res %>%
+  filter(natmi.edge_specificity>0.05) %>% # add a specificity filter
+  liana_dotplot(source_groups = fibroblasts,
+                target_groups = muscle,
+                ntop = 50)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+```
+
+### Fibroblasts as the receiving cell type
+
+```{r, fig.width=20, fig.height=14}
+
+liana_res %>%
+    filter(natmi.edge_specificity>0.05) %>% # add a specificity filter
+  liana_dotplot(source_groups = immune,
+                target_groups = fibroblasts,
+                ntop = 50)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+liana_res %>%
+   filter(natmi.edge_specificity>0.05) %>% # add a specificity filter
+  liana_dotplot(source_groups = stromal,
+                target_groups = fibroblasts,
+                ntop = 50)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+liana_res %>%
+  filter(natmi.edge_specificity>0.05) %>% # add a specificity filter
+  liana_dotplot(source_groups = muscle,
+                target_groups = fibroblasts,
+                ntop = 50)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+```
+
+## Figures for paper
+
+NEGR1.ITGA6.fb - Schwann cell interaction via NLGN1-NRXN1
+
+```{r}
+fibroblast.colours <- c("COMPhi MMP3hi fibroblasts" =  "#F9BA73",
+                        "COMPhi THBS4hi fibroblasts" = "#44BED0",
+                        "NEGR1hi COL15A1hi fibroblasts" = "#41A021" ,
+                        "NEGR1hi VCANhi fibroblasts" = "#CD2321",
+                        "NEGR1hi ITGA6hi fibroblasts" = "#C19C93",
+                        "PRG4hi fibroblasts"= "#67001F",
+                        "Chondrocytes" = "#C7C7C7"
+)
+
+fibroblast.colours.short <- fibroblast.colours
+names(fibroblast.colours.short) <- c("COMP.MMP3.fb",
+                                     "COMP.THBS4.fb",
+                                     "NEGR1.COL15A1.fb",
+                                     "NEGR1.VCAN.fb", 
+                                     "NEGR1.ITGA6.fb",
+                                     "PRG4.fb",
+                                     "Chondrocytes")
+fb.colours <- c("Chondrocytes" = "#C7C7C7", 
+                "COMP.MMP3.fb" =  "#F9BA73",
+                "NEGR1.COL15A1.fb" = "#41A021",
+                "NEGR1.ITGA6.fb" = "#C19C93",
+                "PRG4.fb"= "#67001F")
+
+stromal.colours <- c("LEC" = "#F2B6D2", 
+                     "Adipocytes" = "#DADB89",
+                     "VEC" = "#DC77C3",
+                     "Mural cells" = "#9FDF86",
+                     "Schwann cells" = "#F67E00"
+                     )
+
+```
+
+
+```{r, fig.width=10, fig.height=8}
+liana_res %>%
+    filter(natmi.edge_specificity>0.1) %>% # add a specificity filter
+  liana_dotplot(source_groups = "Schwann cells",
+                target_groups = fibroblasts,
+                ntop = 50)+ 
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1, colour = fb.colours))
+dir.create(paste0(directory, "/Plots/"))
+ggsave(paste0(directory, "/Plots/Schwann_fibroblast_dotplot.png"), 
+       width = 10, height = 8, bg = "white")
+```
+Violin plots of relevant genes
+
+```{r, fig.width=12, fig.height=5}
+p1 <- VlnPlot(so.fb, features = c("NLGN1"), assay = "soupX", cols = fibroblast.colours.short, pt.size = 0)
+#ggsave(paste0(directory, "/Plots/Vln_NLGN1_fibroblast.png"), p1, 
+#       width = 6, height = 5, bg = "white")
+p2 <- VlnPlot(so.stromal, features = "NRXN1", assay = "soupX", cols = stromal.colours, pt.size = 0)
+#ggsave(paste0(directory, "/Plots/Vln_NRXN1_stromal.png"), p2,
+#       width = 6, height = 5, bg = "white"), 
+plot_grid(p1, p2)
+#ggsave(paste0(directory, "/Plots/Vln_NRXN1_NLGN1.png"), 
+#       width = 12, height = 5, bg = "white")
+```
+
+
+
+```{r}
+sessionInfo()
+```
+

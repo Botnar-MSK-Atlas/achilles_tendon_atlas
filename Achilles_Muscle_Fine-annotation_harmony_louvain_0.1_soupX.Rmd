@@ -1,0 +1,1600 @@
+---
+title: "Muscle fine annotation"
+author: "Carla Cohen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+# Muscle annotation  
+A script to perform fine annotation of the muscle subsets in the Achilles data.
+
+This script follows the scVI integration of the whole Achilles dataset, subsetting of Muscle, then reintegration with scVI. 
+
+Preliminary analysis of the clustering and multiple resolutions was performed: 20250206_13-49_Subset_Muscle.dir
+This produced lists of DE genes and heatmaps. 
+
+Now we need to perform fine annotation to see whether the muscle subsets have any biological meaning. 
+
+This script is for Harmony louvain at res 0.1 after the more stringent soupX. 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+
+```{r}
+library(tidyverse)
+library(Seurat)
+library(cowplot)
+library(viridis)
+library(scales)
+library(readxl)
+library(scDotPlot)
+library(SingleCellExperiment)
+library(ggsci)
+library(data.table)
+library(clustree)
+
+# set the resolution for the script
+resolution <- 0.1
+clustering <- "louvain"
+
+# make a new output folder for each run, with the date & time in the directory name
+date <- Sys.Date() %>% str_replace_all("-", "")
+time <- format(Sys.time(), "%X") %>% str_replace_all(":", "-") %>%
+    str_sub(1, 5)
+directory <- paste0(date,"_", time, "_Fine_annotation_muscle_", resolution, ".dir")
+dir.create(directory, showWarnings = FALSE)
+dir.create(paste0(directory, "/Marker_dotplots/"))
+dir.create(paste0(directory, "/Annotation_figures/"))
+dir.create(paste0(directory, "/Subset_figures/"))
+
+
+# microanatomy colours
+Okabe_Ito <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#000000")
+ma.cols <-  c(Enth = Okabe_Ito[3], MB = Okabe_Ito[5], MTJ = Okabe_Ito[6], muscle = Okabe_Ito[7])
+```
+
+Read in the Achilles subset muscle object. 
+
+```{r}
+so.muscle <- readRDS("20250206_13-49_Subset_Muscle.dir/RDS_objects.dir/Achilles_Muscle_subset.rds")
+```
+
+
+# Resolution 0.1
+
+Annotation at resolution 0.1
+
+Select a resolution and set seurat clusters to that resolution 
+
+
+```{r} 
+so.muscle[["seurat_clusters"]] <- so.muscle[[paste0(clustering, "_soupX_snn_res.", resolution)]]
+Idents(so.muscle) <- so.muscle$seurat_clusters
+levels(Idents(so.muscle))
+```
+
+## Plot the UMAP at the chosen resolution  
+
+```{r, fig.width=8, fig.height=6}
+DimPlot(object = so.muscle, label = TRUE, reduction = "umap", shuffle = TRUE)+
+    ggtitle(paste0("Muscle UMAP at resolution ", resolution))
+ggsave(paste0(directory, "/Annotation_figures/Unlabelled_UMAP_", resolution, ".png"), 
+       width = 6, height = 5, bg = "white")
+```
+
+
+
+UMAP split by microanatomy
+
+```{r, fig.height=8, fig.width=8}
+p <- DimPlot(object = so.muscle, label = TRUE, reduction = "umap", shuffle = TRUE, 
+             split.by = "microanatomical_site", ncol = 2)+
+    ggtitle(paste0("Muscle UMAP split my microanatomy at resolution ", resolution))
+ggsave(paste0(directory, "/Annotation_figures/UMAP_by_microanatomy_", resolution, ".png"), 
+       width = 8, height = 8, bg = "white")
+p
+```
+
+> Take home from microanatomy
+
+Barely any muscle cells found in enth, not many in MB of tendon
+Cluster 8 appears specific to MTJ
+Cluster  seems specific to muscle. 
+All other clusters present in MTJ and muscle. 
+
+Bar chart of cell composition
+
+```{r}
+
+df <- so.muscle[[]] %>% select(seurat_clusters, microanatomical_site)
+
+#library(data.table)
+df <- data.table(df)
+df <- df[, .(COUNT = .N), by = names(df)]
+
+ggplot(df, aes(fill=microanatomical_site, y=COUNT, x=seurat_clusters)) + 
+    geom_bar(position="fill", stat="identity")+
+    theme_classic()+
+    scale_fill_manual(values = ma.cols)
+
+ggsave(paste0(directory, "/Annotation_figures/Cluster_fraction_microanatomy.png"), 
+       width = 8, height = 6, bg = "white")
+```
+
+
+### UMAP split by patient
+
+```{r, fig.height=8, fig.width=10}
+DimPlot(object = so.muscle, reduction = "umap", shuffle = TRUE, 
+             split.by = "patient", ncol = 3, label = TRUE)+
+    theme(panel.background = element_rect(colour = "black", linewidth = 1))+
+    ggtitle(paste0("Muscle UMAP split by patient at resolution ", resolution))
+ggsave(paste0(directory, "/Annotation_figures/UMAP_patient.png"), 
+       width = 10, height = 7, bg = "white")
+```
+
+### UMAP split by patient - each cluster separately
+
+```{r, fig.height=6, fig.width=8}
+# set the colours
+colours <- hue_pal()(length(levels(Idents(so.muscle))))
+names(colours) <- levels(Idents(so.muscle))
+
+for (cluster_id in levels(Idents(so.muscle))){
+    #print(cluster_id)
+    so.subset <- subset(so.muscle, idents = cluster_id)
+    DimPlot(so.subset, label = TRUE, reduction = "umap", shuffle = TRUE, 
+             split.by = "patient", ncol = 3, cols = colours)+
+    ggtitle(paste0("Muscle UMAP cluster ", cluster_id, " per patient res ", resolution))
+    ggsave(paste0(directory, "/Annotation_figures/UMAP_cluster_", cluster_id, "_by_patient_", resolution, ".png"), 
+       width = 8, height = 6, bg = "white")
+}
+
+
+```
+
+### What % of nuclei are from each patient?
+
+```{r}
+# make a df of patient percentages per cluster
+df <- so.muscle[[]] %>% select(seurat_clusters, patient)
+df$seurat_clusters <- as.character(df$seurat_clusters)
+df <- data.table(df)
+df <- df[, .(COUNT = .N), by = names(df)]
+df2 <- df %>% pivot_wider(names_from = patient, values_from = COUNT, values_fill = 0) %>% 
+    column_to_rownames(var = "seurat_clusters")%>%
+    mutate_at(vars(1:5), as.numeric) 
+
+df2$my_row_sum <- rowSums(df2)
+df2 <- df2 %>% mutate(across(where(is.numeric), ~ .x/my_row_sum*100)) # need to make columns numeric?
+df2$my_row_sum <- NULL
+df2$seurat_clusters <- rownames(df2)
+
+df2
+
+# plot as bar chart and heatmap
+df3 <- df2 %>% pivot_longer(1:5, names_to = "patient", values_to = "proportion")
+
+ggplot(df3, aes(fill=patient, y=proportion, x=seurat_clusters)) + 
+    geom_bar(position="stack", stat = "identity")+
+    theme_classic()
+ggsave(paste0(directory, "/Annotation_figures/Patient_proportion_barchart_", resolution, ".png"), 
+       width = 8, height = 6, bg = "white")
+
+ggplot(df3, aes(y=seurat_clusters, x=patient, fill = proportion))+
+    geom_tile()+
+    scale_fill_viridis()
+ggsave(paste0(directory, "/Annotation_figures/Patient_proportion_heatmap_", resolution, ".png"), 
+       width = 8, height = 6, bg = "white")
+
+
+```
+
+### How many cells are there per cluster?
+
+```{r}
+cell_numbers <- table(Idents(so.muscle)) %>% as.data.frame()
+colnames(cell_numbers) <- c("cluster", "frequency")
+cell_numbers
+```
+```{r}
+ggplot(cell_numbers, aes(x = cluster, y = frequency))+
+    geom_bar(stat = "identity")+
+    theme_cowplot()+
+    ggtitle("Number of cells per cluster")
+ggsave(paste0(directory, "/Annotation_figures/Number_cells_per_cluster_", resolution, ".png"), 
+       width = 6, height = 4, bg = "white")
+```
+Cluster 7 is <100 cells so bear that in mind
+ 
+### Visualise QC metrics 
+
+```{r, message = FALSE, fig.width=10, fig.height=20}
+p1 <- VlnPlot(so.muscle, features = "sum", assay = "RNA", pt.size = 0)+
+    scale_y_log10() +
+    scale_fill_viridis_d()+
+    theme(legend.position="none")+
+    theme_cowplot()+
+    ggtitle("nCounts")
+
+p2 <- VlnPlot(so.muscle, features = "detected", assay = "RNA", pt.size = 0)+
+    scale_y_log10() +
+    scale_fill_viridis_d()+
+    theme(legend.position="none")+
+    theme_cowplot()+
+    ggtitle("nFeatures")
+
+p3 <- VlnPlot(so.muscle, features = "subsets_mito_percent", assay = "RNA", pt.size = 0)+
+    scale_fill_viridis_d()+
+    theme(legend.position="none")+
+    theme_cowplot()+
+    ggtitle("Percent mitochondrial reads")
+
+p4 <- VlnPlot(so.muscle, features = "decontX_contamination", assay = "RNA")+
+    scale_fill_viridis_d()+
+    theme(legend.position="none")+
+    theme_cowplot()+
+    ggtitle("decontX score")
+
+p5 <- VlnPlot(so.muscle, features = "percent.ribo", assay = "RNA")+
+    scale_fill_viridis_d()+
+    theme(legend.position="none")+
+    theme_cowplot()+
+    ggtitle("Percent ribosomal")
+
+p6 <- VlnPlot(so.muscle, features = "soupX_fraction", assay = "RNA")+
+    scale_fill_viridis_d()+
+    theme(legend.position="none")+
+    theme_cowplot()+
+    ggtitle("SoupX fraction")
+
+p <- plot_grid(p1, p2, p3, p4, p5, p6, ncol = 1)
+
+ggsave(paste0(directory, "/Annotation_figures/QC_metrics_across_clusters.png"), 
+       p, width = 10, height = 18, bg = "white")
+p
+
+```
+Cluster 4 is highest for decontX
+
+
+Plot QC metrics on UMAP
+
+```{r, fig.height=12, fig.width=10, message = FALSE}
+p1<- FeaturePlot(so.muscle, features = "sum", reduction = "umap")+ggtitle ("nCounts")+
+    scale_color_continuous(type = "viridis", limits = c(0,10000))
+p2<- FeaturePlot(so.muscle, features = "detected", reduction = "umap") + ggtitle("nFeatures")+
+    scale_color_continuous(type = "viridis", limits = c(0,5000))
+p3<- FeaturePlot(so.muscle, features = "subsets_mito_percent", reduction = "umap") + ggtitle ("Percent mito reads")+
+    scale_color_continuous(type = "viridis")
+p4<- FeaturePlot(so.muscle, features = "decontX_contamination", reduction = "umap")+
+    scale_colour_gradientn(colours = viridis(256, option = "D"), name = "decontX score")+
+        ggtitle("decontX_contamination")
+p5 <- FeaturePlot(so.muscle, features = "percent.ribo", reduction = "umap")+
+    scale_colour_gradientn(colours = viridis(256, option = "D"), name = "percent.ribo")+
+        ggtitle("Percent ribosomal")
+p6 <- FeaturePlot(so.muscle, features = "soupX_fraction", reduction = "umap")+
+    scale_colour_gradientn(colours = viridis(256, option = "D"), name = "percent.ribo")+
+        ggtitle("SoupX fraction")
+p <- plot_grid(p1, p2, p3, p4, p5, p6, ncol = 2)
+
+ggsave(paste0(directory, "/Annotation_figures/QC_metrics_UMAP.png"), 
+       p, width = 10, height = 12, bg = "white")
+p
+
+```
+
+
+### FindMarkers
+
+Read in the markers calculated by the script "Muscle_subset_recluster.Rmd" from 20241121_09-50_Subset_Muscle.dir
+
+```{r, message = FALSE}
+markers <- read.table(paste0("20250206_13-49_Subset_Muscle.dir/Marker_lists/Markers_", clustering, "_soupX_snn_res.", resolution, ".txt"), 
+                sep = "\t")
+
+```
+
+
+### Plot groups of known markers
+
+These groups of markers are defined from the literature
+
+Define the plotting function
+
+```{r}
+plot_dotplot <- function (so, genes, category, resolution, fig_width = 7, fig_height = 7){
+    p <- DotPlot(so, 
+             features = genes,
+             assay = "soupX") + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle(paste0(category, " markers: resolution ", resolution)) + 
+    theme(plot.title = element_text(size = 14, face = "bold"))+
+    coord_flip()
+    
+    ggsave(paste0(directory, "/Marker_dotplots/", category, "_", resolution, ".png"), bg = "white")
+    p
+}
+
+```
+
+###  general markers
+
+```{r, fig.width=10, fig.height=12}
+general_markers <- c("COL1A1", "COL1A2", "COL3A1", "DCN",
+              "HMCN1", "NEGR1", "DCLK1", "KAZN", "BICC1", "PRICKLE1",
+              "CLU", "COMP", "MMP3", "NOVA1", "CILP", "FBLN1", "PRG4",
+              "F13A1", "CD163", "MRC1", "MSR1",
+              "PECAM1", "PTPRB", "FLT1", "VWF",
+              "NOTCH3", "PDGFRB", "MYO1B",
+              "TRDN", "TTN", "NEB", "TNNT1", "LGR5", "ATP2A2",
+              "PLIN1", "AQP7", "ADIPOQ",
+              "CD247", "SKAP1", "THEMIS",
+              "TNNT3", "MYH1", "MYH3",
+              "POSTN", "CSMD2", "ADAM12", "FN1", "CEMIP",
+              "HLA-DRA", "CD86", "CD74",
+              "ASPM", "DIAPH3", "TOP2A",
+              "MMRN1", "PROX1", "PKHD1L1",
+              "FCN1", "LYZ", "AOAH",
+              "BCL11A", "CUX2", "CLEC4C",
+              "TENM2", "PTCH2", "APOD", "CNTN4", "ABCA10",
+               "KIT", "CPA3", "IL18R1",
+              "AK5", "ACP5", "MMP9")
+plot_dotplot(so.muscle, general_markers, "general", resolution, fig_width = 10, fig_height = 12)
+```
+
+## Remove cluster 4 as soup
+
+```{r}
+so.muscle <- subset(so.muscle, idents = "4", invert = TRUE)
+DimPlot(so.muscle, reduction = "umap")
+```
+Is it then worth reclustering?
+
+```{r}
+so.muscle.subset <- so.muscle %>% 
+           NormalizeData() %>%
+           FindVariableFeatures() %>% 
+           ScaleData() %>% # scale all genes for plotting later
+           RunPCA()
+
+so.muscle.subset <- so.muscle.subset %>% 
+        FindNeighbors(dims = 1:20, reduction = "harmony") %>%
+        RunUMAP(dims = 1:20, reduction = "harmony")
+
+```
+
+
+```{r, fig.width=10, fig.height=10}
+so.muscle.subset <- FindClusters(so.muscle.subset, resolution = seq(0.1, 0.6, 0.1))
+clustree(so.muscle.subset, prefix = "soupX_snn_res.", node_colour = "sc3_stability") + 
+        ggtitle("Clustree")
+ggsave(paste0(directory, "/Subset_figures/Clustree_plot.png"), 
+       width = 10, height = 10, bg = "white")
+```
+
+Plot UMAP for each clustering resolution
+
+```{r, fig.width=10, fig.height=16}
+
+resolutionList <- grep("^soupX_snn_res", colnames(so.muscle.subset@meta.data), value = TRUE)
+
+plot_list <- list()
+
+for (resolution in resolutionList){
+      plot_list [[resolution]] <- DimPlot(object = so.muscle.subset, label = TRUE, reduction = "umap", 
+                                          group.by = resolution, shuffle = TRUE)
+      }
+
+title <- ggdraw() + draw_label("UMAPs of multiple clustering resolutions", fontface='bold', size = 24)
+p <- plot_grid(plotlist = plot_list, ncol = 2) 
+p <- plot_grid(title, p, ncol=1, rel_heights=c(0.05, 1))
+
+ggsave(paste0(directory, "/Subset_figures/UMAP_compare_resolutions.png"), 
+       width = 10, height = 16, bg = "white")
+
+p
+
+```
+
+Find markers at res 0.1
+
+```{r}
+Idents(so.muscle.subset) <- so.muscle.subset$soupX_snn_res.0.1
+markers_subset_0.1 <-  FindAllMarkers(so.muscle.subset,
+                           assay = "soupX",
+                           only.pos = TRUE, 
+                           min.pct = 0.25, 
+                           logfc.threshold = 0.25)
+top10_markers_subset_0.1 <- markers_subset_0.1 %>% 
+          group_by(cluster) %>% 
+          slice_max(n=10, order_by = abs(avg_log2FC))
+```
+
+```{r, fig.width=10, fig.height=10}
+
+DoHeatmap(so.muscle.subset, 
+                   features = unique(top10_markers_subset_0.1$gene),
+                   assay = "soupX") + 
+            scale_fill_viridis()
+dir.create(paste0(directory, "/Heatmaps"))
+ggsave(paste0(directory, "/Heatmaps/Top10markers_subset_0.1.png"), width = 12, height = 12)
+```
+
+### Visualise QC metrics 
+
+```{r, message = FALSE, fig.width=10, fig.height=20}
+p1 <- VlnPlot(so.muscle, features = "sum", assay = "RNA", pt.size = 0)+
+    scale_y_log10() +
+    scale_fill_viridis_d()+
+    theme(legend.position="none")+
+    theme_cowplot()+
+    ggtitle("nCounts")
+
+p2 <- VlnPlot(so.muscle, features = "detected", assay = "RNA", pt.size = 0)+
+    scale_y_log10() +
+    scale_fill_viridis_d()+
+    theme(legend.position="none")+
+    theme_cowplot()+
+    ggtitle("nFeatures")
+
+p3 <- VlnPlot(so.muscle, features = "subsets_mito_percent", assay = "RNA", pt.size = 0)+
+    scale_fill_viridis_d()+
+    theme(legend.position="none")+
+    theme_cowplot()+
+    ggtitle("Percent mitochondrial reads")
+
+p4 <- VlnPlot(so.muscle, features = "decontX_contamination", assay = "RNA")+
+    scale_fill_viridis_d()+
+    theme(legend.position="none")+
+    theme_cowplot()+
+    ggtitle("decontX score")
+
+p5 <- VlnPlot(so.muscle, features = "percent.ribo", assay = "RNA")+
+    scale_fill_viridis_d()+
+    theme(legend.position="none")+
+    theme_cowplot()+
+    ggtitle("Percent ribosomal")
+
+p6 <- VlnPlot(so.muscle, features = "soupX_fraction", assay = "RNA")+
+    scale_fill_viridis_d()+
+    theme(legend.position="none")+
+    theme_cowplot()+
+    ggtitle("SoupX fraction")
+
+p <- plot_grid(p1, p2, p3, p4, p5, p6, ncol = 1)
+
+ggsave(paste0(directory, "/Annotation_figures/QC_metrics_across_clusters.png"), 
+       p, width = 10, height = 18, bg = "white")
+p
+
+```
+
+Find markers at res 0.2
+
+```{r}
+Idents(so.muscle.subset) <- so.muscle.subset$soupX_snn_res.0.2
+markers_subset_0.2 <-  FindAllMarkers(so.muscle.subset,
+                           assay = "soupX",
+                           only.pos = TRUE, 
+                           min.pct = 0.25, 
+                           logfc.threshold = 0.25)
+top10_markers_subset_0.2 <- markers_subset_0.2 %>% 
+          group_by(cluster) %>% 
+          slice_max(n=10, order_by = abs(avg_log2FC))
+```
+
+```{r, fig.width=14, fig.height=10}
+
+ DoHeatmap(so.muscle.subset, 
+                   features = unique(top10_markers_subset_0.2$gene),
+                   assay = "soupX") + 
+            scale_fill_viridis()
+ggsave(paste0(directory, "/Heatmaps/Top10markers_subset_0.2.png"), width = 12, height = 12)
+```
+
+Happy to go ahead with the new subsetted version so replace the subset back to the normal so. 
+
+```{r}
+so.muscle <- so.muscle.subset
+so.muscle$soupX_snn_res.0.2_subset <- so.muscle.subset$soupX_snn_res.0.2
+so.muscle$soupX_snn_res.0.1_subset <- so.muscle.subset$soupX_snn_res.0.1
+
+# proceed at res 0.1
+resolution <- 0.1
+Idents(so.muscle) <- so.muscle$soupX_snn_res.0.1_subset
+rm(so.muscle.subset)
+```
+
+### General dotplot
+
+```{r, fig.width=10, fig.height=12}
+plot_dotplot(so.muscle, general_markers, "general", resolution, fig_width = 10, fig_height = 12)
+```
+
+
+### Muscle cells  
+Muscle cell marker dotplot
+
+```{r, fig.height=20, fig.width=12}
+plot_muscle_markers <- function (so, resolution){
+    p1 <- DotPlot(so, 
+             features =c("TRDN", "DES", "ACTN2"),
+             assay = "soupX") + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle("General Muscle markers") + 
+    coord_flip()
+    
+    p2 <- DotPlot(so, 
+             features =c("TNNC2", "TNNI2", "TNNT3", "ACTN3", "HOMER1", "KCNQ5", "MYH1", "MYH3", "MYLK4", "MYBPC2"),
+             assay = "soupX") + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle("Fast twitch markers") + 
+    coord_flip()
+    
+    p3 <- DotPlot(so, 
+             features =c("COL22A1", "ADAMTSL1", "CPM", "CSMD1", "FRAS1", "PZP", "RALYL", "SAMD5", "SORBS2", "SPAG16"),
+             assay = "soupX") + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle("Transitional markers") + 
+    coord_flip()
+    
+    p4 <- DotPlot(so, 
+             features =c("TNNC1", "TNNI1", "TNNT1", "ATP2A2", "CCR3", "LGR5", "MYH7", "MYH7B", "NEK10", "TECRL"),
+             assay = "soupX") + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle("Slow twitch markers") + 
+    coord_flip()
+    
+    p5 <- DotPlot(so, 
+             features =c("ACTA2", "MYH11", "TAGLN", "CRIP2", "MYL9", "RTL8C", "RERGL", "PLAC9", "MFAP4", "LGALS3BP"),
+             assay = "soupX") + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle("Smooth muscle markers") + 
+    coord_flip()
+    
+    p6 <- DotPlot(so, 
+             features =c("PAX7", "CALCR", "CDH4", "CLCN5", "CTNND2", "GREM1"),
+             assay = "soupX") + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle("Satellite cells markers") + 
+    coord_flip()
+        
+ 
+    #add an overall title and arrange the graphs on one page
+    title <- ggdraw() + draw_label(paste0("Muscle cell markers at resolution ", resolution), fontface='bold', size = 16)
+    p <- plot_grid(p1, p2, p3, p4, p5, p6, nrow = 3)
+    p <- plot_grid(title, p, ncol=1, rel_heights=c(0.05, 1))
+    
+    p
+}
+
+plot_muscle_markers(so.muscle, resolution)
+ggsave(paste0(directory, "/Marker_dotplots/Muscle_markers.png"), width = 12, height = 20, bg = "white")
+
+```
+
+
+
+Where are the muscle markers?
+
+```{r, fig.width=12, fig.height=6}
+FeaturePlot(so.muscle, reduction = "umap", features = c("TNNT1", "TNNI1", "TNNC1", "TRDN", "DES", "ACTN2", "ATP2A2", "MYH7"), 
+            ncol = 4)
+```
+
+
+## 7. Karlsen et al 2023 
+Distinct myofibre domains of the human myotendinous junction revealed by single-nucleus RNA sequencing 
+https://journals.biologists.com/jcs/article/136/8/jcs260913/307168/Distinct-myofibre-domains-of-the-human
+
+Broad annotation
+
+satellite cells (PAX7), 
+fibroblasts (COL1A2, COL3A1, FAP, DCN, TCF7L2 and PDGFRA), 
+tenocytes (COMP and MKX), 
+smooth muscle cells (ACTA2, MYH11 and RGS5), 
+endothelial cells (VWF and PECAM1) 
+immune cells (CD163 and F13A1)
+Myonuclei all express TTN. 
+
+```{r}
+mtj_markers_broad <- c("PAX7", # satellite
+                       "COL1A2","COL3A1", "FAP","DCN","TCF7L2", "PDGFRA", # fibroblasts
+                       "COMP", "MKX", # tenocytes
+                       "ACTA2", "MYH11", "RGS5", # smooth muscle
+                       "VWF", "PECAM1", # endothelial
+                       "CD163", "F13A1",  # immune
+                       "TTN") # myonuclei
+
+plot_dotplot(so.muscle, mtj_markers_broad, "Karlsen_MTJ_broad_markers", resolution)
+```
+
+> Not very helpful, satellite cells cluster 5
+
+
+MTJ myonuclei top genes: SORBS2, BICD1, COL22A1, NCAM1, MED12L and ABLIM1
+Four MTJ myonuclei subclusters distinguished using MYH1, MYH2, MYH7, COL22A1 and NCAM1. 
+MTJsub1 MYH1hi, MYH2hi, NCAM1hi = closest to cluster 4
+MTJsub2 COL22A1hi, NCAM1hi = cluster 3
+MTJsub3 MYH7hi, NCAM1hi =  cluster 3
+MTJsub4 MYH1hi, MYH2hi, COL22A1hi, NCAM1hi = not seen here
+
+```{r}
+MTJ_myonuclei <- c("SORBS2", "BICD1", "MED12L", "ABLIM1", 
+                   "MYH1", "MYH2", "MYH7", "COL22A1", "NCAM1")
+plot_dotplot(so.muscle, MTJ_myonuclei, "Karlsen_MTJ_myonuclei", resolution)
+```
+
+Check with additional genes listed in Table S4
+Either all genes or top 20 genes by log2FC in sample 1. 
+
+
+```{r}
+MTJ_Sub1 <- c("NCAM1", "LINC02008", "SORBS2", "ABLIM1", "CSMD1", "LAMA2", "RBM20", "SORBS1", "GBE1", "ATRNL1", "PRR16", "EGF", "EIF4G3", "RCAN2")
+MTJ_Sub2 <- c("SPAG16", "MEG8", "MYH15", "SORBS2", "FRAS1", "ADAMTSL1", "BICD1", "LAMA2", "RBFOX1", "CSMD1", 
+              "NCAM1", "ABLIM1", "CLSTN2", "RCAN2", "OPCML", "THSD7B", "RASSF3", "PGM5", "PELI1", "ABI3BP")
+MTJ_Sub3 <- c("ABLIM1", "BICD1", "CLSTN2", "LRMDA", "NCAM1", "DKK2", "ADAMTSL1", "INPP4B", "FHOD3", "LAMA2", "RCAN2", "SORBS1", "MYOM3",
+              "P4HA1", "SGCD", "PLPP1", "RBM20", "PGM5")
+MTJ_Sub4 <- c("MEG8", "CSMD1", "SORBS2", "BICD1", "LAMA2", "NCAM1", "ABLIM1", "RBFOX1", "FRAS1", "CPM", "GBE1", "RCAN2", "SORBS1", "HSPG2", "RBM20",
+              "COL22A1", "FREM2", "LINC02008", "CLSTN2", "PELI1")
+
+plot_dotplot(so.muscle,MTJ_Sub1, "MTJ_Sub1", resolution)
+plot_dotplot(so.muscle,MTJ_Sub2, "MTJ_Sub2", resolution)
+plot_dotplot(so.muscle,MTJ_Sub3, "MTJ_Sub3", resolution)
+plot_dotplot(so.muscle,MTJ_Sub4, "MTJ_Sub4", resolution)
+```
+
+> These markers are pretty much all present in cluster 2 (Transitional)
+
+
+
+# Muscle datasets  
+How do these clusters compare with cells seen in other muscle datasets?
+
+## 1. Perez et al 2022
+https://pmc.ncbi.nlm.nih.gov/articles/PMC9792217/
+
+Single nuclei profiling identifies cell specific markers of skeletal muscle aging, frailty, and senescence
+
+TO DO 
+
+## 2. Kedlian et al 2024
+Human skeletal muscle aging atlas
+https://www.nature.com/articles/s43587-024-00613-3/figures/14
+
+
+Look at the myonuclei markers from table S1. 
+
+
+```{r}
+kedlian_tables1 <- read.table("Files.dir/Kedlian_Table_S1.txt", header = TRUE, sep = "\t")
+
+# identify unique cell types
+kedlian_cells <- colnames(kedlian_tables1)[grep("_names", colnames(kedlian_tables1))] %>% 
+    str_remove("_names")
+
+data <- list()
+# for each cell type
+for (celltype in kedlian_cells){
+    print(celltype)
+
+    # select columns for that cell type
+    data[[celltype]] <- kedlian_tables1 %>% dplyr::select(starts_with(paste0(celltype, "_")))
+    # add a column of the cell type
+    data[[celltype]]$cell_type <- celltype
+    colnames(data[[celltype]]) <- c("gene", "pvals", "pvals_adj", "logfoldchanges", "cell_type")
+}
+
+kedlian_tables1 <- bind_rows(data)
+```
+
+Create a list of top 50 DE genes for each cluster from Kedlian et al and do a dotplot
+
+```{r, fig.width=24, fig.height=20, message=FALSE, warning=FALSE}
+
+plot_list <- list()
+kedlian_top50 <- list()
+for (i in unique(kedlian_tables1$cell_type)){
+    print(i)
+    kedlian_top50[[i]] <- kedlian_tables1 %>% 
+        group_by(cell_type) %>% 
+        slice_max(n=50, order_by = abs(logfoldchanges)) %>% 
+        filter(cell_type == i) %>%
+        pull (gene)
+    plot_list[[i]] <- plot_dotplot(so.muscle, kedlian_top50[[i]], paste0(i, "_50"), resolution)
+    
+}
+    
+# Plot all dotplots together
+plot_grid(plotlist = plot_list, ncol = 3)
+ggsave(paste0(directory, "/Marker_dotplots/Kedlian_myonuclei_top50.png"), width = 20, height = 20, bg = "white")
+```
+> Not super helpful because MFI and II markers are in clusters 0-3. 
+Cluster 5, 6, 7 & 8 not many Myofiber markers. 
+
+
+## 3. Lai et al 2024
+https://www.nature.com/articles/s41586-024-07348-6
+
+Multimodal cell atlas of the ageing human skeletal muscle
+
+Identified several subsets of myonuclei within the broader type I, type II delineation. 
+NB this will also be useful for subclustering the myonuclei later. 
+
+### Broad annotation markers 
+
+Extended Data Fig. 1
+
+FAP: PTGDS, SCN7A, MYOC
+Fibroblast-like: FMOD, PDPN,
+Type I: MYH7 TNNT1, TNNI1, MYH7B, 
+TypeII: MYH1, MYH2, TNNT3, TNNI2
+
+```{r}
+lai_broad <- c("PTGDS", "SCN7A", "MYOC", 
+               "FMOD", "PDPN", 
+               "MYH7", "TNNT1", "TNNI1", "MYH7B",
+               "MYH1", "MYH2", "TNNT3", "TNNI2")
+
+plot_dotplot(so.muscle, lai_broad, "Lai_broad_annotation", resolution)
+```
+> Type I myonuclei: cluster 0
+> Type II myonuclei: cluster 4 + 2
+
+
+### Myonuclei markers
+
+Markers from literature:  
+Type I myonuclei (slow): TNNT1	MYH7	MYH7B	TNNC1	TNNI1	ATP2A2
+Type II myonuclei (fast): TNNT3	MYH1	MYH2	TNNC2	TNNI2	ATP2A1
+
+```{r}
+lai_myonuclei <- c("TNNT1", "MYH7", "MYH7B", "TNNC1", "TNNI1", "ATP2A2",
+                   "TNNT3", "MYH1", "MYH2", "TNNC2", "TNNI2", "ATP2A1")
+plot_dotplot(so.muscle, lai_myonuclei, "Lai_myonuclei", resolution)
+```
+> As above
+
+Upload data from Table S10e which is DE genes from the different myonuclei subsets. 
+See figure 2C and Extended data Figure 5. 
+
+```{r}
+lai_tables10e <- read.table("Files.dir/Lai_Table_S10e.txt", sep = "\t", header = TRUE)
+```
+Plot the top 50 markers
+
+```{r, fig.width=20, fig.height=20, warning=FALSE, message = FALSE}
+lai_top50 <- list()
+plot_list <- list()
+
+for (i in unique(lai_tables10e$Cell.type)){
+    print(i)
+    lai_top50[[i]] <- lai_tables10e %>% 
+        group_by(Cell.type) %>% 
+        slice_max(n=50, order_by = abs(Average.log2FC)) %>% 
+        filter(Cell.type == i) %>%
+        pull (Gene)
+    plot_list[[i]] <- plot_dotplot(so.muscle, lai_top50[[i]], paste0(i, "_50"), resolution)
+    
+}
+# Plot all dotplots together
+#plot_grid(plotlist = plot_list, ncol = 4)
+#ggsave(paste0(directory, "/Marker_dotplots/Lai_myonuclei_top50.png"), width = 20, height = 20, bg = "white")
+
+```
+
+
+```{r, fig.height=16, fig.width=14}
+# Plot type I and type II, MTJ and NMJ
+plot_grid(plot_list[["Type I"]], plot_list[["Type II"]], 
+          plot_list[["MTJ"]], plot_list[["NMJ"]])
+ggsave(paste0(directory, "/Marker_dotplots/Lai_myonuclei_typeIandII_mtj_nmj_top50.png"), width = 14, height = 16, bg = "white")
+
+
+```
+
+> Type I myonuclei: cluster 0
+> Type II myonuclei: cluster 3
+> MTJ myonuclei: cluster 2
+> NMJ myonuclei: not here any more
+
+
+```{r, fig.height=16, fig.width=20}
+# Plot type II subtypes
+plot_grid(plot_list[["DCLK1+ (II)"]], plot_list[["ENOX1+ (II)"]], plot_list[["ID1+ (II)"]], 
+          plot_list[["SAA2+ (II)"]], plot_list[["TNNT2+ (II)"]])
+ggsave(paste0(directory, "/Marker_dotplots/Lai_myonuclei_typeII_subtypes_top50.png"), width = 20, height = 16, bg = "white")
+```
+> Cluster 1 matches with both DCLK1+ and SAA2+ subtypes of fast-twitch
+> Cluster 3 matches ENOX1+ subtype
+
+
+```{r, fig.height=16, fig.width=14}
+# Plot type I subtypes
+plot_grid(plot_list[["DCLK1+ (I)"]], plot_list[["ID1+ (I)"]], 
+          plot_list[["SAA2+ (I)"]], plot_list[["TNNT2+ (I)"]])
+ggsave(paste0(directory, "/Marker_dotplots/Lai_myonuclei_typeI_subtypes_top50.png"), width = 14, height = 16, bg = "white")
+```
+> no great matches
+
+
+A module score was calculated for each myofibre type based on the expression of the following markers: 
+type I (TNNT1, MYH7, MYH7B, TNNC1, TNNI1, and ATP2A2), 
+type II (TNNT3, MYH1, MYH2, TNNC2, TNNI2, ATP2A1), 
+type IIA (MYH2, ANKRD2, NDUFA8, MYOM3, CASQ2, HSPB6, RDH11, AIMP1) 
+type IIX (MYH1, MYLK2, ACTN3, MYBPC2, PCYOX1, CAPZA1, CD38, PDLIM7, COBL, TMEM159, HNRNPA1, TFRC). 
+
+On the basis of these scores, myonuclei were first classified as type I, type II or hybrid I/IIa; thereafter, type II myonuclei were further classified as type IIA, type IIX or hybrid IIA/IIX. A residual amount of myonuclei remained unclassified due to the lower expression of these genes.
+
+```{r}
+module_type_I <- c("TNNT1", "MYH7", "MYH7B", "TNNC1", "TNNI1", "ATP2A2")
+module_type_II <- c("TNNT3", "MYH1", "MYH2", "TNNC2", "TNNI2", "ATP2A1")
+module_type_IIA <- c("MYH2", "ANKRD2", "NDUFA8", "MYOM3", "CASQ2", "HSPB6", "RDH11", "AIMP1")
+module_type_IIX <- c("MYH1", "MYLK2", "ACTN3", "MYBPC2", "PCYOX1", "CAPZA1", "CD38", "PDLIM7", "COBL", "TMEM159", "HNRNPA1", "TFRC")
+
+plot_dotplot(so.muscle, module_type_I, "type I", resolution)
+plot_dotplot(so.muscle, module_type_II, "type II", resolution)
+plot_dotplot(so.muscle, module_type_IIA, "type IIA", resolution)
+plot_dotplot(so.muscle, module_type_IIX, "type IIX", resolution)
+
+
+```
+> only confirms type I and Type II
+TypeIIA and TypeIIX not detected by these gene sets. 
+
+Load in the modules of genes from figure 2e/Table S4a. 
+Module 9 is specific for MTJ myocytes. 
+
+```{r}
+lai_tables4a <- read.table("Files.dir/Lai_Table_S4a.txt", sep = "\t", header = TRUE)
+```
+
+Plot the top 50 markers (by Z score) for each gene module  
+Unsure why not all the modules are present. 
+Module 1 = Type I and TNNT2+(1)
+Module 2 & 3 TYPII and ENOX1+ (II)
+Module 6 = DCLK1+(1)
+Module 7 ID1+ (I and II), NMJ
+Module 8 TNNT2+ (I) and ID1+ (I)
+Module 9 MTJ
+Module 11 SAA2+ (I and II)
+Module 12 NMJ
+
+
+```{r, fig.width=20, fig.height=28, warning=FALSE, message = FALSE}
+lai_top50 <- list()
+plot_list <- list()
+for (i in unique(lai_tables4a$Module)){
+    print(i)
+    lai_top50[[i]] <- lai_tables4a %>% 
+        group_by(Module) %>% 
+        slice_max(n=50, order_by = Z) %>% 
+        filter(Module == i) %>%
+        pull (Gene)
+    plot_list[[i]] <- plot_dotplot(so.muscle, lai_top50[[i]], paste0(i, "_50"), resolution)
+}
+# Plot all dotplots together
+plot_grid(plotlist = plot_list, ncol = 3)
+ggsave(paste0(directory, "/Marker_dotplots/Lai_modules_top50.png"), width = 20, height = 28, bg = "white")
+
+```
+Confirms 
+0 - type I
+1 - type II
+2 - MTJ
+3 - type II
+
+
+Using markers from Extended data fig 5
+
+```{r, fig.width = 8, fig.height=6}
+DotPlot(so.muscle, 
+        features = c("TNNT1", "MYH7", "MYH7B", # type I
+                     "TNNT3", "MYH1", "MYH2",# type 2
+                     "DCLK1", "PDE4B", "GAB2", "LBP",
+                     "ENOX1", 
+                     "ID1", 
+                     "SAA2", 
+                     "TNNT2", 
+                     "UCHL1", "NOS1", # MTJ
+                     "TCF7L1", "PHLDB2"), #NMJ
+        assay = "soupX") + 
+    scale_colour_gradient2(low = "#f7f3f2", mid = "#f2390a", high = "#6e1e0a", midpoint = 1)+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, size = 16))+
+    theme(axis.text.y = element_text(size = 16))+
+    theme(axis.title.x = element_blank())+
+    theme(axis.title.y = element_blank())
+
+ggsave(paste0(directory, "/Marker_dotplots/Aging_atlas_dotplot.png"), width = 8, height = 6, bg = "white")
+        
+        
+```
+
+No more informative than above. 
+No sign of ID1, SAA2, TNNT2 but these are pretty terrible markers in the paper
+
+### Plot top 50 genes of stromal cells
+
+Broad annotation Fig 4m/Table S10d
+
+```{r}
+lai_stromal_broad <- read.table("Files.dir/Lai_Table_S10d.txt", sep = "\t", header = TRUE)
+```
+
+Plot the top 50 markers
+
+```{r, fig.width=20, fig.height=20, warning=FALSE, message = FALSE}
+lai_top50 <- list()
+plot_list <- list()
+for (i in unique(lai_stromal_broad$Cell.type)){
+    print(i)
+    lai_top50[[i]] <- lai_stromal_broad %>% 
+        group_by(Cell.type) %>% 
+        slice_max(n=50, order_by = abs(Average.log2FC)) %>% 
+        filter(Cell.type == i) %>%
+        pull (Gene)
+    plot_list[[i]] <- plot_dotplot(so.muscle, lai_top50[[i]], paste0(i, "_50"), resolution)
+}
+# Plot all dotplots together
+plot_grid(plotlist = plot_list, ncol = 3)
+ggsave(paste0(directory, "/Marker_dotplots/Lai_stromal_broad_top50.png"), width = 20, height = 20, bg = "white")
+
+```
+
+Markers from Ext data fig 10 for FAP plus general markers PTGDS, SCN7A, MYOC
+
+```{r, fig.width=9, fig.height=4}
+fap_markers <- c("PTGDS", "SCN7A", "MYOC", "ACTA2", "DPP4", "CD55", "LOXL1", "SLC25A6", "CD99", "MIF", "CCL2", "CXCL14", 
+                "GPC3", "C7","HHIP", "SLC1A7", "DEPP1", "MME", "CACNA1C", "SOX5", "RUNX2", "TNC", "THY1", "FMOD", "SCG2", "PTX3")
+
+DotPlot(so.muscle, assay = "soupX", features = fap_markers)+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+
+
+### Fibro-adipogenic progenitors
+
+Cellxgene markers for Fibro-adipogenic progenitors (FAP)
+
+```{r}
+cellxgene_FAP <- c("EBF1", "TSHZ2", "LAMA2", "ABCA9", "RBMS3", "ACA10", 
+                   "ABCA6", "FBN1", "DCLK1", "ZFPM2", "LAMA4", "PID1", 
+                   "DCN", "DLC1", "ZEB1", "MIR99AHG", "TNXB", "NEGR1", "ABCA8", "BNC2")
+
+plot_dotplot(so.muscle, cellxgene_FAP, "Fibro-adipogenic_progenitors", resolution)
+```
+FAP markers from literature
+
+Platelet-derived growth factor receptor A (PDGFRα) is a tyrosine kinase receptor that is used as the canonical marker for FAP isolation
+ACTA2 - smooth muscle actin, appears as the FAP develop into myofibroblasts
+
+
+
+## Fibroblasts
+
+```{r}
+fibroblast_markers <- c("COL1A1", "COL1A2", "COL3A1", "COL3A2",  "DCN", "PRG4", "PDGFRA", "ACTA2")
+plot_dotplot(so.muscle, fibroblast_markers, "Fibroblasts", resolution)
+
+```
+
+### Immune markers
+
+```{r, fig.width=12, fig.height=12}
+plot_immune_dotplots <- function (so, resolution){
+    
+    p1 <- DotPlot(so, 
+             features =c("PTPRC", "CD247","IL7R", "CCR7", "THEMIS"),
+             assay = "soupX") + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle("T cell markers") + 
+    coord_flip()
+    
+    p2 <- DotPlot(so, 
+             features =c("MS4A1", "CD37", "BLNK", "CD38", "CD79A", "CD79B", "SDC1", "CD27", "CD78"),
+             assay = "soupX") + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle("B cell markers") + 
+    coord_flip()
+    
+    p3 <- DotPlot(so, 
+             features =c("CD14", "CD163", "CD163L1", "MERTK", "MRC1", "MSR1"),
+             assay = "soupX") + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle("Macrophage markers") + 
+    coord_flip()
+    
+    p4 <- DotPlot(so, 
+             features =c("CD300A", "IRF7", "CLEC4C", "IL3RA", "NRP1", "HLA-DQA1", "CD74", "GPAT3", "CIITA", "HLA-DRB1"),
+             assay = "soupX") + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle("Dendritic cell markers") + 
+    coord_flip()
+    
+    p5 <- DotPlot(so, 
+             features =c("KIT", "CDK15", "MS4A2", "IL18R1", "HPGD"),
+             assay = "soupX") + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle("Granulocyte_markers") + 
+    coord_flip()
+    
+    #add an overall title and arrange the graphs on one page
+    title <- ggdraw() + draw_label(paste0("Immune cell markers at resolution ", resolution), fontface='bold', size = 16)
+    p <- plot_grid(p1, p2, p3, p4, p5, ncol = 2)
+    p <- plot_grid(title, p, ncol=1, rel_heights=c(0.05, 1))
+    
+    p
+
+    
+}
+
+plot_immune_dotplots(so.muscle, resolution)
+```
+```{r}
+ggsave(paste0(directory, "/Marker_dotplots/dotplot_immune_cell_markers_0.2.png"), 
+       width = 12, height = 12, 
+       bg = "white")
+```
+
+
+Although there are some immune genes, watch out for the % expressed, it's very low.
+
+```{r, fig.width=12, fig.height=16}
+plot_dotplots <- function (so, resolution){
+    
+    p1 <- DotPlot(so, 
+             features =c("COL1A1", "COL1A2", "COL3A1", "COL3A2",  "DCN", "PRG4"),
+             assay = "soupX") + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle("Fibroblast markers") + 
+    coord_flip()
+    
+    p2 <- DotPlot(so,
+             features =c("PECAM1", "PTPRB", "VWF", "ADGRL4", "CD34", "CDH5", "FLT1", "NOTCH4", "TEK"),
+             assay = "soupX")  + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle("Vascular endothelial markers") + coord_flip()
+    
+    p3 <- DotPlot(so,
+             features =c("EPHB4", "FLT4", "KDR", "LYVE1", "MMRN1", "NRG3", "PKHD1L1", "PROX1"),
+             assay = "soupX")  + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle("Lymphatic endothelium markers") + coord_flip()
+    
+    p4 <- DotPlot(so, 
+             features =c("TRDN", "DES", "ACTN2", "TNNC2", "TNNI2", "TNNT3", "TNNC1", "TNNI1", "TNNT1"),
+             assay = "soupX")  + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle("Skeletal muscle markers") + 
+    coord_flip()
+    
+    p5 <- DotPlot(so, 
+             features =c("ABCA8", "COL15A1", "CD55", "DCLK1", "ELN", "FBN1", "FBLN1", 
+                         "FBLN2", "FBLN5", "KCND2", "NEGR1", "NOVA1", "PDGFRA", "VIT"),
+             assay = "soupX")  + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle("Mural cell markers") + 
+    coord_flip()
+    
+   p6 <- DotPlot(so, 
+             features =c("GPAM", "TMEM132C", "PLIN1", "PLIN4", "AQP7", "ADIPOQ", "PDE3B", "FABP4", "LIPE"),
+             assay = "soupX") + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle("Adipocyte markers") + 
+    coord_flip()
+    
+    p7 <- DotPlot(so, 
+             features =c("NTRK3", "TENM2", "KANK4", "SLC2A1", "SLC22A3", "CLDN1"),
+             assay = "soupX") + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle("Nerve-like cell markers") + 
+    coord_flip()
+    
+    p8 <- DotPlot(so, 
+             features =c("PAX7", "CALCR", "CDH4", "CLCN5", "CTNND2", "GREM1"),
+             assay = "soupX") + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle("Satellite cell markers") + 
+    coord_flip()
+
+    #add an overall title and arrange the graphs on one page
+    title <- ggdraw() + draw_label(paste0("Cell markers at resolution ", resolution), fontface='bold', size = 16)
+    p <- plot_grid(p1, p2, p3, p4, p5, p6, p7, p8, ncol = 2)
+    p <- plot_grid(title, p, ncol=1, rel_heights=c(0.05, 1))
+    
+    p
+    
+    
+}
+
+plot_dotplots(so.muscle, resolution)
+ggsave(paste0(directory, "/Marker_dotplots/dotplot_general_cell_markers_0.2.png"), 
+       width = 12, height = 12, 
+       bg = "white")
+```
+## Nervous system cells markers
+
+Hamstring nerve (from dotplot)
+SCL2A1, SLC22A3, TENM2, PDZRN4, FRMD4B
+
+General nerve
+"IL1RAPL2", "XKR4", "NRXN1", "CADM2"
+
+Quads (from dotplot)
+"BMS1P14", "ANKRD30Bl", "RBFOX1", "LINC00486"
+
+```{r}
+nerve_markers <- c("SCL2A1, SLC22A3, TENM2, PDZRN4, FRMD4B", 
+                   "IL1RAPL2", "XKR4", "NRXN1", "CADM2", 
+                   "BMS1P14", "ANKRD30Bl", "RBFOX1", "LINC00486")
+
+plot_dotplot(so.muscle, nerve_markers, "nerve_markers", resolution)
+```
+
+
+
+# Summary of markers
+
+Use this code to get a list of markers for each cluster
+
+```{r}
+
+cluster_markers <- list()
+for (i in levels(Idents(so.muscle))){
+    cluster_markers[[i]] <- markers_subset_0.1 %>% 
+        group_by(cluster) %>% 
+        slice_max(n=20, order_by = abs(avg_log2FC)) %>% 
+        filter(cluster == i) %>% pull (gene)
+}
+cluster_markers
+
+write.csv(t(as.data.frame(cluster_markers)), paste0(directory, "/Marker_list_for_cellxgene.csv"), quote = FALSE)
+
+```
+Dotplot of cluster 5
+
+```{r}
+plot_dotplot(so.muscle, cluster_markers[["5"]], "Cluster_5_markers", resolution)
+```
+
+
+
+0 - slow twitch (type I) 
+1 - fast twitch (type II) DCLK1+ cells (Lai)
+2 - transitional, also have markers from MTJ myonuclei (Karlsen, Lai)
+3 - fast twitch (type II)
+4 - satellite cells (PAX7)
+5 - unknown
+
+Hamstring muscle markers dotplot
+
+```{r, fig.width=10, fig.height=5}
+hamstring_muscle_markers <- list("general" = c("TRDN", "DES", "ACTN2"), 
+                                 "fast-twitch" = c("TNNC2", "TNNI2", "TNNT3", "ACTN3", "HOMER1", "KCNQ5", "MYH1", "MYH3", "MYLK4", "MYBPC2"), 
+                                 "transitional" = c("COL22A1", "ADAMTSL1", "CPM", "CSMD1", "FRAS1", "PZP", "RALYL", "SAMD5", "SORBS2", "SPAG16"),
+                                 "slow-twitch" = c("TNNC1", "TNNI1", "TNNT1", "ATP2A2", "CCR3", "LGR5", "MYH7", "MYH7B", "NEK10", "TECRL"))
+annotation_dotplot <- function (so, genes, category, fig_width = 7, fig_height = 7){
+    p <- DotPlot(so, features = genes, assay = "soupX") + 
+    scale_colour_gradient2(low = "#f7f3f2", mid = "#f2390a", high = "#6e1e0a", midpoint = 1)+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, size = 16))+
+    theme(axis.text.y = element_text(size = 16))+
+    theme(axis.title.x = element_blank())+
+    theme(axis.title.y = element_blank())+
+    ggtitle(category)
+    
+    ggsave(paste0(directory, "/Marker_dotplots/", category," .png"), bg = "white", 
+           width = fig_width, height = fig_height)
+    p
+}
+annotation_dotplot(so.muscle, hamstring_muscle_markers, "hamstring_muscle")
+```
+
+
+## How to name the clusters?
+
+Do FeaturePlots and DotPlots of the top 9 markers for each cluster
+
+```{r, fig.width=10, fig.height=10}
+dir.create(paste0(directory, "/Feature_Plots"))
+dir.create(paste0(directory, "/Top_20_Dotplots"))
+for (i in levels(Idents(so.muscle))){
+    FeaturePlot(so.muscle, cluster_markers[[i]][1:9], reduction = "umap", label = TRUE, repel = TRUE)
+    ggsave(paste0(directory, "/Feature_Plots/Top9_cluster_", i, ".png"), width = 10, height = 10, bg = "white")
+    
+    DotPlot(so.muscle, 
+             features = cluster_markers[[i]],
+             assay = "soupX") + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle(paste0("Top 20 markers cluster", i)) + 
+    theme(plot.title = element_text(size = 14, face = "bold"))+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+coord_flip()
+    ggsave(paste0(directory, "/Top_20_Dotplots/Top20_cluster_", i, ".png"), width = 7, height =7, bg = "white")
+}
+```
+
+
+## Top markers dotplot with dendogram
+
+scDotPlot
+https://bioconductor.org/packages/devel/bioc/vignettes/scDotPlot/inst/doc/scDotPlot.html
+
+Use the sce syntax. Seurat version not working, probably as am using seurat v4 not 5. 
+```{r}
+
+# convert to sce
+sce <- as.SingleCellExperiment(so.muscle)
+
+# select the top 10 markers for each cluster
+features_10 <- markers_subset_0.1 %>% group_by(cluster) %>%
+    dplyr::slice(1:10) %>%
+    dplyr::select(cluster, gene)
+
+# remove duplicated rows
+features_10 <- features_10[!duplicated(features_10$gene),]
+
+# make features into a vector
+features_10 <- features_10 %>%
+    deframe()
+
+# select the top 5 markers for each cluster
+features_5 <- markers_subset_0.1 %>% group_by(cluster) %>%
+    dplyr::slice(1:5) %>%
+    dplyr::select(cluster, gene)
+
+# remove duplicated rows
+features_5 <- features_5[!duplicated(features_5$gene),]
+
+# make features into a vector
+features_5 <- features_5 %>%
+    deframe()
+
+# select the top 20 markers for each cluster
+features_20 <- markers_subset_0.1 %>% group_by(cluster) %>%
+    dplyr::slice(1:20) %>%
+    dplyr::select(cluster, gene)
+
+# remove duplicated rows
+features_20 <- features_20[!duplicated(features_20$gene),]
+
+# make features into a vector
+features_20 <- features_20 %>%
+    deframe()
+
+# add marker genes to row data
+rowData(sce)$Marker_10 <- features_10[match(rownames(sce), features_10)] %>% 
+    names()
+rowData(sce)$Marker_5 <- features_5[match(rownames(sce), features_5)] %>% 
+    names()
+rowData(sce)$Marker_20 <- features_20[match(rownames(sce), features_20)] %>% 
+    names()
+
+```
+
+Plot 10 most variable genes 
+
+```{r, fig.width=8, fig.height=12}
+ident_name <- "soupX_snn_res.0.1_subset"
+n_colours <- nrow(unique(so.muscle[[ident_name]]))
+
+# plot the log counts
+sce %>%
+    scDotPlot(features = features_10,
+              group = ident_name,
+              groupAnno = ident_name,
+              featureAnno = "Marker_10",
+              groupLegends = FALSE,
+              annoColors = list(ident_name = pal_d3()(n_colours),
+                                "Marker_10" = pal_d3()(n_colours)),
+              annoWidth = 0.02)
+ggsave(paste0(directory, "/Annotation_figures/Dotplot_with_dendogram_logcounts_10.png"), width = 8, height = 12, bg = "white")
+
+# plot the scaled data
+sce %>%
+    scDotPlot(features = features_10,
+              scale = TRUE,
+              group = ident_name,
+              groupAnno = ident_name,
+              featureAnno = "Marker_10",
+              groupLegends = FALSE,
+              annoColors = list(ident_name = pal_d3()(n_colours),
+                                "Marker_10" = pal_d3()(n_colours)),
+              annoWidth = 0.02)
+ggsave(paste0(directory, "/Annotation_figures/Dotplot_with_dendogram_scaled_10.png"), width = 8, height = 12, bg = "white")
+
+```
+5 is very small and unknown. Put it back in with the fast-twitch. 
+Not sure I can make a meaninful subset of the fast-twitch here. 
+
+
+## Identities
+Do some preliminary naming and merge idents 0 and 1
+
+0 - slow twitch (type I) 
+1 - fast twitch (type II) DCLK1+ cells (Lai)
+2 - transitional, also have markers from MTJ myonuclei (Karlsen, Lai)
+3 - fast twitch (type II)
+4 - satellite cells (PAX7)
+5 - unknown, most likely fast-twitch
+
+
+```{r}
+so.muscle <- RenameIdents(so.muscle, 
+                          `0` = "Slow-twitch",
+                          `1` = "Fast-twitch",
+                          `2` = "MTJ-specific",
+                          `3` = "Fast-twitch", 
+                          `4` = "Satellite cells",
+                          `5` = "Fast-twitch")
+so.muscle$fine_annotation_muscle <- Idents(so.muscle)
+DimPlot(so.muscle, reduction = "umap")
+ggsave(paste0(directory, "/Annotation_figures/UMAP_semi-annotated.png"), width = 6, height = 4, bg = "white")
+
+```
+Find Markers for these clusters
+
+```{r}
+markers <- FindAllMarkers(so.muscle, 
+                          assay = "soupX",
+                           only.pos = TRUE, 
+                           min.pct = 0.25, 
+                           logfc.threshold = 0.25)
+dir.create(paste0(directory, "/Marker_lists"))
+write.table(markers, 
+            paste0(directory, "/Marker_lists/Markers_annotated.txt"), 
+                quote = FALSE, sep = "\t")
+```
+
+
+
+Heatmap with new annotations
+
+```{r, fig.width=10, fig.height=10}
+
+markers_top10 <- markers %>% group_by(cluster) %>% 
+        slice_max(n=10, order_by = abs(avg_log2FC)) %>% 
+        pull (gene)
+
+DoHeatmap(so.muscle, markers_top10, assay = "soupX") + 
+            scale_fill_viridis()
+
+```
+
+## Top markers dotplot with dendogram
+
+
+```{r}
+
+# convert to sce
+sce <- as.SingleCellExperiment(so.muscle)
+
+# select the top 10 markers for each cluster
+features_10 <- markers %>% group_by(cluster) %>%
+    dplyr::slice(1:10) %>%
+    dplyr::select(cluster, gene)
+
+# remove duplicated rows
+features_10 <- features_10[!duplicated(features_10$gene),]
+
+# make features into a vector
+features_10 <- features_10 %>%
+    deframe()
+
+# select the top 5 markers for each cluster
+features_5 <- markers %>% group_by(cluster) %>%
+    dplyr::slice(1:5) %>%
+    dplyr::select(cluster, gene)
+
+# remove duplicated rows
+features_5 <- features_5[!duplicated(features_5$gene),]
+
+# make features into a vector
+features_5 <- features_5 %>%
+    deframe()
+
+# select the top 20 markers for each cluster
+features_20 <- markers %>% group_by(cluster) %>%
+    dplyr::slice(1:20) %>%
+    dplyr::select(cluster, gene)
+
+# remove duplicated rows
+features_20 <- features_20[!duplicated(features_20$gene),]
+
+# make features into a vector
+features_20 <- features_20 %>%
+    deframe()
+
+# add marker genes to row data
+rowData(sce)$Marker_10 <- features_10[match(rownames(sce), features_10)] %>% 
+    names()
+rowData(sce)$Marker_5 <- features_5[match(rownames(sce), features_5)] %>% 
+    names()
+rowData(sce)$Marker_20 <- features_5[match(rownames(sce), features_20)] %>% 
+    names()
+
+```
+
+Plot 10 most variable genes 
+
+```{r, fig.width=8, fig.height=12}
+
+ident_name <- "fine_annotation_muscle"
+n_colours <- nrow(unique(so.muscle[[ident_name]]))
+
+# plot the log counts
+sce %>%
+    scDotPlot(features = features_10,
+              group = ident_name,
+              groupAnno = ident_name,
+              featureAnno = "Marker_10",
+              groupLegends = FALSE,
+              annoColors = list(ident_name = pal_d3()(n_colours),
+                                "Marker_10" = pal_d3()(n_colours)),
+              annoWidth = 0.02)
+ggsave(paste0(directory, "/Annotation_figures/Dotplot_with_dendogram_logcounts_10.png"), width = 8, height = 12, bg = "white")
+
+# plot the scaled data
+sce %>%
+    scDotPlot(features = features_10,
+              scale = TRUE,
+              group = ident_name,
+              groupAnno = ident_name,
+              featureAnno = "Marker_10",
+              groupLegends = FALSE,
+              annoColors = list(ident_name = pal_d3()(n_colours),
+                                "Marker_10" = pal_d3()(n_colours)),
+              annoWidth = 0.02)
+ggsave(paste0(directory, "/Annotation_figures/Dotplot_with_dendogram_scaled_10.png"), width = 8, height = 12, bg = "white")
+
+```
+
+```{r, fig.width=8, fig.height=8}
+
+# plot the log counts
+sce %>%
+    scDotPlot(features = features_5,
+              group = ident_name,
+              groupAnno = ident_name,
+              featureAnno = "Marker_5",
+              groupLegends = FALSE,
+              annoColors = list(ident_name = pal_d3()(n_colours),
+                                "Marker_5" = pal_d3()(n_colours)),
+              annoWidth = 0.02)
+ggsave(paste0(directory, "/Annotation_figures/Dotplot_with_dendogram_logcounts_5.png"), width = 8, height = 8, bg = "white")
+
+# plot the scaled data
+sce %>%
+    scDotPlot(features = features_5,
+              scale = TRUE,
+              group = ident_name,
+              groupAnno = ident_name,
+              featureAnno = "Marker_5",
+              groupLegends = FALSE,
+              annoColors = list(ident_name = pal_d3()(n_colours),
+                                "Marker_5" = pal_d3()(n_colours)),
+              annoWidth = 0.02)
+ggsave(paste0(directory, "/Annotation_figures/Dotplot_with_dendogram_scaled_5.png"), width = 8, height = 8, bg = "white")
+
+```
+# Summary of markers
+
+Use this code to get a list of markers for each cluster
+
+```{r}
+
+cluster_markers <- list()
+for (i in levels(Idents(so.muscle))){
+    cluster_markers[[i]] <- markers %>% 
+        group_by(cluster) %>% 
+        slice_max(n=20, order_by = abs(avg_log2FC)) %>% 
+        filter(cluster == i) %>% pull (gene)
+}
+cluster_markers
+
+write.csv(t(as.data.frame(cluster_markers)), paste0(directory, "/Marker_list_for_cellxgene_annotated.csv"), quote = FALSE)
+
+```
+
+UMAP split by microanatomy
+
+```{r, fig.height=8, fig.width=8}
+p <- DimPlot(object = so.muscle, reduction = "umap", shuffle = TRUE, 
+             split.by = "microanatomical_site", ncol = 2)+
+    ggtitle(paste0("Muscle UMAP split my microanatomy at resolution ", resolution))
+ggsave(paste0(directory, "/Annotation_figures/UMAP_by_microanatomy_annotated_", resolution, ".png"), 
+       width = 8, height = 8, bg = "white")
+p
+```
+Bar chart of cell composition
+
+```{r}
+
+df <- so.muscle[[]] %>% select(fine_annotation_muscle, microanatomical_site)
+
+#library(data.table)
+df <- data.table(df)
+df <- df[, .(COUNT = .N), by = names(df)]
+
+ggplot(df, aes(fill=microanatomical_site, y=COUNT, x=fine_annotation_muscle)) + 
+    geom_bar(position="fill", stat="identity")+
+    theme_classic()+
+    scale_fill_manual(values = ma.cols)
+
+ggsave(paste0(directory, "/Annotation_figures/Cluster_fraction_microanatomy.png"), 
+       width = 8, height = 6, bg = "white")
+```
+
+
+## How to name the clusters?
+
+Do FeaturePlots and DotPlots of the top 9 markers for each cluster
+
+```{r, fig.width=10, fig.height=10}
+dir.create(paste0(directory, "/Feature_Plots"))
+dir.create(paste0(directory, "/Top_20_Dotplots"))
+for (i in levels(Idents(so.muscle))){
+    FeaturePlot(so.muscle, cluster_markers[[i]][1:9], reduction = "umap")
+    ggsave(paste0(directory, "/Feature_Plots/Top9_cluster_", i, ".png"), width = 10, height = 10, bg = "white")
+    
+    DotPlot(so.muscle, 
+             features = cluster_markers[[i]],
+             assay = "soupX") + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle(paste0("Top 20 markers cluster", i)) + 
+    theme(plot.title = element_text(size = 14, face = "bold"))+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+coord_flip()
+    ggsave(paste0(directory, "/Top_20_Dotplots/Top20_cluster_", i, ".png"), width = 7, height =7, bg = "white")
+}
+```
+
+
+
+### Summary dotplot
+
+Literature markers
+Slow TNNC1, TNNI1, TNNT1, ATPA2
+Fast TNNC2, TNNI2, TNNT3, MYH1
+Transitional COL22A1, ADAMTSL1, CPM, SORBS2
+Satellite cells PAX7, CALCR, CDH4, CLCN5
+Neurons: NME7, LHFPL3, RASGRF1, ASTN2, PHYHIPL.
+NMJ CHRNA1, CHRNG, MUSK, COLQ, PCDHG, NCAM1 
+
+
+
+
+```{r, fig.width=12, fig.height=6}
+literature_features <- c("TNNC1", "TNNI1", "TNNT1", "ATPA2","MYH7", 
+                         "TNNC2", "TNNI2", "TNNT3", "ATP2A1", "MYH1",
+                         "COL22A1", "ADAMTSL1", "CPM", "SORBS2", "NCAM1", "ABLIM1", "BICD1",
+                         "PAX7", "CALCR", "CDH4", "CLCN5")
+
+DotPlot(so.muscle, features = literature_features, assay = "soupX") + 
+    scale_colour_gradient2(low = "#f7f3f2", mid = "#f2390a", high = "#6e1e0a", midpoint = 1)+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, size = 16))+
+    theme(axis.text.y = element_text(size = 16))+
+    theme(axis.title.x = element_blank())+
+    theme(axis.title.y = element_blank())
+
+ggsave(paste0(directory, "/Marker_dotplots/Literature_markers.png"), width = 12, height = 6, bg = "white")
+
+```
+
+```{r, fig.width=10, fig.height=7}
+DimPlot(so.muscle, reduction = "umap.scvi", label = TRUE, repel = TRUE)
+ggsave(paste0(directory, "/Annotation_figures/UMAP_annotated_original_dims.png"), width = 6, height = 4, bg = "white")
+```
+
+
+# Save the object
+
+```{r}
+dir.create(paste0(directory, "/RDS_objects.dir"))
+saveRDS(so.muscle, paste0(directory, "/RDS_objects.dir/Achilles_muscle_subset.rds"))
+```
+
+```{r}
+sessionInfo()
+```
+

@@ -5,17 +5,18 @@ date: "`r Sys.Date()`"
 output: html_document
 ---
 # Stromal annotation  
-A script to perform fine annotation of the adipocyte/VEC/LEC/mural subsets in the Achilles data.
+A script to perform fine annotation of the adipocyte/VEC/LEC/mural/nerve subsets in the Achilles data.
 
 This script follows the scVI integration of the whole Achilles dataset, subsetting, then reintegration with scVI 
 
-Preliminary analysis of the clustering and multiple resolutions was performed: 20250114_15-14_Subset_Adipocyte.VEC.LEC.Mural.dir
+Preliminary analysis of the clustering and multiple resolutions was performed: 20250205_13-50_Subset_Stromal.dir
+
 This produced lists of DE genes and heatmaps. 
 
 Now we need to perform fine annotation to see whether the subsets have any biological meaning. 
 
-This script is for scVI louvain at res 0.5
-AFter the highly ambient genes have been removed. 
+This script is for scVI louvain at res 0.9
+After the more stringent soupX filter.
 
 
 ```{r setup, include=FALSE}
@@ -38,7 +39,7 @@ library(clustree)
 library(scuttle)
 
 # set the resolution for the script
-resolution <- 0.5
+resolution <- 0.9
 clustering <- "louvain"
 
 # make a new output folder for each run, with the date & time in the directory name
@@ -60,15 +61,15 @@ ma.cols <-  c(Enth = Okabe_Ito[3], MB = Okabe_Ito[5], MTJ = Okabe_Ito[6], muscle
 Read in the Achilles subset  object. 
 
 ```{r}
-so.stromal <- readRDS("20250114_15-14_Subset_Adipocyte.VEC.LEC.Mural.dir/RDS_objects.dir/Achilles_Adipocyte.VEC.LEC.Mural_subset.rds")
+so.stromal <- readRDS("20250205_13-50_Subset_Stromal.dir/RDS_objects.dir/Achilles_Stromal_subset.rds")
 ```
 
 
 
 
-# Resolution 0.5
+# Resolution 0.9
 
-Annotation at resolution 0.5
+Annotation at resolution 0.9
 
 Select a resolution and set seurat clusters to that resolution 
 
@@ -91,6 +92,14 @@ ggsave(paste0(directory, "/Annotation_figures/Unlabelled_UMAP_", resolution, ".p
 ```
 
 
+Plot the broad annotation
+```{r, fig.width=8, fig.height=6}
+DimPlot(object = so.stromal, label = TRUE, reduction = "umap", shuffle = TRUE, group.by = "broad_annotation")+
+    ggtitle(paste0("UMAP at resolution ", resolution))
+ggsave(paste0(directory, "/Annotation_figures/Broad_annotation_UMAP.png"), 
+       width = 6, height = 5, bg = "white")
+```
+
 
 
 UMAP split by microanatomy
@@ -107,7 +116,7 @@ p
 > Take home from microanatomy
 
 Hard to tell if real differences or just sampling. 
-Clusters 8 and 9 appear to be only in MTJ/muscle
+Clusters 7, 10 and 14 appear to be only in MTJ/muscle
 
 Bar chart of cell composition
 
@@ -170,7 +179,7 @@ df <- data.table(df)
 df <- df[, .(COUNT = .N), by = names(df)]
 df2 <- df %>% pivot_wider(names_from = patient, values_from = COUNT, values_fill = 0) %>% 
     column_to_rownames(var = "seurat_clusters")%>%
-    mutate_at(vars(1:6), as.numeric) 
+    mutate_at(vars(1:5), as.numeric) 
 df2$my_row_sum <- rowSums(df2)
 df2 <- df2 %>% mutate(across(where(is.numeric), ~ .x/my_row_sum*100))
 df2$my_row_sum <- NULL
@@ -179,7 +188,7 @@ df2$seurat_clusters <- rownames(df2)
 df2
 
 # plot as bar chart and heatmap
-df3 <- df2 %>% pivot_longer(1:6, names_to = "patient", values_to = "proportion")
+df3 <- df2 %>% pivot_longer(1:5, names_to = "patient", values_to = "proportion")
 
 ggplot(df3, aes(fill=patient, y=proportion, x=seurat_clusters)) + 
     geom_bar(position="stack", stat = "identity")+
@@ -196,7 +205,7 @@ ggsave(paste0(directory, "/Annotation_figures/Patient_proportion_heatmap_", reso
 
 ```
 
-Cluster 8, 9 and 12 are skewed towards individual patients, proceed with caution. But none > 80%
+Cluster 6&14 are skewed towards individual patients, proceed with caution. But none > 80%
 
 
 ### How many cells are there per cluster?
@@ -265,9 +274,7 @@ p
 
 ```
 
-Cluster 10 is high for ribosomal reads and ambient - likely Soup
-Cluster 7 is also high for ambient. 
-Cluster 5 is bimodal, could filter out the highly contaminating cells or subcluster further?
+Cluster 6 and 11 are likely ambient. 
 
 Plot QC metrics on UMAP
 
@@ -295,12 +302,14 @@ p
 
 ```
 
+
+
 ### Markers
 
-Read in the markers calculated by the script "Subset_recluster.Rmd" from 20250108_14-06_Subset_Adipocyte.VEC.LEC.Mural.dir 
+Read in the markers calculated by the script "Subset_recluster.Rmd" from 20250205_13-50_Subset_Stromal.dir
 
 ```{r, message = FALSE}
-markers <- read.table(paste0("20250114_15-14_Subset_Adipocyte.VEC.LEC.Mural.dir/Marker_lists/Markers_", clustering, "_X_scVI_snn_res.", resolution, ".txt"), 
+markers <- read.table(paste0("20250205_13-50_Subset_Stromal.dir/Marker_lists/Markers_", clustering, "_X_scVI_snn_res.", resolution, ".txt"), 
                 sep = "\t")
 
 ```
@@ -357,10 +366,10 @@ plot_dotplot(so.stromal, general_markers, "general", resolution, fig_width = 10,
 
 
 
-## Remove cluster 7 and 10 as soup
+## Remove cluster 6 and 11 as soup
 
 ```{r}
-so.stromal.subset <- subset(so.stromal, idents = c("7", "10"), invert = TRUE)
+so.stromal.subset <- subset(so.stromal, idents = c("6", "11"), invert = TRUE)
 DimPlot(so.stromal.subset, reduction = "umap")
 ```
 Is it then worth reclustering?
@@ -391,6 +400,8 @@ ggsave(paste0(directory, "/Subset_figures/Clustree_plot_subset.png"),
        width = 10, height = 10, bg = "white")
 ```
 
+Clustree looks a lot better!
+
 Plot UMAP for each clustering resolution
 
 ```{r, fig.width=10, fig.height=16}
@@ -415,40 +426,61 @@ p
 
 ```
 
-Find markers at res 0.4
+Find markers at res 0.5
 
 ```{r}
-Idents(so.stromal.subset) <- so.stromal.subset$X_scVI_snn_res.0.4
-markers_subset_0.4 <-  FindAllMarkers(so.stromal.subset,
+Idents(so.stromal.subset) <- so.stromal.subset$X_scVI_snn_res.0.5
+markers_subset_0.5 <-  FindAllMarkers(so.stromal.subset,
                            assay = "soupX",
                            only.pos = TRUE, 
                            min.pct = 0.25, 
                            logfc.threshold = 0.25)
-top10_markers_subset_0.4 <- markers_subset_0.4 %>% 
+top10_markers_subset_0.5 <- markers_subset_0.5 %>% 
           group_by(cluster) %>% 
           slice_max(n=10, order_by = abs(avg_log2FC))
 ```
+
+
 ```{r, fig.width=10, fig.height=10}
 
 DoHeatmap(so.stromal.subset, 
-                   features = unique(top10_markers_subset_0.4$gene),
+                   features = unique(top10_markers_subset_0.5$gene),
                    assay = "soupX") + 
             scale_fill_viridis()
 dir.create(paste0(directory, "/Heatmaps"))
-ggsave(paste0(directory, "/Heatmaps/Top10markers_subset_0.4.png"), width = 12, height = 12)
+ggsave(paste0(directory, "/Heatmaps/Top10markers_subset_0.5.png"), width = 12, height = 12)
 ```
 
 
 Happy to go ahead with the new subsetted version so replace the subset back to the normal Seurat Object.
 
-Try with resolution 0.4 first, might end up merging some clusters though.
+Try with resolution 0.5 first, might end up merging some clusters though.
 
 ```{r}
 so.stromal <- so.stromal.subset
 rm(so.stromal.subset)
-resolution <- 0.4
-so.stromal$soupX_snn_res.0.4_subset <- Idents(so.stromal)
+resolution <- 0.5
+so.stromal$soupX_snn_res.0.5_subset <- Idents(so.stromal)
 ```
+
+Plot the UMAP at the chosen resolution  
+
+```{r, fig.width=8, fig.height=6}
+DimPlot(object = so.stromal, label = TRUE, reduction = "umap", shuffle = TRUE)+
+    ggtitle(paste0("UMAP at resolution ", resolution))
+ggsave(paste0(directory, "/Annotation_figures/Unlabelled_UMAP_", resolution, ".png"), 
+       width = 6, height = 5, bg = "white")
+```
+
+
+Plot the broad annotation
+```{r, fig.width=8, fig.height=6}
+DimPlot(object = so.stromal, label = TRUE, reduction = "umap", shuffle = TRUE, group.by = "broad_annotation")+
+    ggtitle(paste0("UMAP at resolution ", resolution))
+ggsave(paste0(directory, "/Annotation_figures/Broad_annotation_UMAP.png"), 
+       width = 6, height = 5, bg = "white")
+```
+
 
 
 ### UMAP split by patient
@@ -470,7 +502,7 @@ df <- data.table(df)
 df <- df[, .(COUNT = .N), by = names(df)]
 df2 <- df %>% pivot_wider(names_from = patient, values_from = COUNT, values_fill = 0) %>% 
     column_to_rownames(var = "seurat_clusters")%>%
-    mutate_at(vars(1:6), as.numeric) 
+    mutate_at(vars(1:5), as.numeric) 
 df2$my_row_sum <- rowSums(df2)
 df2 <- df2 %>% mutate(across(where(is.numeric), ~ .x/my_row_sum*100))
 df2$my_row_sum <- NULL
@@ -479,7 +511,7 @@ df2$seurat_clusters <- rownames(df2)
 df2
 
 # plot as bar chart and heatmap
-df3 <- df2 %>% pivot_longer(1:6, names_to = "patient", values_to = "proportion")
+df3 <- df2 %>% pivot_longer(1:5, names_to = "patient", values_to = "proportion")
 
 ggplot(df3, aes(fill=patient, y=proportion, x=seurat_clusters)) + 
     geom_bar(position="stack", stat = "identity")+
@@ -496,7 +528,7 @@ ggsave(paste0(directory, "/Annotation_figures/Patient_proportion_heatmap_subset"
 
 ```
 No one cluster is >80% from one patient
-Cluster 7 is predominantly MSK1556
+Cluster 6 and 10 are predominantly MSK1556
 
 ### Visualise QC metrics 
 
@@ -593,7 +625,7 @@ Use the sce syntax. Seurat version not working, probably as am using seurat v4 n
 sce <- as.SingleCellExperiment(so.stromal)
 
 # select the top 10 markers for each cluster
-features_10 <- markers_subset_0.4 %>% group_by(cluster) %>%
+features_10 <- markers_subset_0.5 %>% group_by(cluster) %>%
     dplyr::slice(1:10) %>%
     dplyr::select(cluster, gene)
 
@@ -605,7 +637,7 @@ features_10 <- features_10 %>%
     deframe()
 
 # select the top 5 markers for each cluster
-features_5 <- markers_subset_0.4 %>% group_by(cluster) %>%
+features_5 <- markers_subset_0.5 %>% group_by(cluster) %>%
     dplyr::slice(1:5) %>%
     dplyr::select(cluster, gene)
 
@@ -617,7 +649,7 @@ features_5 <- features_5 %>%
     deframe()
 
 # select the top 20 markers for each cluster
-features_20 <- markers_subset_0.4 %>% group_by(cluster) %>%
+features_20 <- markers_subset_0.5 %>% group_by(cluster) %>%
     dplyr::slice(1:20) %>%
     dplyr::select(cluster, gene)
 
@@ -641,7 +673,7 @@ rowData(sce)$Marker_20 <- features_20[match(rownames(sce), features_20)] %>%
 Plot 10 most variable genes 
 
 ```{r, fig.width=8, fig.height=12}
-ident_name <- "X_scVI_snn_res.0.4"
+ident_name <- "X_scVI_snn_res.0.5"
 n_colours <- nrow(unique(so.stromal[[ident_name]]))
 
 # plot the log counts
@@ -671,11 +703,11 @@ ggsave(paste0(directory, "/Annotation_figures/Dotplot_with_dendogram_scaled_10.p
 
 ```
 
-2/5 (adipocytes) look nearly identical, think it is the soupX score that has driven the separation of 5
-0/1/7 similar VEC
-3/4/8 similar  but distinct
-6 LEC
-9 distinct maybe muscel or fb?
+2/7 (adipocytes) look nearly identical
+0/1/6/10 similar VEC
+3/4/8 similar mural
+5 LEC
+9 nervous systems cells
 
 
 Plot 5 most variable genes 
@@ -709,325 +741,19 @@ ggsave(paste0(directory, "/Annotation_figures/Dotplot_with_dendogram_scaled_5.pn
 
 ```
 
-Plot 20 most variable genes 
-
-```{r, fig.width=8, fig.height=20}
-
-# plot the log counts
-sce %>%
-    scDotPlot(features = features_20,
-              group = ident_name,
-              groupAnno = ident_name,
-              featureAnno = "Marker_20",
-              groupLegends = FALSE,
-              annoColors = list(ident_name = pal_d3()(n_colours),
-                                "Marker_20" = pal_d3()(n_colours)),
-              annoWidth = 0.02)
-ggsave(paste0(directory, "/Annotation_figures/Dotplot_with_dendogram_logcounts_20.png"), width = 8, height = 20, bg = "white")
-
-# plot the scaled data
-sce %>%
-    scDotPlot(features = features_20,
-              scale = TRUE,
-              group = ident_name,
-              groupAnno = ident_name,
-              featureAnno = "Marker_20",
-              groupLegends = FALSE,
-              annoColors = list(ident_name = pal_d3()(n_colours),
-                                "Marker_20" = pal_d3()(n_colours)),
-              annoWidth = 0.02)
-ggsave(paste0(directory, "/Annotation_figures/Dotplot_with_dendogram_scaled_20.png"), width = 8, height = 20, bg = "white")
-
-```
-
-
-
-
-## literature markers
-
-
-
-
-
-## Adipocytes markers
-
-
-Markers cited here: https://www.biorxiv.org/content/10.1101/2023.09.04.555678v1.full
-
-Adipocytes key markers
-ADIPOQ
-AQP7
-LPL
-PLIN1
-
-Pre-adipocytes
-PDGFRA
-ASPC1 DPP4, CD55
-ASPC2 PPARG
-ASPC3 ITGB1, THY1, CD9
-ASPC4 PDE4D
-ASPC5 ALDH1A3
-
-
-Specialised adipocytes
-No markers given
-
-```{r}
-adipocyte_markers <- c("ADIPOQ", "AQP7", "LPL", "PLIN1")
-plot_dotplot(so.stromal, adipocyte_markers, resolution = resolution, category = "general_adipoctye_markers")
-```
-2 definitely adipocytes
-5 less clear but probably 
-
-```{r}
-adipocyte_precursors <- c("PDGFRA", "DPP4", "CD55", "PPARG", "ITGB1", "THY1", "CD9", "PDE4D", "ALDH1A3")
-plot_dotplot(so.stromal, adipocyte_precursors, resolution = resolution, category = "adipocyte_precursors")
-```
-No obvious clusters of precursors (no PDGRFA expression)
-
-
-Are top cluster markers from Lazarescu expresse in my data?
-
-Create a list of top 50 DE genes for each cluster from Lazarescu et al and do a dotplot
-
-```{r, fig.width=24, fig.height=20, message=FALSE, warning=FALSE}
-markers.laz <- read.table("Files.dir/Markers_Lazarescu.txt", header = TRUE, sep = "\t")
-
-plot_list <- list()
-laz_top50 <- list()
-for (i in unique(markers.laz$cluster)){
-    print(i)
-    laz_top50[[i]] <- markers.laz %>% 
-        group_by(cluster) %>% 
-        slice_max(n=50, order_by = abs(avg_log2FC)) %>% 
-        filter(cluster == i) %>%
-        pull (gene)
-    plot_list[[i]] <- plot_dotplot(so.stromal, laz_top50[[i]], paste0(i, "_50"), resolution)
-    
-}
-    
-# Plot all dotplots together
-plot_grid(plotlist = plot_list, ncol = 3)
-ggsave(paste0(directory, "/Marker_dotplots/Lazarescu_top50.png"), width = 20, height = 20, bg = "white")
-```
-Not informative
-
-
-Plot other groups of markers
-
-## My Immune markers
-
-```{r, fig.width=12, fig.height=12}
-plot_immune_dotplots <- function (so, resolution){
-    
-    p1 <- DotPlot(so, 
-             features =c("PTPRC", "CD247","IL7R", "CCR7", "THEMIS"),
-             assay = "soupX") + 
-    scale_colour_viridis(direction = -1) +
-    ggtitle("T cell markers") + 
-    coord_flip()
-    
-    p2 <- DotPlot(so, 
-             features =c("MS4A1", "CD37", "BLNK", "CD38", "CD79A", "CD79B", "SDC1", "CD27", "CD78"),
-             assay = "soupX") + 
-    scale_colour_viridis(direction = -1) +
-    ggtitle("B cell markers") + 
-    coord_flip()
-    
-    p3 <- DotPlot(so, 
-             features =c("CD14", "CD163", "CD163L1", "MERTK", "MRC1", "MSR1"),
-             assay = "soupX") + 
-    scale_colour_viridis(direction = -1) +
-    ggtitle("Macrophage markers") + 
-    coord_flip()
-    
-    p4 <- DotPlot(so, 
-             features =c("CD300A", "IRF7", "CLEC4C", "IL3RA", "NRP1", "HLA-DQA1", "CD74", "GPAT3", "CIITA", "HLA-DRB1"),
-             assay = "soupX") + 
-    scale_colour_viridis(direction = -1) +
-    ggtitle("Dendritic cell markers") + 
-    coord_flip()
-    
-    p5 <- DotPlot(so, 
-             features =c("KIT", "CDK15", "MS4A2", "IL18R1", "HPGD"),
-             assay = "soupX") + 
-    scale_colour_viridis(direction = -1) +
-    ggtitle("Granulocyte_markers") + 
-    coord_flip()
-    
-    p6 <- DotPlot(so, 
-             features =c("CD14", "VCAN", "NCF1", "MS4A6A", "FCN1",  # classical monocyte
-                         "FCGR3A", "LST1", "RPS19", "MS4A7", "CSF1R", "CDKN1C", "LILRB2", "ITGAL"), #non-classical monocytes
-             assay = "soupX") + 
-    scale_colour_viridis(direction = -1) +
-    ggtitle("Monocyte_markers") + 
-    coord_flip()
-    
-    #add an overall title and arrange the graphs on one page
-    title <- ggdraw() + draw_label(paste0("Immune cell markers at resolution ", resolution), fontface='bold', size = 16)
-    p <- plot_grid(p1, p2, p3, p4, p5, p6, ncol = 2)
-    p <- plot_grid(title, p, ncol=1, rel_heights=c(0.05, 1))
-    
-    p
-
-    
-}
-
-plot_immune_dotplots(so.stromal, resolution)
-ggsave(paste0(directory, "/Marker_dotplots/dotplot_immune_cell_markers_", resolution, ".png"), 
-       width = 12, height = 12, 
-       bg = "white")
-```
-
-No immune cells at this resolution
-
-
-```{r, fig.height=20, fig.width=12}
-plot_muscle_markers <- function (so, resolution){
-    p1 <- DotPlot(so, 
-             features =c("TRDN", "DES", "ACTN2"),
-             assay = "soupX") + 
-    scale_colour_viridis(direction = -1) +
-    ggtitle("General Muscle markers") + 
-    coord_flip()
-    
-    p2 <- DotPlot(so, 
-             features =c("TNNC2", "TNNI2", "TNNT3", "ACTN3", "HOMER1", "KCNQ5", "MYH1", "MYH3", "MYLK4", "MYBPC2"),
-             assay = "soupX") + 
-    scale_colour_viridis(direction = -1) +
-    ggtitle("Fast twitch markers") + 
-    coord_flip()
-    
-    p3 <- DotPlot(so, 
-             features =c("COL22A1", "ADAMTSL1", "CPM", "CSMD1", "FRAS1", "PZP", "RALYL", "SAMD5", "SORBS2", "SPAG16"),
-             assay = "soupX") + 
-    scale_colour_viridis(direction = -1) +
-    ggtitle("Transitional markers") + 
-    coord_flip()
-    
-    p4 <- DotPlot(so, 
-             features =c("TNNC1", "TNNI1", "TNNT1", "ATP2A2", "CCR3", "LGR5", "MYH7", "MYH7B", "NEK10", "TECRL"),
-             assay = "soupX") + 
-    scale_colour_viridis(direction = -1) +
-    ggtitle("Slow twitch markers") + 
-    coord_flip()
-    
-    p5 <- DotPlot(so, 
-             features =c("ACTA2", "MYH11", "TAGLN", "CRIP2", "MYL9", "RTL8C", "RERGL", "PLAC9", "MFAP4", "LGALS3BP"),
-             assay = "soupX") + 
-    scale_colour_viridis(direction = -1) +
-    ggtitle("Smooth muscle markers") + 
-    coord_flip()
-    
-    p6 <- DotPlot(so, 
-             features =c("PAX7", "CALCR", "CDH4", "CLCN5", "CTNND2", "GREM1"),
-             assay = "soupX") + 
-    scale_colour_viridis(direction = -1) +
-    ggtitle("Satellite cells markers") + 
-    coord_flip()
-        
- 
-    #add an overall title and arrange the graphs on one page
-    title <- ggdraw() + draw_label(paste0("Muscle cell markers at resolution ", resolution), fontface='bold', size = 16)
-    p <- plot_grid(p1, p2, p3, p4, p5, p6, nrow = 3)
-    p <- plot_grid(title, p, ncol=1, rel_heights=c(0.05, 1))
-    
-    p
-}
-
-plot_muscle_markers(so.stromal, resolution)
-ggsave(paste0(directory, "/Marker_dotplots/Muscle_markers.png"), width = 12, height = 20, bg = "white")
-
-```
-
-7 contains some muscle markers, again this could be the high soupX content. 
-4 is likely smooth muscle. 
-
-
-```{r, fig.width=12, fig.height=16}
-plot_dotplots <- function (so, resolution){
-    
-    p1 <- DotPlot(so, 
-             features =c("COL1A1", "COL1A2", "COL3A1", "COL3A2",  "DCN", "PRG4"),
-             assay = "soupX") + 
-    scale_colour_viridis(direction = -1) +
-    ggtitle("Fibroblast markers") + 
-    coord_flip()
-    
-    p2 <- DotPlot(so,
-             features =c("PECAM1", "PTPRB", "VWF", "ADGRL4", "CD34", "CDH5", "FLT1", "NOTCH4", "TEK"),
-             assay = "soupX")  + 
-    scale_colour_viridis(direction = -1) +
-    ggtitle("Vascular endothelial markers") + coord_flip()
-    
-    p3 <- DotPlot(so,
-             features =c("EPHB4", "FLT4", "KDR", "LYVE1", "MMRN1", "NRG3", "PKHD1L1", "PROX1"),
-             assay = "soupX")  + 
-    scale_colour_viridis(direction = -1) +
-    ggtitle("Lymphatic endothelium markers") + coord_flip()
-    
-    p4 <- DotPlot(so, 
-             features =c("TRDN", "DES", "ACTN2", "TNNC2", "TNNI2", "TNNT3", "TNNC1", "TNNI1", "TNNT1"),
-             assay = "soupX")  + 
-    scale_colour_viridis(direction = -1) +
-    ggtitle("Skeletal muscle markers") + 
-    coord_flip()
-    
-    p5 <- DotPlot(so, 
-             features =c("ABCA8", "COL15A1", "CD55", "DCLK1", "ELN", "FBN1", "FBLN1", 
-                         "FBLN2", "FBLN5", "KCND2", "NEGR1", "NOVA1", "PDGFRA", "VIT"),
-             assay = "soupX")  + 
-    scale_colour_viridis(direction = -1) +
-    ggtitle("Mural cell markers") + 
-    coord_flip()
-    
-   p6 <- DotPlot(so, 
-             features =c("GPAM", "TMEM132C", "PLIN1", "PLIN4", "AQP7", "ADIPOQ", "PDE3B", "FABP4", "LIPE"),
-             assay = "soupX") + 
-    scale_colour_viridis(direction = -1) +
-    ggtitle("Adipocyte markers") + 
-    coord_flip()
-    
-    p7 <- DotPlot(so, 
-             features =c("NTRK3", "TENM2", "KANK4", "SLC2A1", "SLC22A3", "CLDN1"),
-             assay = "soupX") + 
-    scale_colour_viridis(direction = -1) +
-    ggtitle("Nerve-like cell markers") + 
-    coord_flip()
-    
-    p8 <- DotPlot(so, 
-             features =c("PAX7", "CALCR", "CDH4", "CLCN5", "CTNND2", "GREM1"),
-             assay = "soupX") + 
-    scale_colour_viridis(direction = -1) +
-    ggtitle("Satellite cell markers") + 
-    coord_flip()
-
-    #add an overall title and arrange the graphs on one page
-    title <- ggdraw() + draw_label(paste0("Cell markers at resolution ", resolution), fontface='bold', size = 16)
-    p <- plot_grid(p1, p2, p3, p4, p5, p6, p7, p8, ncol = 2)
-    p <- plot_grid(title, p, ncol=1, rel_heights=c(0.05, 1))
-    
-    p
-    
-    
-}
-
-plot_dotplots(so.stromal, resolution)
-```
-
 Finer annotation of endothelium from Quads paper
 
 
-```{r, fig.width=12, fig.height=10}
-endothelial_markers <- list("Pericytes" = c("NOTCH3", "PDGFRB", "MYO1B", "DLC1", "CALD1", "EBF2", "COL6A3",
-                                            "COL25A1", "POSTN", "STEAP4", "RGS5"),
-                            "VECs" = c("PCAM1", "VWF", "PTPRB", "FLT1", "EMCHN"),
-                            "Venular VECs" = c("SLC02A1", "SELP", "NOSTRIN", "MYRIP", "GNA14", "TACR1", "RAMP3", "LIFR", "ICAM1"),
+```{r, fig.width=16, fig.height=10}
+endothelial_markers <- list("Mural" = c("NOTCH3", "PDGFRB", "MYO1B",  "DLC1", "CALD1",  "EBF2"),
+                            "Pericytes" = c("COL6A3", "PDE1C", "COL25A1", "POSTN","STEAP4", "RGS5"),
+                            "VECs" = c("PECAM1", "VWF", "PTPRB", "FLT1", "EMCHN"),
+                            "Venular VECs" = c("ACKR1, SLC02A1", "SELP", "NOSTRIN", "MYRIP", "GNA14", "TACR1", "RAMP3", "LIFR", "ICAM1"),
                             "Arteliolar VECs" = c("PODXL", "EFNB2", "NEBL", "SYT1", "THSD4", "CXCL12", "SEMA3G", "GJA4", "HEY1"),
                             "Capillary VECs" = c("COL4A1", "COL4A2", "COL15A1", "DYSF", "ARHGAP18", "LAMB1", "SPARC", "GNG2", "VWA1"),
                             "LECs" = c("PROX1", "MMRN1", "TFP1", "RELN", "PKJD1L1", "SEMA3A", "FLRT2", "CCL21", "LYVE1", "STAB2"),
-                            "vSMCs" = c("MYH11", "TAGLN", "AGRL3","SORBS2", "RCAN2", "MYOD", "LMOD1", "CARMN")
-                            #"Dividing VEC" = c("ASPM", "DIAPH3", "TOP2A", "CENPE", "TPX2", "MELK")
+                            "vSMCs" = c("MYH11", "RGS6", "TAGLN", "ADGRL3","SORBS2", "RCAN2", "MYOCD", "LMOD1", "CARMN"),
+                            "Dividing VEC" = c("ASPM", "DIAPH3", "TOP2A", "CENPE", "TPX2", "MELK")
                            )
 
 DotPlot(so.stromal, endothelial_markers, assay = "soupX")+
@@ -1038,7 +764,7 @@ DotPlot(so.stromal, endothelial_markers, assay = "soupX")+
 
 ```
 
-Cluster 7 doesn't fit well and in fact is mostly from sample MSK1556. 
+
 It is most similar to cluster 0 so should be merged with 0. 
 
 
@@ -1080,19 +806,27 @@ plot_dotplot(so.stromal, percityes_van, "Pericytes_van", resolution)
 plot_dotplot(so.stromal, mural_arterial_SMC_van, "Mural_Arterial_SMC_van", resolution)
 ```
 
-Cluster 8 pericytes (more than 3 or 4)
+Pericyte markers from cellxgene
+```{r}
+pericyte_cellxgene = c("PDGFRB","RGS5","CALD1","ACTA2","NOTCH3","ABCC9","EPS8","CARMN","LHFPL6","PLA2G5","NR2F2","MYL9","NR2F2-AS1","FRMD3","EBF2","STEAP4","TAGLN","MYO1B","EGFLAM","DLC1","EBF1","GUCY1A2","EDNRA","CD36","MFGE8","MCAM","BGN","GJA4","IGFBP7")
+pericyte_alina <- c("PDGFRB", "NG2", "CD13", "CNN1", "DES", "ACTA2", "MCAM")
+perictye_chat <- c("PDGFRB","RGS5","ACTA2","NOTCH3","ABCC9","MCAM","CSPG4","ANPEP","LHFPL6","CARMN","MYL9","EDNRA","GUCY1A2","GJA4")
 
-Plot at slightly lower resolution where 3 and 4 are merged
+plot_dotplot(so.stromal, pericyte_cellxgene, "pericyte_cellxgene", resolution)
+plot_dotplot(so.stromal, pericyte_alina, "pericyte_alina", resolution)
+plot_dotplot(so.stromal, perictye_chat, "perictye_chat", resolution)
+```
 
-```{r, fig.width=12, fig.height=10}
-Idents(so.stromal) <- so.stromal$X_scVI_snn_res.0.1
-DotPlot(so.stromal, endothelial_markers, assay = "soupX")+
-    scale_colour_viridis(direction = -1) +
-    ggtitle(paste0("Endothelial markers: resolution 0.1")) + 
-    theme(plot.title = element_text(size = 14, face = "bold"))+
-    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+vSMC markers from cellxgene
+```{r, fig.width=6, fig.height=6}
+vSMC_cellxgene = c("CALD1","TAGLN","MYL9","ACTA2","TPM2","IGFBP7","BGN","C11orf96","PPP1R14A","ADIRF","MYH11","MFGE8","SOD3","RGS5...43248","MCAM","TPM1","LMOD1","CSRP1","CAV1","SEPTIN7","PLAC9","FLNA","TINAGL1","SELENOM","DSTN","COL14A1","SPARCL1","CAVIN3","NOTCH3","ITGB1","CNN1","MGP","MYLK","FRZB","COL6A2","NEXN","FXYD1","TGFB1I1","MFAP4","CD151","ADAMTS1","RRAS","PDGFRB","VIM","NR2F2","AEBP1","CARMN","PDLIM3")
+vSMC_google <- c("ACTA2", "CNN1", "TAGLN", "MYH11","MYOCD", "AP1", "TCF21")
+plot_dotplot(so.stromal, vSMC_cellxgene, "vSMC_cellxgene", resolution)
+plot_dotplot(so.stromal, vSMC_google, "vSMC_literature", resolution)
 
 ```
+
 
 
 
@@ -1101,10 +835,11 @@ DotPlot(so.stromal, endothelial_markers, assay = "soupX")+
 Use this code to get a list of markers for each cluster
 
 ```{r}
-Idents(so.stromal) <- so.stromal$X_scVI_snn_res.0.4
+
+
 cluster_markers <- list()
 for (i in levels(Idents(so.stromal))){
-    cluster_markers[[i]] <- top10_markers_subset_0.4 %>% 
+    cluster_markers[[i]] <- top10_markers_subset_0.5 %>% 
         group_by(cluster) %>% 
         slice_max(n=20, order_by = abs(avg_log2FC)) %>% 
         filter(cluster == i) %>% pull (gene)
@@ -1116,96 +851,127 @@ write.csv(t(as.data.frame(cluster_markers)), paste0(directory, "/Marker_list_for
 ```
 
 
-9 looks like skeletal muscle on cellxgene
-However not when merged with the other cell types in fine annotation script. 
+Cluster 6 is VEC but also expressed other skeletal and smooth muscle markers. 
+Best to remove as unclear what it really is. 
 
-Let's get the most highly expressed genes for that cell type,by using pseudobulk.
+Also do the annotation at the res 0.4 because cluster 10 is very small and unreliable. 
 
-```{r}
-# 1. counts matrix - sample level
-
-#Aggregation of counts to sample level per cell type
-cts <- AggregateExpression(so.stromal, 
-                    group.by = c("X_scVI_snn_res.0.4"),
-                    assays = 'soupX',
-                    slot = "counts",
-                    return.seurat = FALSE)
-
-# transpose & convert to df
-cts.t <- as.data.frame(t(cts$soupX))
-
-# get values where to split
-splitRows <- gsub('_.*', '', rownames(cts.t))
-
-# split data.frame into a list of df for each cell type
-cts.split <- split.data.frame(cts.t,
-                 f = factor(splitRows), 
-                 drop = TRUE)
-
-# fix colnames and transpose function
-rownames_change <- function(x){
-  rownames(x) <- gsub('.*_(.*)', '\\1', rownames(x))
-  return(x)
-}
-
-# create a list of df for each cell type
-counts_list <- list()
-for (i in 1:length(names(cts.split))){
-    counts_list[[i]] <- t(rownames_change(cts.split[[i]]))
-}
-
-names(counts_list) <- names(cts.split)
-
-```
+## Find markers at res 0.4
 
 ```{r}
-counts_list[["9"]]
-df <- counts_list[["9"]] %>% 
-    as.data.frame() %>%
-    #arrange(desc(`9`)) %>% 
-    slice_max(order_by = `9`, n = 50)
-df
-rownames(df)
-write.csv(t(df), paste0(directory, "/Marker_list_for_cluster_9.csv"), quote = FALSE)
+resolution <- 0.4
+Idents(so.stromal) <- so.stromal$X_scVI_snn_res.0.4
+markers_subset_0.4 <-  FindAllMarkers(so.stromal,
+                           assay = "soupX",
+                           only.pos = TRUE, 
+                           min.pct = 0.25, 
+                           logfc.threshold = 0.25)
+top10_markers_subset_0.4 <- markers_subset_0.4 %>% 
+          group_by(cluster) %>% 
+          slice_max(n=10, order_by = abs(avg_log2FC))
 
+DimPlot(so.stromal, reduction = "umap")
 ```
 
-Still get out a list of muscle cell types from cellxgene. 
+
+```{r, fig.width=10, fig.height=10}
+
+DoHeatmap(so.stromal, 
+                   features = unique(top10_markers_subset_0.4$gene),
+                   assay = "soupX") + 
+            scale_fill_viridis()
+dir.create(paste0(directory, "/Heatmaps"))
+ggsave(paste0(directory, "/Heatmaps/Top10markers_subset_0.4.png"), width = 12, height = 12)
+```
 
 
+```{r, fig.width=16, fig.height=8}
+DotPlot(so.stromal, endothelial_markers, assay = "soupX")+
+    scale_colour_viridis(direction = -1) +
+    ggtitle(paste0("Endothelial markers: resolution ", resolution)) + 
+    theme(plot.title = element_text(size = 14, face = "bold"))+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
 
+0 - adipocytes
+1 - Venular VECs 
+2 - Arteriolar VECs
+3 - vSMCs
+4 - vSMCs 
+5 - LECs 
+6 - VEC but from one donor so remove 
+7 - pericytes 
+8 - Nervous system cells 
 
-0 - venular VEC
-1 - Arteriolar VEC
-2 - adipocyte
-3 - vSMC
-4 - vSMC
-5 - adipocytes high soupX
-6 - LEC
-7 - VEC from MSK1556
-8 - pericytes?
-9 - skeletal muscle cells
+Find markers that distinguish clusters 3&4 (vSMC)
 
+```{r}
+markers_vSMC_3 <- FindMarkers(so.stromal, assay = "soupX", ident.1 = "3", ident.2 = "4", 
+                           only.pos = TRUE, min.pct = 0.25)
+markers_vSMC_3 <- markers_vSMC_3 %>% 
+        slice_max(n=20, order_by = abs(avg_log2FC)) %>% rownames()
 
-2/5 merge as too similar adipocytes
-0/7 merge as patient specific
+DotPlot(so.stromal, 
+             features = markers_vSMC_3,
+             assay = "soupX") + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle("vSMC 3 vs 4") + 
+    theme(plot.title = element_text(size = 14, face = "bold"))+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+coord_flip()
+    ggsave(paste0(directory, "/Marker_dotplots/vSMC3vs4.png"), width = 7, height =7, bg = "white")
+```
+```{r}
+markers_vSMC_4 <- FindMarkers(so.stromal, assay = "soupX", ident.1 = "4", ident.2 = "3", 
+                           only.pos = TRUE, min.pct = 0.25)
+markers_vSMC_4 <- markers_vSMC_4 %>% 
+        slice_max(n=20, order_by = abs(avg_log2FC)) %>% rownames()
+
+DotPlot(so.stromal, 
+             features = markers_vSMC_4,
+             assay = "soupX") + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle("vSMC 4 vs 3") + 
+    theme(plot.title = element_text(size = 14, face = "bold"))+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+coord_flip()
+    ggsave(paste0(directory, "/Marker_dotplots/vSMC4vs3.png"), width = 7, height =7, bg = "white")
+```
+
+These seems to be really distinct so what are the functions of these two types of vSMC?
+
+```{r}
+arterial_SMC_markers_chat <- c("HEY2", "EPHB2", "EFNB2", "GJA5", "NOTCH3", "SOX17")
+arterial_SMC_markers_google <- c("ACTA2", "MYH1", "CNN1", "MYOCD", "SRF", "KLF4")
+plot_dotplot(so.stromal, arterial_SMC_markers_chat, "arterial_markers_2", resolution)
+plot_dotplot(so.stromal, arterial_SMC_markers_google, "arterial_markers_3", resolution)
+```
+
 3/4 merge (they may in fact be different types of SMC but not sure the literature is strong enough to support this)
+
 
 ## Rename identities
 
+0 - adipocytes
+1 - Venular VECs 
+2 - Arteriolar VECs
+3 - vSMCs
+4 - vSMCs 
+5 - LECs 
+6 - VEC but from one donor so remove 
+7 - pericytes 
+8 - Nervous system cells 
+
 ```{r, fig.width=10, fig.height=7}
+so.stromal <- subset(so.stromal, idents = "6", invert = TRUE)
 
 so.stromal <- RenameIdents(so.stromal, 
-                           `0` = "Venular VEC",
-                          `1` = "Arteriolar VEC",
-                          `2` = "Adipocytes",
+                           `0` = "Adipocytes",
+                          `1` = "Venular VEC",
+                          `2` = "Arteriolar VEC",
                           `3` = "vSMC", 
                           `4` = "vSMC",
-                          `5` = "Adipocytes",
-                          `6` = "Lymphatic endothelial cells",
-                          `7` = "Venular VEC",
-                          `8` = "Pericytes",
-                          `9` = "Skeletal muscle cells")
+                          `5` = "Lymphatic endothelial cells",
+                          `7` = "Pericytes",
+                          `8` = "Nervous system cells")
 so.stromal$fine_annotation_stromal <- Idents(so.stromal)
 
 DimPlot(so.stromal, reduction = "umap", label = TRUE, repel = TRUE)
@@ -1245,7 +1011,7 @@ cluster_markers <- list()
 for (i in levels(Idents(so.stromal))){
     cluster_markers[[i]] <- markers %>% 
         group_by(cluster) %>% 
-        slice_max(n=20, order_by = abs(avg_log2FC)) %>% 
+        slice_max(n=50, order_by = abs(avg_log2FC)) %>% 
         filter(cluster == i) %>% pull (gene)
 }
 cluster_markers
@@ -1286,7 +1052,7 @@ top10_markers <-  markers %>%
 
 DoHeatmap(so.stromal, 
                    features = unique(top10_markers$gene),
-                   assay = "soupX") + 
+                   assay = "soupX", label = FALSE) + 
             scale_fill_viridis()
 dir.create(paste0(directory, "/Heatmaps"))
 ggsave(paste0(directory, "/Heatmaps/Top10markers_annotated.png"), width = 12, height = 12)
@@ -1327,12 +1093,12 @@ ggsave(paste0(directory, "/Annotation_figures/Cluster_fraction_microanatomy_anno
 
 ```{r}
 # make a df of patient percentages per cluster
-df <- so.stromal[[]] %>% select(seurat_clusters, patient)
+df <- so.stromal[[]] %>% select(fine_annotation_stromal, patient)
 df <- data.table(df)
 df <- df[, .(COUNT = .N), by = names(df)]
 df2 <- df %>% pivot_wider(names_from = patient, values_from = COUNT, values_fill = 0) %>% 
-    column_to_rownames(var = "seurat_clusters")%>%
-    mutate_at(vars(1:6), as.numeric) 
+    column_to_rownames(var = "fine_annotation_stromal")%>%
+    mutate_at(vars(1:5), as.numeric) 
 df2$my_row_sum <- rowSums(df2)
 df2 <- df2 %>% mutate(across(where(is.numeric), ~ .x/my_row_sum*100))
 df2$my_row_sum <- NULL
@@ -1341,7 +1107,7 @@ df2$seurat_clusters <- rownames(df2)
 df2
 
 # plot as bar chart and heatmap
-df3 <- df2 %>% pivot_longer(1:6, names_to = "patient", values_to = "proportion")
+df3 <- df2 %>% pivot_longer(1:5, names_to = "patient", values_to = "proportion")
 
 ggplot(df3, aes(fill=patient, y=proportion, x=seurat_clusters)) + 
     geom_bar(position="stack", stat = "identity")+
@@ -1473,12 +1239,6 @@ sce %>%
 ggsave(paste0(directory, "/Annotation_figures/Dotplot_with_dendogram_scaled_5_annotated.png"), width = 8, height = 8, bg = "white")
 
 ```
-
-
-```{r}
-FeaturePlot(so.stromal, features = "COL4A1", reduction = "umap", label = TRUE)
-```
-
 
 
 # Save the object

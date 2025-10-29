@@ -79,7 +79,7 @@ ini <- read_yaml("soupX.yml")
 date <- Sys.Date() %>% str_replace_all("-", "")
 time <- format(Sys.time(), "%X") %>% str_replace_all(":", "-") %>%
     str_sub(1, 5)
-directory <- paste0(date,"_", time, "_SoupX.dir")
+directory <- paste0(date,"_", time, "_SoupX_Manual.dir")
 dir.create(directory, showWarnings = FALSE)
 
 

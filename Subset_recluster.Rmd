@@ -51,11 +51,15 @@ ini
 Set up some parameters
 ```{r}
 if (ini$integration_method == "harmony"){
-    identities <- paste0("cell_annotation_harmony_", ini$subset_resolution)
+    identities <- "broad_annotation"
     umap_name <- "harmony.umap"
     prefix_name <- "soupX_snn_res."
 } else if (ini$integration_method == "scVI"){
-    identities <- paste0("cell_annotation_scVI_", ini$subset_resolution)
+    if (class(ini$subset_resolution) == "numeric"){
+        identities <- paste0("cell_annotation_scVI_", ini$subset_resolution)
+    } else if (class(ini$subset_resolution) == "character"){
+        identities <- ini$subset_resolution
+    }
     umap_name <- "umap.scvi"
     prefix_name <- "X_scVI_snn_res."
 }
@@ -71,7 +75,6 @@ print(prefix_name)
 
 
 Read in the Seurat object  
-Annotated at resolution 0.2
 
 
 ```{r}
@@ -144,6 +147,8 @@ if (ini$integration_method == "harmony"){
     
     # import the scVI embeddings
     scVI_embeddings <- np$load(paste0(ini$import_embeddings, "/scVI_embeddings.npy"))
+    print("Number of dimensions in scVI reduction")
+    print(ncol(scVI_embeddings))
     
     # import the obs
     scVI_obs <- read.table(paste0(ini$import_embeddings, "/Achilles_scVI_obs.txt"), sep = "\t", header = TRUE, row.names = 1)
@@ -162,10 +167,12 @@ if (ini$integration_method == "harmony"){
     so.subset[["X_scVI"]] <- CreateDimReducObject(embeddings = scVI_embeddings, key = "scVI_", assay = "RNA")
     
     # re-calculate neighbours using the scVI embeddings
-    so.subset <- FindNeighbors(so.subset, reduction = "X_scVI", dims = 1:ini$n_dims, graph.name = c("X_scVI_nn", "X_scVI_snn"))
+    so.subset <- FindNeighbors(so.subset, reduction = "X_scVI", 
+                               dims = 1:ncol(scVI_embeddings), # use all the dims that were calc by scVI
+                               graph.name = c("X_scVI_nn", "X_scVI_snn"))
 
     # recalculate the UMAP using scVI embedidngs
-    so.subset <- RunUMAP(so.subset, reduction = "X_scVI", dims = 1:ini$n_dims)
+    so.subset <- RunUMAP(so.subset, reduction = "X_scVI", dims = 1:ncol(scVI_embeddings))
 }
 
 so.subset
@@ -190,24 +197,24 @@ ggsave(paste0(directory, "/Subset_figures/Elbow_plot.png"), width = 8, height = 
 
 
 
-Find Clusters at resolutions from 0.05-0.3
+Find Clusters at various resolutions 
 ```{r, message = FALSE, warning = FALSE}
 if (ini$integration_method == "harmony"){
     
     if (ini$cluster_method == "louvain"){
-        so.subset <- FindClusters(so.subset, resolution = seq(0.1, 0.6, 0.1))
+        so.subset <- FindClusters(so.subset, resolution = seq(ini$cluster_start, ini$cluster_end, ini$cluster_by))
     } else if (ini$cluster_method == "leiden"){
-        so.subset <- so.subset %>% FindClusters(resolution = seq(0.05, 0.3, 0.05), 
+        so.subset <- so.subset %>% FindClusters(resolution = seq(ini$cluster_start, ini$cluster_end, ini$cluster_by), 
                                               algorithm = "leiden",
                                               method = "igraph") # needed if running leiden
     }
 
 } else if (ini$integration_method == "scVI"){
     if (ini$cluster_method == "louvain"){
-        so.subset <- FindClusters(so.subset, resolution = seq(1.7, 2.2, 0.1), 
+        so.subset <- FindClusters(so.subset, resolution = seq(ini$cluster_start, ini$cluster_end, ini$cluster_by), 
                                        graph.name = "X_scVI_snn")
     } else if (ini$cluster_method == "leiden"){
-        so.subset <- so.subset %>% FindClusters(resolution = seq(1.1, 1.6, 0.1), 
+        so.subset <- so.subset %>% FindClusters(resolution = seq(ini$cluster_start, ini$cluster_end, ini$cluster_by), 
                                               algorithm = "leiden",
                                               method = "igraph", 
                                               graph.name = "X_scVI_snn" #this was calc using scVI reduction on RNA assay
