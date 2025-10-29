@@ -1,0 +1,10 @@
+datadir: 'data/integrated_objects/20250123_13-52_convert-objects.dir'
+
+neighbours:
+  n_pcs: 30
+
+variable_genes:
+  n_genes: 5000
+  flavor: 'seurat'
+  batch: 'patient.seqbatch'
+  hvg_subset: True
