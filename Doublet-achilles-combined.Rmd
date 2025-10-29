@@ -107,12 +107,12 @@ Read in the sce objects & so from auto SoupX correction
 
 # make a named vector of soupX auto sample files
 
-file_list_auto_sce <- list.files(paste0(ini$soupX_auto_files, "_SoupX.dir/RDS_objects.dir/SingleCellExp/"), 
+file_list_auto_sce <- list.files(paste0(ini$soupX_auto_files, "_SoupX_Auto.dir/RDS_objects.dir/SingleCellExp/"), 
                                  pattern="_SingleCellExp.rds")
 
 names(file_list_auto_sce) <- str_replace(file_list_auto_sce, "_filtered_soupX_SingleCellExp.rds", "")
 
-file_list_auto_so <- list.files(paste0(ini$soupX_auto_files, "_SoupX.dir/RDS_objects.dir/Seurat/"), 
+file_list_auto_so <- list.files(paste0(ini$soupX_auto_files, "_SoupX_Auto.dir/RDS_objects.dir/Seurat/"), 
                                  pattern="SeuratObject.rds")
 
 names(file_list_auto_so) <- str_replace(file_list_auto_so, "_filtered_soupX_SeuratObject.rds", "")
@@ -138,10 +138,10 @@ so_auto <- list()
 for (i in 1:length(file_list_auto_sce)){
     
     sce_auto[[i]] <- readRDS(paste0(ini$soupX_auto_files, 
-                               "_SoupX.dir/RDS_objects.dir/SingleCellExp/",
+                               "_SoupX_Auto.dir/RDS_objects.dir/SingleCellExp/",
                                                 file_list_auto_sce[i]))
     so_auto[[i]] <- readRDS(paste0(ini$soupX_auto_files, 
-                               "_SoupX.dir/RDS_objects.dir/Seurat/",
+                               "_SoupX_Auto.dir/RDS_objects.dir/Seurat/",
                                                 file_list_auto_so[i]))
 }
 
@@ -153,12 +153,12 @@ Read in files from manual soupX correction
 
 # make a named vector of soupX manual sample files
 
-file_list_manual_sce <- list.files(paste0(ini$soupX_manual_files, "_SoupX.dir/RDS_objects.dir/SingleCellExp/"), 
+file_list_manual_sce <- list.files(paste0(ini$soupX_manual_files, "_SoupX_Manual.dir/RDS_objects.dir/SingleCellExp/"), 
                                  pattern="_SingleCellExp.rds")
 
 names(file_list_manual_sce) <- str_replace(file_list_manual_sce, "_filtered_soupX_SingleCellExp.rds", "")
 
-file_list_manual_so <- list.files(paste0(ini$soupX_manual_files, "_SoupX.dir/RDS_objects.dir/Seurat/"), 
+file_list_manual_so <- list.files(paste0(ini$soupX_manual_files, "_SoupX_Manual.dir/RDS_objects.dir/Seurat/"), 
                                  pattern="SeuratObject.rds")
 
 names(file_list_manual_so) <- str_replace(file_list_manual_so, "_filtered_soupX_SeuratObject.rds", "")
@@ -184,10 +184,10 @@ so_manual <- list()
 for (i in 1:length(file_list_manual_sce)){
     
     sce_manual[[i]] <- readRDS(paste0(ini$soupX_manual_files, 
-                               "_SoupX.dir/RDS_objects.dir/SingleCellExp/",
+                               "_SoupX_Manual.dir/RDS_objects.dir/SingleCellExp/",
                                                 file_list_manual_sce[i]))
     so_manual[[i]] <- readRDS(paste0(ini$soupX_manual_files, 
-                               "_SoupX.dir/RDS_objects.dir/Seurat/",
+                               "_SoupX_Manual.dir/RDS_objects.dir/Seurat/",
                                                 file_list_manual_so[i]))
 }
 

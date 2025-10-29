@@ -29,6 +29,8 @@ library(scSHC)
 library(viridis)
 library(lisi)
 library(glmGamPoi)
+library(data.table)
+
 
 # make a new output folder for each run, with the date & time in the directory name
 date <- Sys.Date() %>% str_replace_all("-", "")
@@ -36,6 +38,7 @@ time <- format(Sys.time(), "%X") %>% str_replace_all(":", "-") %>%
     str_sub(1, 5)
 directory <- paste0(date,"_", time, "_Integration.dir")
 dir.create(directory, showWarnings = FALSE)
+dir.create(paste0(directory, "/Integration_Figures.dir/"))
 
 #need to update yml file as appropriate
 ini <- read_yaml("integration.yml")
@@ -166,11 +169,11 @@ so.merge <- merge(so[[1]], y = so[-c(1)], add.cell.ids = names(file_list))
 
 Plot the decontX and soupX fractions before additional filtering
 
-```{r, fig.height=12, fig.width=8}
+```{r, fig.height=12, fig.width=12}
 VlnPlot(so.merge, features = c("decontX_contamination", "soupX_fraction"), 
-        group.by = "orig.ident", ncol = 1, pt.size = 0)
+        group.by = "orig.ident", ncol = 1)
 ggsave(paste0(directory, "/Integration_Figures.dir/Vln_ambient_before_filter.", ini$file_type), 
-       device = ini$file_format, width = 8, height = 12, bg = "white")
+       device = ini$file_format, width = 12, height = 12, bg = "white")
 ```
 
 
@@ -198,13 +201,31 @@ dim(so.merge)
 
 Plot the decontX and soupX fractions after additional filtering
 
-```{r, fig.height=12, fig.width=8}
+```{r, fig.height=12, fig.width=12}
 VlnPlot(so.merge, features = c("decontX_contamination", "soupX_fraction"), 
-        group.by = "orig.ident", ncol = 1, pt.size = 0)
+        group.by = "orig.ident", ncol = 1)
 ggsave(paste0(directory, "/Integration_Figures.dir/Vln_ambient_after_filter.", ini$file_type), 
-       device = ini$file_format, width = 8, height = 12, bg = "white")
+       device = ini$file_format, width = 12, height = 12, bg = "white")
 ```
+```{r}
+table(so.merge$orig.ident == "MSK1284-Ach-Enth")
+```
+Plot the number of cells per sample after the additional filtering
 
+```{r}
+df <- so.merge[[]] %>% select(orig.ident)
+
+ggplot(df, aes(x=orig.ident)) + 
+    geom_bar()+
+    theme_classic()+
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))+
+    theme(axis.title.x = element_blank())
+
+
+ggsave(paste0(directory, "/Integration_Figures.dir/Cluster_fraction_microanatomy.png"), 
+       width = 8, height = 6, bg = "white")
+```
+Sample MSK1284 is completely filtered out if the soupX threshold filter is used. 
 
 ## Subset
 Subset the merged object (downsample) in order to test the following code more quickly  
@@ -212,6 +233,74 @@ Subset the merged object (downsample) in order to test the following code more q
 #so.merge <- so.merge[, sample(colnames(so.merge), size =5000, replace=F)]
 #so.merge
 ```
+## Calculate and remove highly ambient genes
+
+```{r, fig.width=16, fig.height=14}
+# calculate highest contributing genes
+subtraction <- so.merge@assays$RNA@counts - so.merge@assays$soupX@counts
+#subtraction_colmeans <- colMeans(subtraction) ## average ambient reads per cell
+subtraction_rowmeans <- rowMeans(subtraction) ## average ambient reads per feature
+## fraction of ambient reads, for each feature, per sample
+#subtraction_fraction <- sweep(subtraction, 2, colSums(so.merge@assays$RNA@counts), '/')
+#subtraction_fraction_rowsums <- rowSums(subtraction_fraction) ## genes
+#subtraction_fraction_colsums <- colSums(subtraction_fraction) ## cells
+
+highest_contributors_ambiencereads <- sort(subtraction_rowmeans, decreasing = T)[1:50] ## the highest contributors (in absolute number of reads)
+
+# dotplots of highest contributing genes
+DefaultAssay(so.merge) <- "RNA"
+p_RNA <- DotPlot(so.merge, 
+                 features = rev(names(highest_contributors_ambiencereads))) + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle("RNA assay") +
+    coord_flip()
+
+DefaultAssay(so.merge) <- "soupX"
+p_so.mergeupX <- DotPlot(so.merge, 
+                   features = rev(names(highest_contributors_ambiencereads))) + 
+    scale_colour_viridis(direction = -1) +
+    ggtitle("soupX assay") + 
+    coord_flip()
+
+p <- plot_grid(p_RNA, p_so.mergeupX, ncol = 2)
+title <- ggdraw() + draw_label(so.merge@project.name, fontface='bold', size = 16)
+p <- plot_grid(title, p, ncol=1, rel_heights=c(0.05, 1))
+p
+ggsave(paste0(directory, "/Integration_Figures.dir/Highest_ambient_genes.png"), p, 
+       width = 16, height = 14, bg = "white")
+
+```
+
+```{r, fig.width=16, fig.height=8}
+# Plot the soupX scores per gene
+
+df <- data.frame(contamination_fraction = sort(subtraction_rowmeans, decreasing = T))
+df$gene <- factor(rownames(df), levels = rownames(df))
+df$rank <- 1:nrow(df)
+ggplot(df[1:80, ], aes(x = gene, y = contamination_fraction))+
+    geom_point()+
+    geom_hline(yintercept=2, linetype = "dashed")+
+    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+ggsave(paste0(directory, "/Integration_Figures.dir/SoupX_scores_per_gene.png"),  
+       width = 16, height = 8, bg = "white")
+```
+
+### Optionally Remove highly ambient genes
+```{r}
+
+if (ini$remove_ambient_genes == TRUE){
+    genes_to_keep <- rownames(df[df$contamination_fraction < ini$ambient_genes_threshold,])
+    so.merge <- subset(so.merge,features=genes_to_keep)
+    so.merge
+}
+
+# which genes were removed?
+print("The following highly ambient genes were removed")
+rownames(df[df$contamination_fraction > ini$ambient_genes_threshold,])
+
+```
+
 
 
 # Add a new column in the metadata for patient.seqbatch 
@@ -288,7 +377,6 @@ if (ini$normalisation_method == "SCTransform"){
 ```{r}
 Idents(so.merge) <- "orig.ident"
 DimPlot(so.merge, reduction = umap_name)
-dir.create(paste0(directory, "/Integration_Figures.dir/"))
 ggsave(paste0(directory, "/Integration_Figures.dir/UMAP_merged.", ini$file_type), 
        device = ini$file_format, width = 10, height = 7, bg = "white")
 ```

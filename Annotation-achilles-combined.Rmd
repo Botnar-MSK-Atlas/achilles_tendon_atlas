@@ -112,6 +112,7 @@ if (ini$integration_method == "harmony"){
     integrated_umap_name <-  "harmony.umap"
 } else if (ini$integration_method == "scVI"){
     integrated_umap_name <-  "umap.scvi"
+    res_prefix <- "X_scVI_snn_res."
 }
 
 if (ini$integration_method == "harmony" & ini$cluster_method == "leiden"){

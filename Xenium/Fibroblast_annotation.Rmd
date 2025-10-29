@@ -1,0 +1,757 @@
+---
+title: "Xenium fibroblast annotation"
+author: "Carla Cohen"
+date: "2025-06-26"
+output: html_document
+---
+
+
+# Fibroblast annotation
+
+The aim of this script is to annotate the clusters after integration, which can be informed by the cell label transfer. 
+
+Might give greater clarify to the annotations. 
+Do we see any cell types that are not present in the single nuc data?
+
+
+Load packages and set up
+```{r}
+
+library(Seurat)
+library(tidyverse)
+library(scCustomize)
+library(readr)
+library(pheatmap)
+library(matrixStats)
+library(spdep)
+library(geojsonR)
+library(clustree)
+library(yaml)
+library(cowplot)
+library(RColorBrewer)
+
+wdir <- "/project/wolf1241/xenium/"
+set.seed(123)
+
+# make a new output folder for each run, with the date & time in the directory name
+date <- Sys.Date() %>% str_replace_all("-", "")
+time <- format(Sys.time(), "%X") %>% str_replace_all(":", "-") %>%
+    str_sub(1, 5)
+directory <- paste0(wdir, date,"_", time, "_Fibroblast_annotation.dir")
+dir.create(directory, showWarnings = FALSE)
+dir.create(paste0(directory, "/RDS_objects.dir/"))
+dir.create(paste0(directory, "/Figures/"))
+dir.create(paste0(directory, "/Fibroblasts"))
+dir.create(paste0(directory, "/Fibroblasts/Heatmaps"))
+dir.create(paste0(directory, "/Fibroblasts/Dotplots"))
+
+
+```
+
+Set the colours
+
+```{r}
+achilles.colours <- c(# Broad groups
+    "Fibroblasts" = "#B2182B", 
+    "Skeletal muscle cells" = "#88419D", 
+    "Satellite cells" = "#8C96C6",
+    "Mural cells" = "#7FBC41",
+    # Immune
+    "Macrophages" = "#35978F", 
+    "B cells" = "#543005", 
+    "T cells" = "#F6E8C3", 
+    "Plasma cells" = "#01EBD6", 
+    "Granulocytes" = "#80CDC1", 
+    # Stromal
+    "Vascular endothelial cells" = "#F1B6DA",
+    "Lymphatic endothelial cells" = "#C51B7D",
+    "Adipocytes" = "#E6F598", 
+    "Mural" = "#B8E186", 
+    "Nervous system cells" = "#276419", 
+    "Ambient" = "grey")
+
+achilles.2fb.colours <- c(achilles.colours, "COMPhi fibroblasts" = "#F4A582", 
+                          "NEGR1hi fibroblasts" = "#B2182B")
+
+# Fibroblast colours
+
+fibroblast.colours <- brewer.pal(10, "RdGy")
+names(fibroblast.colours) <- c("PRG4hi fibroblasts",
+                               "NEGR1hi VCANhi fibroblasts", 
+                               "Chondrocytes",
+                               "COMPhi THBS4hi fibroblasts",
+                               "NEGR1hi ITGA6hi fibroblasts",
+                               "unused",
+                               "unused",
+                               "COMPhi MMP3hi fibroblasts",
+                               "NEGR1hi COL15A1hi fibroblasts",
+                               "unused")
+
+# fibroblast colours short (matrisome)
+fibroblast.colours.short <- brewer.pal(10, "RdGy")
+names(fibroblast.colours.short) <- c("PRG4.fb",
+                               "NEGR1.VCAN.fb", 
+                               "Chondrocytes",
+                               "COMP.THBS4.fb",
+                               "NEGR1.ITGA6.fb",
+                               "unused",
+                               "unused",
+                               "COMP.MMP3.fb",
+                               "NEGR1.COL15A1.fb",
+                               "unused")
+
+fibroblast.colours.short <- fibroblast.colours.short[names(fibroblast.colours.short) !="unused"]
+
+# Immune colours
+immune.colours <- c(brewer.pal(11, "BrBG"), "#01EBD6")
+
+names(immune.colours) <- c("B cells", 
+                           "Monocytes",
+                           "CLEC9Ahi DCs", 
+                           "MERKhi LYVE1lo macrophages", 
+                           "T cells", 
+                           "Slow twitch skeletal muscle cells",
+                           "CLEC10Ahi DCs",
+                           "Granulocytes",
+                           "MERTKhi LYVE1hi macrophages",
+                           "NK cells", 
+                           "MERTKlo PTPRGhi macrophages",
+                           "Plasma cells"
+)
+
+# Stromal colours
+stromal.colours <- c(brewer.pal(10, "PiYG"), brewer.pal(10, "Spectral")[6]) # add a yellow for adipocytes
+names(stromal.colours) <- c("Arteriolar VEC", #1
+                            "Lymphatic endothelial cells", #2
+                            "Venular VEC", #3
+                            "unused 3", #4
+                            "unused 2", #5
+                            "unused 1", #6
+                            "vSMC", #7
+                            "unused", #8
+                            "Pericytes", #9
+                            "Nervous system cells", #10
+                            "Adipocytes")  #yellow
+
+# Muscle colours
+muscle.colours <- brewer.pal(5, "BuPu")
+names(muscle.colours) <- c("unused", 
+                           "Transitional skeletal muscle cells", 
+                           "Satellite cells", 
+                           "Fast-twitch skeletal muscle cells", 
+                           "Slow-twitch skeletal muscle cells")
+
+# fine annotation colours
+achilles.fine.colours <- c(fibroblast.colours, muscle.colours, stromal.colours, immune.colours)
+
+```
+
+
+Read in the seurat object
+
+```{r}
+so.harmony <- readRDS(paste0(wdir, "20250630_11-20_Integration.dir/RDS_objects.dir/Achilles_Xenium_integrated.rds"))
+
+
+```
+
+# Compare clustering and predicted annotations
+
+Choose resolution 0.1
+```{r, fig.width=12, fig.height=12}
+Idents(so.harmony) <- "SCT_snn_res.0.1"
+p1 <- DimPlot(so.harmony, reduction = "harmony.umap", label = TRUE)
+p2 <- DimPlot(so.harmony, reduction = "harmony.umap", group.by = "predicted.id_integrated_broad", 
+              cols = achilles.2fb.colours)
+p3 <- DimPlot(so.harmony, reduction = "harmony.umap", group.by = "predicted.id_integrated_fine", 
+              cols = achilles.fine.colours)
+
+
+pA <- plot_grid(p1, p2, rel_widths = c(1.4, 2))
+plot_grid(pA, p3, ncol = 1)
+ggsave(paste0(directory, "/Figures/UMAP_clusters_vs_predicted.png"), 
+       width = 12, height = 12)
+```
+
+
+```{r}
+DimPlot(so.harmony, reduction = "harmony.umap", group.by = "predicted.id_broad", 
+              cols = achilles.2fb.colours)
+```
+
+### Annotate some broad annotations according to the clustering
+
+```{r}
+so.harmony <- RenameIdents(so.harmony, 
+                           `0` = "Fibroblasts", 
+                           `1` = "Skeletal muscle cells",
+                           `2` = "Mural cells", 
+                           `3` = "Vascular endothelial cells", 
+                           `4` = "Immune cells", 
+                           `5` = "Adipocytes")
+
+so.harmony$manual_annotation_broad <- Idents(so.harmony)
+
+achilles.manual.colours <- c(achilles.colours, "Immune cells" = "grey")
+DimPlot(so.harmony, reduction = "harmony.umap", cols = achilles.manual.colours)
+ggsave(paste0(directory, "/Figures/UMAP_Manual_broad_annotation.png"), width = 10, height = 8)
+
+```
+
+
+What are these clusters expressing?
+
+```{r}
+markers <- FindAllMarkers(so.harmony)
+write.table(markers, paste0(directory, "/broad_markers.txt"), 
+            sep = "\t", quote = FALSE, col.names = TRUE, row.names = TRUE)
+head(markers)
+```
+
+Extract top 5 markers per cluster
+```{r}
+top_5 <- Extract_Top_Markers(markers, num_genes = 5, named_vector = FALSE, make_unique = TRUE)
+top_5
+```
+
+Visualise expression of these markers using a clustered dotplot 
+NB this is a heatmap not a ggplot object
+Cannot get it to save.
+
+```{r fig.height=10, fig.width=7}
+
+Clustered_DotPlot(so.harmony, features = top_5, k=length(unique(Idents(so.harmony))), plot_km_elbow = FALSE)
+
+```
+
+
+```{r, fig.width=8, fig.height=12}
+top_10 <- Extract_Top_Markers(markers, num_genes = 10, named_vector = FALSE, make_unique = TRUE)
+
+DoHeatmap(so.harmony, features = top_10) +
+  scale_fill_viridis()
+ggsave(paste0(directory, "/Figures/Heatmap.png"), 
+       width = 8, height = 12)
+```
+
+## Subset and recluster fibroblasts
+
+```{r}
+Idents(so.harmony) <- so.harmony$predicted.id_integrated_broad
+so.fb <- subset(so.harmony, idents = "Fibroblasts")
+```
+
+Tidy up the metadata
+```{r}
+
+# remove existing clusters
+resolutionList <- grep("snn_res", colnames(so.fb[[]]), value = TRUE)
+
+for (resolution in resolutionList){
+      so.fb[[resolution]] <- NULL
+}
+
+so.fb[["umap"]] <- NULL
+
+so.fb
+```
+
+```{r}
+DefaultAssay(so.fb) <- "XENIUM"
+
+so.fb <- SCTransform(so.fb, assay = "XENIUM", clip.range = c(-10, 10))
+so.fb <- RunPCA(so.fb)
+so.fb <- RunUMAP(so.fb, dims = 1:20)
+so.fb <- FindNeighbors(so.fb, reduction = "pca", dims = 1:20)
+so.fb <- FindClusters(so.fb, resolution = seq(0.1, 0.6, 0.1))
+```
+
+Do a clustree to see how the clusters compare 
+
+```{r, fig.width = 8, fig.height=6}
+clustree(so.fb, prefix = "SCT_snn_res.")
+ggsave(paste0(directory, "/Fibroblasts/FB_Clustree.png"), 
+       width = 8, height = 6)
+```
+
+
+Visualise the clusters in UMAP space at each resolution
+
+```{r, fig.width=9, fig.height=10}
+
+resolution_test <- seq(0.1, 0.6, 0.1)
+plot_list <- list()
+for (i in seq(1: length(resolution_test))){
+  
+  plot_list[[i]] <- DimPlot(so.fb, label=T, repel=T, group.by = paste0("SCT_snn_res.", resolution_test[i]), 
+                            reduction = "umap")
+}
+
+plot_grid(plotlist = plot_list, ncol = 2)
+ggsave(paste0(directory, "/Fibroblasts/UMAP_Cluster_resolutions.png"), 
+       width = 9, height = 10)
+```
+
+Can we identify the seven fibroblast clusters?
+
+Find markers to identify the correct resolution
+
+### FindMarkers
+
+Run FindAllMarkers for each calculated resolution.
+
+```{r}
+
+find_markers <- function(resolution){
+    print(resolution)
+    # set the idents to the resolution
+    Idents(so.fb) <- so.fb[[resolution]] %>% pull()
+    # how many clusters are there?
+    print(length(unique(Idents(so.fb))))
+    
+    markers <-  FindAllMarkers(so.fb,
+                           assay = "SCT",
+                           only.pos = TRUE, 
+                           min.pct = 0.25, 
+                           logfc.threshold = 0.25
+                        )
+    write.table(markers, 
+            paste0(directory, "/Marker_lists/Markers_", resolution, ".txt"), 
+                quote = FALSE, sep = "\t")
+    return(markers)
+        
+}
+
+# create a list of resolutions
+resolutionList <- grep("snn_res", colnames(so.fb@meta.data), value = TRUE)
+
+# find markers at each resolution
+found_markers <- list()
+dir.create(paste0(directory, "/Marker_lists"))
+
+# rename SCT assays and run PrepSCTFindMarkers as per this issue
+# https://github.com/satijalab/seurat/issues/9725
+
+for (resolution in resolutionList){
+      found_markers[[resolution]] <- find_markers(resolution)
+}
+
+
+```
+
+
+
+Calculate the top 10 markers for each cluster by log2FC
+
+```{r}
+
+top10_markers <- list()
+for (resolution in resolutionList){
+        # only do this if there were marker genes found
+        if (length(found_markers[[resolution]]$gene > 0)){
+      top10_markers[[resolution]] <- found_markers[[resolution]] %>% 
+          group_by(cluster) %>% 
+          slice_max(n=10, order_by = abs(avg_log2FC))
+    }
+      
+}
+
+
+```
+
+Plot the top 10 markers as a dotplot and heatmap
+
+```{r}
+
+library(viridis)
+for (resolution in resolutionList){
+    # only do this if there were marker genes found
+    if (length(found_markers[[resolution]]$gene > 0)){
+        # set the idents to the resolution
+        Idents(so.fb) <- so.fb[[resolution]] %>% pull()
+        
+        res <- str_remove(resolution, "SCT_snn_res.")
+        DotPlot(so.fb,
+                 features = unique(top10_markers[[resolution]]$gene),
+                 assay = "SCT") + 
+        scale_colour_viridis(direction = -1) + 
+        coord_flip()+
+        ggtitle(paste0("Top 10 markers at resolution ", res))
+        
+        ggsave(paste0(directory, "/Fibroblasts/Dotplots/Top10markers_", res, ".png"), width = 10, height = 12)
+        
+        DoHeatmap(subset(so.fb), 
+                   features = unique(top10_markers[[resolution]]$gene),
+                   assay = "SCT") + 
+            scale_fill_viridis()+
+            ggtitle(paste0("Heatmap of top 10 markers at resolution ", res))
+        
+        ggsave(paste0(directory, "/Fibroblasts/Heatmaps/Top10markers_", res, ".png"), width = 12, height = 12)
+        
+    }
+}
+
+
+```
+
+
+
+
+
+```{r, fig.width=12, fig.height=5}
+
+fb.markers <- list("NEGR1" = c("NEGR1", "DCLK1", "BMP"), 
+                            "VCAN" = c("VCAN", "CACNB2", "ISM1"),
+                            "ITGA6" = c("TENM2", "ITGA6", "SHSA6"),
+                            "COL15A1" = c("COL15A1", "GREB1L", "LRRTM4"),
+                            "COMP" = c("COMP", "ITGA10", "KLH29"),
+                            "MMP3" = c("MMP3", "FBLN1", "CILP"), 
+                            "THBS4" = c("THBS4", "NCAM1", "PIEZO2"), 
+                            "Chond." = c("ACAN", "COL2A1", "SDK2"),
+                            "PRG4" = c("PRG4", "CMKLR2", "ITGB8"))
+
+Idents(so.fb) <- so.fb$SCT_snn_res.0.4
+DotPlot(so.fb, features = fb.markers)+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  geom_point(aes(size=pct.exp), shape = 21, colour="black", stroke=0.5) +
+  scale_colour_gradient2(low = "#f7f3f2", mid = "#f2390a", high = "#6e1e0a", midpoint = 1)
+
+```
+
+
+0 - NEGR1 VCAN
+1 - COMP MMP3
+2 - NEGR1 VCAN
+3 - NEGR1 + COL15A1
+4 - COMP + THBS4 
+5 - PRG4
+6 - COMP + ITGA10
+7 - COMP + KCNMA1 
+8 - ITGA6 
+
+Chondrocytes - not found
+NEGR1+ VCAN+ clusters 0 & 2
+NEGR1 COL15A1 cluster 3
+PRG4 - cluster 5
+NEGR1 ITGA6 - cluster 8
+COMP MMP3 - Cluster 1
+COMP THBS4 - cluster 4
+
+Renaming
+0 - NEGR1hi VCANhi fb
+1 - COMPhi MMP3hi fb
+2 - NEGR1hi VCANhi fb
+3 - NEGR1hi COL15A1 fb
+4 - COMPhi THBS4 fb
+5 - PRG4hi fb
+6 - COMPhi ITGA10hi
+7 - COMPhi KCNMA1 hi fb
+8 - NEGR1hi ITGA6hi
+
+```{r}
+
+so.fb <- RenameIdents(so.fb, 
+                           `0` = "NEGR1.VCAN FB", 
+                           `1` = "COMP.MMP3 FB",
+                           `2` = "NEGR1.VCAN FB", 
+                           `3` = "NEGR1.COL15A1 FB", 
+                           `4` = "COMP.THBS4 FB", 
+                           `5` = "PRG4 FB", 
+                           `6` = "COMP.ITGA10 FB",
+                           `7` = "COMP.KCNMA1 FB", 
+                           `8` = "NEGR1.ITGA6 FB")
+
+so.fb$Fibroblast_manual_annotation <- Idents(so.fb)
+
+DimPlot(so.fb, reduction = "umap")
+
+
+```
+# Map the identities just using the fibroblast annotations
+
+```{r, fig.width=8, fig.height=6}
+so.achilles <- readRDS(paste0(wdir, "data/Achilles_fine_annotation.rds"))
+Idents(so.achilles) <- so.achilles$broad_annotation
+so.fibroblasts <- subset(so.achilles, idents = "Fibroblasts")
+ref <- so.fibroblasts
+ref <- SCTransform(ref, residual.features =rownames(so.fb))
+ref <- RunPCA(ref)
+ref <- RunUMAP(ref, dims=1:20)
+
+Idents(ref) <- ref$fine_annotation
+
+DimPlot(ref, repel=T, cols = fibroblast.colours)
+
+ggsave(paste0(directory, "/Fibroblasts/Achilles_Fibroblast_UMAP_red_features.png"), 
+       width = 10, height = 8)
+```
+
+
+This shows that it should be possible to resolve
+- COMP MMP3 cb
+- NEGR1 VCAN fb
+- NEGR1 COL15A1 fb
+- Chondrocytes
+- NEGR1 ITGA6 fb
+The COMP THBS4 fb are the least distinct. 
+
+Heatmap of gene panel expression across reference clusters
+
+
+```{r, fig.width=10, fig.height=8}
+ps <- AggregateExpression(ref, features = rownames(so.fb), normalization.method = "LogNormalize", assays="RNA", return.seurat = T)
+ps <- ScaleData(ps, features=rownames(ps))
+pheatmap(LayerData(ps, layer="scale.data"), show_rownames = F)
+```
+
+
+Transfer labels from the ref to the spatial data
+
+```{r}
+anchors <- FindTransferAnchors(reference = ref, 
+                               query = so.fb, 
+                               normalization.method = "SCT")
+
+so.fb <- TransferData(anchorset = anchors, 
+                       refdata = ref$fine_annotation, 
+                       prediction.assay = TRUE,
+                       weight.reduction = so.fb[["pca"]], 
+                       query = so.fb, 
+                       dims=1:20)
+
+```
+
+Where has this info gone?
+Predicted.id and predicted.id.score columns added to metadata. 
+
+
+```{r, fig.width=10, fig.height=8}
+#so.fb[[]]
+p1 <- DimPlot(so.fb, group.by= "predicted.id", cols = fibroblast.colours, reduction = "umap")
+ggsave(paste0(directory, "/Fibroblasts/UMAP_Predicted_IDs.png"), p1,
+       width = 10, height = 8)
+p2 <- FeaturePlot(so.fb, features = "predicted.id.score", reduction = "umap")+scale_color_viridis()
+ggsave(paste0(directory, "/Fibroblasts/UMAP_prediction_scores.png"), p2,
+       width = 10, height = 8)
+p3 <- VlnPlot(so.fb, features = "predicted.id.score", group.by = "predicted.id", 
+        cols = fibroblast.colours, pt.size = 0)+
+  theme(legend.position="none")+
+  theme(axis.text.x=element_blank())
+ggsave(paste0(directory, "/Fibroblasts/Vln_prediction_scores.png"), p3,
+       width = 10, height = 6)
+pA <- plot_grid(p2, p3)
+plot_grid(p1, pA, ncol = 1)
+# save these results as new columns in the metadata
+so.fb$predicted.id_fb_fine <- so.fb$predicted.id
+so.fb$predicted.id.score_fb_fine <- so.fb$predicted.id.score
+
+# save the results as csv (to use in Xenium Explorer)
+df <- data.frame(cell_id = colnames(so.fb),
+                 group = so.fb$predicted.id)
+write.table(df, 
+          paste0(directory, "/Fibroblasts/Predicted.id.csv"),
+          quote = FALSE, 
+          sep = ",",
+          col.names = TRUE,
+          row.names = FALSE)
+
+```
+As expeced the THBS4 fb are the least confidently assigned. 
+
+How many cells per annotation?
+
+```{r}
+table(so.fb$predicted.id_fb_fine)
+```
+
+
+### Compare manual annotation and reference mapping
+
+```{r, fig.width=18, fig.height=8}
+
+fb.manual.colours <- brewer.pal(9, "Set1")
+names(fb.manual.colours) <- c("NEGR1.ITGA6 FB", 
+                              "NEGR1.COL15A1 FB", 
+                              "NEGR1.VCAN FB",
+                              "COMP.ITGA10 FB", 
+                              "COMP.THBS4 FB", 
+                              "PRG4 FB",
+                              "COMP FB", 
+                              "COMP.KCNMA1 FB", 
+                              "COMP.MM3 FB"
+                              )
+
+
+  
+fibroblast.colours.bright <- brewer.pal(9, "Set1")
+names(fibroblast.colours.bright) <- c("NEGR1hi ITGA6hi fibroblasts",
+                               "NEGR1hi COL15A1hi fibroblasts",
+                               "NEGR1hi VCANhi fibroblasts",
+                               "unused", 
+                               "COMPhi THBS4hi fibroblasts",
+                               "PRG4hi fibroblasts",
+                               "unused", 
+                               "unused",
+                               "COMPhi MMP3hi fibroblasts"
+                               )
+
+
+p1 <- DimPlot(so.fb, reduction = "umap", group.by = "Fibroblast_manual_annotation", 
+              cols = fb.manual.colours, order = "COMPhi THBS4hi fibroblasts")
+p2 <- DimPlot(so.fb, group.by= "predicted.id_fb_fine", cols = fibroblast.colours.bright, reduction = "umap")
+plot_grid(p1, p2, ncol = 2)
+
+```
+
+```{r, fig.width=10, fig.height=10}
+FeaturePlot(so.fb, reduction = "umap", 
+            features = c("COMP", "NEGR1", "VCAN", "MMP3", "THBS4", "COL15A1", "ITGA6", "PRG4"), 
+            cols = c("#FFF5EB", "#A63603"))
+```
+
+It is curious that there is a lot of expression of THBS4 in the cluster but it the reference mapping has only identified a small number (~10) COMPhi THSB4hi fibroblasts. 
+
+```{r, fig.width=12, fig.height=5}
+Idents(so.fb) <- so.fb$predicted.id_fb_fine
+DotPlot(so.fb, features = fb.markers)+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  geom_point(aes(size=pct.exp), shape = 21, colour="black", stroke=0.5) +
+  scale_colour_gradient2(low = "#f7f3f2", mid = "#f2390a", high = "#6e1e0a", midpoint = 1)
+```
+
+### Plot the annotations on the tissue
+
+Predicted IDs from reference mapping
+
+```{r, fig.width=10, fig.height=8}
+roi_names <- c("ROI1", "ROI1.2", "ROI1.3", "ROI1.4")
+ma_names <- c("Enthesis", "MB", "MTJ", "Muscle")
+
+dir.create(paste0(directory, "/Fibroblasts/mapping_IDs/"))
+
+for (i in 1:length(roi_names)){
+  ImageDimPlot(so.fb, fov=roi_names[i], boundaries="segmentation", border.color = "black",
+               group.by = "predicted.id_fb_fine", 
+             cols = fibroblast.colours.bright )+
+    ggtitle(paste0(ma_names[i], " mapping IDs"))
+  ggsave(paste0(directory, "/Fibroblasts/mapping_IDs/Image_", ma_names[i], "_ROI_Predicted_FB_IDs.png"), 
+       width = 10, height = 8)
+}
+
+for (i in 1:length(roi_names)){
+  ImageDimPlot(so.fb, fov=ma_names[i], 
+               group.by = "predicted.id_fb_fine", 
+             cols = fibroblast.colours.bright )+
+    ggtitle(paste0(ma_names[i], " mapping IDs"))
+  ggsave(paste0(directory, "/Fibroblasts/mapping_IDs/Image_", ma_names[i], "_full_Predicted_FB_IDs.png"), 
+       width = 10, height = 8)
+}
+
+```
+
+IDs from manual cluster annotation
+
+```{r}
+
+
+dir.create(paste0(directory, "/Fibroblasts/manual_IDs/"))
+
+for (i in 1:length(roi_names)){
+  ImageDimPlot(so.fb, fov=roi_names[i], boundaries="segmentation", border.color = "black",
+               group.by = "Fibroblast_manual_annotation", 
+             cols = fb.manual.colours )+
+    ggtitle(paste0(ma_names[i], " manual IDs"))
+  ggsave(paste0(directory, "/Fibroblasts/manual_IDs/Image_", ma_names[i], "_ROI_Predicted_FB_IDs.png"), 
+       width = 10, height = 8)
+}
+
+for (i in 1:length(roi_names)){
+  ImageDimPlot(so.fb, fov=ma_names[i], 
+               group.by = "Fibroblast_manual_annotation", 
+             cols = fb.manual.colours )+
+    ggtitle(paste0(ma_names[i], " manual IDs"))
+  ggsave(paste0(directory, "/Fibroblasts/manual_IDs/Image_", ma_names[i], "_full_Predicted_FB_IDs.png"), 
+       width = 10, height = 8)
+}
+
+```
+From looking in the tissue, the reference mapping IDs seem to have made much more sense so will stick with those. 
+
+### Put the annotations back into the full object
+
+Need to determine whether subsetting the fibroblasts gave different IDs from the fine mapping using the whole object.
+
+```{r}
+df <- so.harmony[[]]
+df.fb <- so.fb[[]] %>% select(cell_id, predicted.id_fb_fine)
+df <- left_join(df, df.fb)
+
+# make a new column of fine annotation by filling in the values from the other annotations
+df <- df %>% mutate(fine_annotation =
+                  case_when(is.na(predicted.id_fb_fine) ~ predicted.id_integrated_broad))
+
+df <- df %>% mutate(fine_annotation = coalesce(fine_annotation, predicted.id_fb_fine))
+
+# add this column to the object
+so.harmony$fine_annotation <- df$fine_annotation
+
+
+# compare the annotations 
+df.fb <- df %>% filter(predicted.id_integrated_broad == "Fibroblasts") %>% 
+  select(predicted.id_integrated_broad, predicted.id_integrated_fine, predicted.id_fb_fine, fine_annotation) %>%
+  filter(str_detect(predicted.id_integrated_fine, "fibroblasts") | predicted.id_integrated_fine == "Chondrocytes")
+
+
+df <- as.data.frame(table(df.fb$predicted.id_fb_fine))
+colnames(df) <- c("Cell_type", "predicted.id_fb_fine")
+df2 <- as.data.frame(table(df.fb$predicted.id_integrated_fine))
+colnames(df2) <- c("Cell_type", "predicted.id_integrated_fine")
+df <- left_join(df, df2) %>% arrange(desc(predicted.id_fb_fine))
+df$Cell_type <- factor(df$Cell_type, levels = df$Cell_type)
+df <- df %>% pivot_longer(2:3, names_to = "labels", values_to = "Frequency")
+df
+
+ggplot(df, aes(fill = labels, y = Frequency, x = Cell_type))+
+  geom_bar(position = "dodge", stat = "identity")+
+  theme_classic()+
+  coord_flip()
+
+```
+
+
+```{r, fig.width=12, fig.height=5}
+
+p1 <- DimPlot(so.fb, group.by = "predicted.id_integrated_fine", 
+        cols = fibroblast.colours.bright, reduction = "umap")
+
+p2 <- DimPlot(so.fb, group.by = "predicted.id_fb_fine", 
+        cols = fibroblast.colours.bright, reduction = "umap")
+
+plot_grid(p1, p2)
+```
+
+It hasn't changed things loads but I think it is is improved, by increasing the identification of minor subtypes.
+
+```{r, fig.width=12, fig.height=5}
+
+DimPlot(so.harmony, group.by = "predicted.id_integrated_fine", 
+        cols = achilles.fine.colours, reduction = "harmony.umap")
+
+DimPlot(so.harmony, group.by = "fine_annotation", 
+        #cols = achilles.fine.colours, 
+        reduction = "harmony.umap")
+```
+
+```{r}
+saveRDS(so.harmony, paste0(directory, "/RDS_objects.dir/Achilles_integrated_annotated.rds"))
+saveRDS(so.fb, paste0(directory, "/RDS_objects.dir/Achilles_fibroblast_subset.rds"))
+
+```
+
+
+```{r}
+sessionInfo()
+```
+
+
+

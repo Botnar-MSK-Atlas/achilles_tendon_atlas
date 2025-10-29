@@ -1,0 +1,552 @@
+---
+title: "Liana"
+author: "Carla Cohen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+
+Analysis of cell-cell interactions in Achilles data using liana 
+
+https://saezlab.github.io/liana/articles/liana_tutorial.html
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(Seurat)
+#library(cowplot)
+#library(magrittr)
+library(liana)
+library(circlize)
+# library(SCpubr)
+library(CrossTalkeR)
+library(EnhancedVolcano)
+
+# make a new output folder for each run, with the date & time in the directory name
+date <- Sys.Date() %>% str_replace_all("-", "")
+time <- format(Sys.time(), "%X") %>% str_replace_all(":", "-") %>%
+    str_sub(1, 5)
+directory <- paste0(date,"_", time, "_Liana-fine_annotation.dir")
+dir.create(directory, showWarnings = FALSE)
+
+```
+
+Read in the data
+
+```{r}
+so.achilles <- readRDS("20250228_12-50_Fine_annotation.dir/RDS_objects.dir/Achilles_fine_annotation.rds")
+Idents(so.achilles) <- so.achilles$fine_annotation
+# downsample for testing
+#so.achilles <- subset(so.achilles, downsample = 100)
+```
+
+Make a mid-level annotation with fine annotation of fibroblasts and broad annotation of other cell types
+
+```{r}
+metadata <- so.achilles[[]] %>% select(fine_annotation, broad_annotation)
+df <- data.frame(fine_annotation = unique(metadata$fine_annotation))
+df$fibroblast_annotation <- c("Macrophages",
+                              "Macrophages", 
+                              "Macrophages", 
+                              "NEGR1.VCAN.fb", 
+                              "VEC",
+                              "NK cells", 
+                              "VEC", 
+                              "COMP.MMP3.fb", 
+                              "Macrophages", 
+                              "Granulocytes", 
+                              "Mural cells", 
+                              "Mural cells", 
+                              "NEGR1.ITGA6.fb", 
+                              "NEGR1.COL15A1.fb", 
+                              "Skeletal muscle cells", 
+                              "Macrophages", 
+                              "Skeletal muscle cells", 
+                              "Skeletal muscle cells", 
+                              "Satellite cells", 
+                              "Adipocytes", 
+                              "B cells", 
+                              "COMP.THBS4.fb", 
+                              "LEC", 
+                              "T cells", 
+                              "Macrophages", 
+                              "Schwann cells", 
+                              "B cells", 
+                              "Chondrocytes", 
+                              "PRG4.fb")
+df
+metadata <- left_join(metadata, df)
+so.achilles <- AddMetaData(so.achilles, metadata$fibroblast_annotation, "fibroblast_annotation")
+Idents(so.achilles) <- so.achilles$fibroblast_annotation
+```
+
+
+
+### Run Liana using 7 methods
+
+```{r}
+liana_test <- liana_wrap(so.achilles)
+liana_test <- liana_test %>%
+  liana_aggregate()
+liana_test
+
+write.table(liana_test, paste0(directory, "/Liana_aggregate_results.txt"), sep = "\t", row.names = FALSE, quote = FALSE)
+res <- read.table("20250902_10-52_Liana.dir/Liana_aggregate_results.txt", header = TRUE, sep = "\t")
+
+liana_test
+res
+
+```
+Dotplot of individual cell types
+Fibroblasts as the source cell type
+
+```{r, fig.width=20, fig.height=14}
+
+fibroblasts <- c("COMP.MMP3.fb", 
+                                  "COMP.THBS4.fb", "NEGR1.VCAN.fb", 
+                                  "NEGR1.COL15A1.fb", 
+                                  "NEGR1.ITGA6.fb", 
+                                  "PRG4.fb", "Chondrocytes")
+stromal <- c("VEC", "Mural cells", "Adipocytes", "LEC", "Schwann cells")
+immune <- c("Macrophages", "NK cells", "Granulocytes", "B cells", "T cells")
+muscle <- c("Skeletal muscle cells", "Satellite cells")
+
+
+res %>%
+   # filter(natmi.edge_specificity>0.1) %>% # add a specificity filter
+  liana_dotplot(source_groups = fibroblasts,
+                target_groups = fibroblasts,
+                ntop = 50)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+liana_test %>%
+   # filter(natmi.edge_specificity>0.1) %>% # add a specificity filter
+  liana_dotplot(source_groups = fibroblasts,
+                target_groups = immune,
+                ntop = 50)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+liana_test %>%
+    filter(natmi.edge_specificity>0.1) %>% # add a specificity filter
+  liana_dotplot(source_groups = fibroblasts,
+                target_groups = stromal,
+                ntop = 50)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+```
+
+Fibroblasts as the receiving cell type
+
+```{r, fig.width=20, fig.height=14}
+
+liana_test %>%
+   # filter(natmi.edge_specificity>0.1) %>% # add a specificity filter
+  liana_dotplot(source_groups = immune,
+                target_groups = fibroblasts,
+                ntop = 50)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+liana_test %>%
+  #  filter(natmi.edge_specificity>0.2) %>% # add a specificity filter
+  liana_dotplot(source_groups = stromal,
+                target_groups = fibroblasts,
+                ntop = 50)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+```
+
+Compare two main types of fibroblasts with firboblast as source
+
+```{r, fig.width=20, fig.height=14}
+liana_test %>%
+  #  filter(natmi.edge_specificity>0.2) %>% # add a specificity filter
+  liana_dotplot(source_groups = c("COMP.MMP3.fb", "NEGR1.VCAN.fb"),
+                target_groups = fibroblasts,
+                ntop = 50)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+liana_test %>%
+  #  filter(natmi.edge_specificity>0.2) %>% # add a specificity filter
+  liana_dotplot(source_groups = c("COMP.MMP3.fb", "NEGR1.VCAN.fb"),
+                target_groups = immune,
+                ntop = 50)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+liana_test %>%
+  #  filter(natmi.edge_specificity>0.1) %>% # add a specificity filter
+  liana_dotplot(source_groups = c("COMP.MMP3.fb", "NEGR1.VCAN.fb", "NEGR1.ITGA6.fb"),
+                target_groups = stromal,
+                ntop = 50)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+liana_test %>%
+    filter(natmi.edge_specificity>0.1) %>% # add a specificity filter
+  liana_dotplot(source_groups = c("COMP.MMP3.fb", "NEGR1.VCAN.fb", "NEGR1.COL15A1.fb"),
+                target_groups = muscle,
+                ntop = 50)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+```
+
+Fibroblasts vs Schwann cells
+
+```{r, fig.width=20, fig.height=14}
+liana_test %>%
+    filter(natmi.edge_specificity>0.1) %>% # add a specificity filter
+  liana_dotplot(source_groups = fibroblasts,
+                target_groups = "Schwann cells",
+                ntop = 50)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+liana_test %>%
+  #  filter(natmi.edge_specificity>0.2) %>% # add a specificity filter
+  liana_dotplot(source_groups = "Schwann cells",
+                target_groups = fibroblasts,
+                ntop = 50)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+```
+
+
+Compare two main types of fibroblasts with firboblast as receiver
+
+```{r, fig.width=20, fig.height=14}
+liana_test %>%
+  #  filter(natmi.edge_specificity>0.2) %>% # add a specificity filter
+  liana_dotplot(source_groups = fibroblasts,
+                target_groups = c("COMP.MMP3.fb", "NEGR1.VCAN.fb"),
+                ntop = 50)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+liana_test %>%
+  #  filter(natmi.edge_specificity>0.2) %>% # add a specificity filter
+  liana_dotplot(source_groups = immune,
+                target_groups =c("COMP.MMP3.fb", "NEGR1.VCAN.fb") ,
+                ntop = 50)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+liana_test %>%
+    filter(natmi.edge_specificity>0.1) %>% # add a specificity filter
+  liana_dotplot(source_groups = stromal,
+                target_groups = c("COMP.MMP3.fb", "NEGR1.VCAN.fb"),
+                ntop = 50)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+liana_test %>%
+    #filter(natmi.edge_specificity>0.1) %>% # add a specificity filter
+  liana_dotplot(source_groups = muscle,
+                target_groups = c("COMP.MMP3.fb", "NEGR1.VCAN.fb", "NEGR1.COL15A1.fb"),
+                ntop = 50)+ theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+```
+
+
+```{r, fig.width=10, fig.height=10}
+liana_trunc <- liana_test %>%
+   # only keep interactions concordant between methods
+  filter(aggregate_rank <= 0.01) # note that these pvals are already corrected
+
+heat_freq(liana_trunc)
+```
+
+
+### Run CrossTalkeR
+This performs a comparison of interactions across two or more conditions  
+In this case we can compare interactions across the microanatomies. 
+
+First run Liana for each microanatomy, filter and save results in correct format  
+
+```{r}
+dir.create(paste0(directory, "/Results"))
+pval_threshold <- 0.05
+Idents(so.achilles) <- so.achilles$fine_annotation 
+
+seurat_object_list <- SplitObject(so.achilles, split.by = "microanatomical_site")
+#update the list order to make MB the comparator
+seurat_object_list <- seurat_object_list[c("MB", "Enth", "MTJ", "muscle")]
+
+liana_res <- list()
+crosstalker_res <- list()
+for (site in names(seurat_object_list)) {
+    sub_object <- seurat_object_list[[site]]
+
+  liana_results <- liana_wrap(sub_object,
+                              method = "cellphonedb",
+                              resource = c("CellPhoneDB"),
+    expr_prop = 0.1
+  )
+  
+  # save the liana results
+  liana_res[[site]] <- liana_results 
+  write.csv(liana_results, paste0(directory, "/Results/", site, "_Liana_results.csv"))
+
+  liana_results <- liana_results %>%
+    filter(pvalue < pval_threshold) %>%
+    dplyr::select(source, target, ligand, receptor.complex, lr.mean) %>%
+    rename(gene_A = ligand, gene_B = receptor.complex, MeanLR = lr.mean)
+  liana_results$type_gene_A = 'Ligand'
+  liana_results$type_gene_B = 'Receptor'
+  
+  # include this if you want to be able to get the results in the R session
+  crosstalker_res[[site]] <- liana_results 
+    # save the crosstalker results
+  write.csv(liana_results, paste0(directory, "/Results/", site, "_Crosstalker_results.csv"))
+}
+```
+Run CrossTalker  
+
+```{r}
+
+crosstalker_out <- generate_report(crosstalker_res,
+                              out_path = paste0(directory, "/Results/"),
+                              out_file = "microanatomy_LR.html",
+                              output_fmt = "html_document",
+                              report = FALSE,
+                              filtered_net = TRUE)
+saveRDS(crosstalker_out, paste0(directory, "/Results/Crosstalker_report.rds"))
+```
+
+### Single Condition reports
+
+Cell-Cell-Interaction Analysis Results
+
+The cell-cell-interaction (CCI) graph plots focus on the interactions between the different cell types within the data. We focus on three measures inside this plot:
+
+- Percentage of interactions indicated by the opacity of the arrows
+- Edge weight (sum of single L-R interaction scores between cell type pairs) indicated by the edge color
+- Pagerank (Node importance) indicated by the node size
+
+```{r, fig.width=12, fig.height=12}
+dir.create(paste0(directory, "/CrossTalkeR_Figures"))
+png(file=paste0(directory, "/CrossTalkeR_Figures/Enthesis.png"), width=1600, height=1000)
+p1 <- plot_cci(graph = crosstalker_out@graphs$Enth,
+        colors = crosstalker_out@colors, # can provide a named vector of custom colours
+        plt_name = 'Enthesis',
+        coords = crosstalker_out@coords[igraph::V(crosstalker_out@graphs$Enth)$name,],
+        emax = 65,
+        leg = TRUE,
+        log = FALSE,
+        pg = crosstalker_out@rankings[["Enth"]]$Pagerank)
+dev.off()
+
+png(file=paste0(directory, "/CrossTalkeR_Figures/Midbody.png"), width=1600, height=1000)
+p2 <- plot_cci(graph = crosstalker_out@graphs$MB,
+        colors = crosstalker_out@colors,
+        plt_name = 'Midbody',
+        coords = crosstalker_out@coords[igraph::V(crosstalker_out@graphs$MB)$name,],
+        emax = 65,
+        leg = TRUE,
+        pg = crosstalker_out@rankings[["MB"]]$Pagerank)
+
+dev.off()
+
+png(file=paste0(directory, "/CrossTalkeR_Figures/MTJ.png"), width=1600, height=1000)
+p3 <- plot_cci(graph = crosstalker_out@graphs$MTJ,
+        colors = crosstalker_out@colors,
+        plt_name = 'MTJ',
+        coords = crosstalker_out@coords[igraph::V(crosstalker_out@graphs$MTJ)$name,],
+        emax = 65,
+        leg = TRUE,
+        pg = crosstalker_out@rankings[["MTJ"]]$Pagerank)
+dev.off()
+
+png(file=paste0(directory, "/CrossTalkeR_Figures/Muscle.png"), width=1600, height=1000)
+p4 <- plot_cci(graph = crosstalker_out@graphs$muscle,
+        colors = crosstalker_out@colors,
+        plt_name = 'Muscle',
+        coords = crosstalker_out@coords[igraph::V(crosstalker_out@graphs$muscle)$name,],
+        emax = 65,
+        leg = TRUE,
+        pg = crosstalker_out@rankings[["muscle"]]$Pagerank)
+dev.off()
+
+```
+
+### Condition comparison
+
+We can make pairwise comparisons between the conditions.
+The following were calculated:
+Enth_x_MB
+MTJ_x_MB
+muscle_x_MB
+
+The comparator can be changed by changing the order of the seurat object list. 
+
+```{r, fig.width=10, fig.height=10}
+png(file=paste0(directory, "/CrossTalkeR_Figures/Enth_x_MB.png"), width=1600, height=1000)
+plot_cci(graph = crosstalker_out@graphs$Enth_x_MB,
+        colors = crosstalker_out@colors,
+        plt_name = 'Enth_x_MB',
+        coords = crosstalker_out@coords[igraph::V(crosstalker_out@graphs$Enth_x_MB)$name,],
+        emax = 62,
+        leg = TRUE,
+        pg = crosstalker_out@rankings[["Enth_x_MB"]]$Pagerank)
+dev.off()
+png(file=paste0(directory, "/CrossTalkeR_Figures/MTJ_x_MB.png"), width=1600, height=1000)
+plot_cci(graph = crosstalker_out@graphs$MTJ_x_MB,
+        colors = crosstalker_out@colors,
+        plt_name = 'MTJ_x_MB',
+        coords = crosstalker_out@coords[igraph::V(crosstalker_out@graphs$MTJ_x_MB)$name,],
+        emax = 62,
+        leg = TRUE,
+        pg = crosstalker_out@rankings[["MTJ_x_MB"]]$Pagerank)
+dev.off()
+png(file=paste0(directory, "/CrossTalkeR_Figures/Muscle_x_MB.png"), width=1600, height=1000)
+plot_cci(graph = crosstalker_out@graphs$muscle_x_MB,
+        colors = crosstalker_out@colors,
+        plt_name = 'muscle_x_MB',
+        coords = crosstalker_out@coords[igraph::V(crosstalker_out@graphs$muscle_x_MB)$name,],
+        emax = 62,
+        leg = TRUE,
+        pg = crosstalker_out@rankings[["muscle_x_MB"]]$Pagerank)
+dev.off()
+```
+### Comparisons using filtered data via fisher's exact test
+Enth_x_MB_filtered
+MTJ_x_MB_filtered
+muscle_x_MB_filtered
+```{r, fig.width=10, fig.height=10}
+png(file=paste0(directory, "/CrossTalkeR_Figures/Enth_x_MB_filtered.png"), width=1600, height=1000)
+plot_cci(graph = crosstalker_out@graphs$Enth_x_MB_filtered,
+        colors = crosstalker_out@colors,
+        plt_name = 'Enth_x_MB_filtered',
+        coords = crosstalker_out@coords[igraph::V(crosstalker_out@graphs$Enth_x_MB_filtered)$name,],
+        emax = 20,
+        leg = TRUE,
+        pg = crosstalker_out@rankings[["Enth_x_MB_filtered"]]$Pagerank)
+dev.off()
+png(file=paste0(directory, "/CrossTalkeR_Figures/MTJ_x_MB_filtered.png"), width=1600, height=1000)
+plot_cci(graph = crosstalker_out@graphs$MTJ_x_MB_filtered,
+        colors = crosstalker_out@colors,
+        plt_name = 'MTJ_x_MB_filtered',
+        coords = crosstalker_out@coords[igraph::V(crosstalker_out@graphs$MTJ_x_MB_filtered)$name,],
+        emax = 20,
+        leg = TRUE,
+        pg = crosstalker_out@rankings[["MTJ_x_MB_filtered"]]$Pagerank)
+dev.off()
+png(file=paste0(directory, "/CrossTalkeR_Figures/Muscle_x_MB_filtered.png"), width=1600, height=1000)
+plot_cci(graph = crosstalker_out@graphs$muscle_x_MB_filtered,
+        colors = crosstalker_out@colors,
+        plt_name = 'muscle_x_MB_filtered',
+        coords = crosstalker_out@coords[igraph::V(crosstalker_out@graphs$muscle_x_MB_filtered)$name,],
+        emax = 20,
+        leg = TRUE,
+         pg = crosstalker_out@rankings[["muscle_x_MB_filtered"]]$Pagerank)
+dev.off()
+```
+
+Volcano plot of comparisons
+
+```{r, fig.width=10, fig.height=10}
+EnhancedVolcano(crosstalker_out@stats$Enth_x_MB, 
+                lab=crosstalker_out@stats$Enth_x_MB$columns_name,
+                x='lodds',
+                y='p',
+                pCutoff=0.05) +
+    ggtitle("Enth_x_MB")
+ggsave(paste0(directory, "/CrossTalkeR_Figures/Volcano_Enth_x_MB.png"), width = 10, height = 10, bg = "white")
+
+EnhancedVolcano(crosstalker_out@stats$MTJ_x_MB, 
+                lab=crosstalker_out@stats$MTJ_x_MB$columns_name,
+                x='lodds',
+                y='p',
+                pCutoff=0.05)+
+    ggtitle("MTJ_x_MB")
+ggsave(paste0(directory, "/CrossTalkeR_Figures/Volcano_MTJ_x_MB.png"), width = 10, height = 10, bg = "white")
+
+EnhancedVolcano(crosstalker_out@stats$muscle_x_MB, 
+                lab=crosstalker_out@stats$muscle_x_MB$columns_name,
+                x='lodds',
+                y='p',
+                pCutoff=0.05)+
+    ggtitle("Muscle_x_MB")
+ggsave(paste0(directory, "/CrossTalkeR_Figures/Volcano_muscle_x_MB.png"), width = 10, height = 10, bg = "white")
+```
+
+
+### Individual interactions
+
+We are seeing lots of fibroblast-fibroblast interactions, what is occurring there?
+
+```{r, fig.width=10, fig.height=10}
+
+dir.create(paste0(directory, "/Interaction_dotplots"))
+# use liana results not crosstalker results
+
+## Fibroblasts to Fb/mural/nerve/adipocytes/VEC 
+abbrev_df <- data.frame(source = c("Chondrocytes", "COMPhi THBS4hi fibroblasts", "COMPhi MMP3hi fibroblasts", 
+                                            "NEGR1hi VCANhi fibroblasts", "NEGR1hi ITGA5hi fibroblasts", 
+                                            "NEGR1hi COL15A1hi fibroblasts"))
+abbrev_df$target <- c("Chondrocytes", "COMPhi THBS4hi fibroblasts", "COMPhi MMP3hi fibroblasts", 
+                                            "NEGR1hi VCANhi fibroblasts", "NEGR1hi ITGA5hi fibroblasts", 
+                                            "NEGR1hi COL15A1hi fibroblasts")
+abbrev_df$abbrev_annotation <- c("Chondrocytes", "COMP+MMP3+Fb", "COMP+THBS4+Fb", "NEGR1+VCAN+Fb", 
+                                 "NEGR1+ITGA5+Fb", "NEGR1_COL15A1+Fb")
+
+for (site in names(seurat_object_list)) {
+    res_filtered <- liana_res[[site]] %>% 
+        filter(pvalue <=0.05) %>%
+        rank_method(method_name = "cellphonedb",
+                  mode = "magnitude") %>%
+        distinct_at(c("ligand.complex", "receptor.complex")) %>%
+        head(20)
+
+    # plot liana dotplot
+    plot_df <- liana_res[[site]] %>% 
+        inner_join(res_filtered, by = c("ligand.complex", "receptor.complex")) %>%
+        left_join(abbrev_df, by = "source") %>%
+        mutate(source_abbrev =
+                  coalesce(abbrev_annotation, source)) %>% 
+        select(!c(source, abbrev_annotation, target.y)) %>% 
+        rename(source = source_abbrev, target = target.x) %>% 
+        left_join(abbrev_df, by = "target") %>%
+        mutate(target_abbrev = 
+               coalesce(abbrev_annotation, target))%>% 
+        select(!c(target, abbrev_annotation, source.y)) %>% 
+        rename(target = target_abbrev, source = source.x) 
+    
+    plot_df %>% 
+        liana_dotplot(source_groups = abbrev_df$abbrev_annotation,
+                      target_groups = abbrev_df$abbrev_annotation,
+                      specificity = "pvalue",
+                      magnitude = "lr.mean",
+                      show_complex = TRUE,
+                      size.label = "-log10(p-value)")+
+        theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))+
+        ggtitle(paste0(site, " Fibroblast interactions"))
+    
+    ggsave(paste0(directory, "/Interaction_dotplots/", site, "_fibroblast_interactions.png"), 
+           width = 24, height = 10, bg = "white")
+}
+
+
+
+
+```
+
+What are the interactions from Chondrocytes in the enthesis?
+
+```{r}
+res_filtered <- liana_res$Enth %>% 
+        filter(pvalue <=0.05) %>%
+        rank_method(method_name = "cellphonedb",
+                  mode = "magnitude") %>%
+        distinct_at(c("ligand.complex", "receptor.complex")) %>%
+        head(20)
+
+# plot liana dotplot
+plot_df <- liana_res$Enth %>% 
+        inner_join(res_filtered, by = c("ligand.complex", "receptor.complex")) %>%
+        left_join(abbrev_df, by = "source") %>%
+        mutate(source_abbrev =
+                  coalesce(abbrev_annotation, source)) %>% 
+        select(!c(source, abbrev_annotation, target.y)) %>% 
+        rename(source = source_abbrev, target = target.x) %>% 
+        left_join(abbrev_df, by = "target") %>%
+        mutate(target_abbrev = 
+               coalesce(abbrev_annotation, target))%>% 
+        select(!c(target, abbrev_annotation, source.y)) %>% 
+        rename(target = target_abbrev, source = source.x) 
+    
+plot_df %>% 
+        liana_dotplot(source_groups = "Chondrocytes",
+                      target_groups = unique(so.achilles$fine_annotation),
+                      specificity = "pvalue",
+                      magnitude = "lr.mean",
+                      show_complex = TRUE,
+                      size.label = "-log10(p-value)")+
+        theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))+
+        ggtitle("Enthesis chondrocyte interactions")
+    
+ggsave(paste0(directory, "/Interaction_dotplots/Enthesis_chondrocyte_interactions.png"), 
+           width = 20, height = 10, bg = "white")
+
+```
+
+
+```{r}
+sessionInfo()
+```
+

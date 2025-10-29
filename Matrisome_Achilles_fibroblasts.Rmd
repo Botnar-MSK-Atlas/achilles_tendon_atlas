@@ -1,0 +1,573 @@
+---
+title: "Matrisome gene expression"
+author: "Carla Cohen"
+date: "`r Sys.Date()`"
+output: html_document
+---
+# Matrisome gene expression 
+
+The aim of this script is to assess the pattern of matrisome gene expression in fibroblast subsets and across microanatomy. 
+### Set up
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(Seurat)
+library(tidyverse)
+library(EnhancedVolcano)
+library(cowplot)
+library(pheatmap)
+library(svglite)
+library(viridis)
+library(RColorBrewer)
+
+# make a new output folder for each run, with the date & time in the directory name
+date <- Sys.Date() %>% str_replace_all("-", "")
+time <- format(Sys.time(), "%X") %>% str_replace_all(":", "-") %>%
+    str_sub(1, 5)
+directory <- paste0(date,"_", time, "_Matrisome_Fibroblasts.dir")
+dir.create(directory, showWarnings = FALSE)
+
+# microanatomy colours
+Okabe_Ito <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#000000")
+ma.cols <-  c(Enth = Okabe_Ito[3], MB = Okabe_Ito[5], MTJ = Okabe_Ito[6], muscle = Okabe_Ito[7])
+tol_muted <- c("#CC6677", "#332288", "#DDCC77", "#117733", "#88CCEE", "#882255", "#44AA99", "#999933", "#AA4499", "#DDDDDD")
+
+# fibroblast colours
+fibroblast.colours <- brewer.pal(10, "RdGy")
+names(fibroblast.colours) <- c("PRG4.fb",
+                       "NEGR1.VCAN.fb", 
+                       "Chondrocytes",
+                       "COMP.THBS4.fb",
+                       "NEGR1.ITGA6.fb",
+                       "unused",
+                       "unused",
+                       "COMP.MMP3.fb",
+                       "NEGR1.COL15A1.fb",
+                       "unused")
+
+fibroblast.colours <- fibroblast.colours[names(fibroblast.colours) !="unused"]
+
+# specific the metadata colours
+ann_colours <- list(
+    microanatomical_site = ma.cols,
+    celltype = fibroblast.colours
+)
+```
+
+
+Read in Seurat object
+
+```{r}
+so.fibroblast <- readRDS("20250228_12-50_Fine_annotation.dir/RDS_objects.dir/Achilles_fibroblast_subset.rds")
+```
+
+Simplify cell names
+
+```{r}
+
+df <- data.frame("fine_annotation_fibroblasts" = levels(so.fibroblast$fine_annotation_fibroblasts))
+
+df$cell_annotation_pseudobulk <- c("NEGR1.VCAN.fb", "COMP.MMP3.fb", "NEGR1.COL15A1.fb", 
+                                   "Chondrocytes", "NEGR1.ITGA6.fb", "COMP.THBS4.fb", "PRG4.fb")
+df
+
+metadata <- so.fibroblast[[]]
+metadata <- metadata %>% left_join(df, by = "fine_annotation_fibroblasts")
+so.fibroblast <- AddMetaData(so.fibroblast, metadata$cell_annotation_pseudobulk, "cell_annotation_pseudobulk")
+
+```
+
+### Read in the matrisome gene database
+
+```{r}
+matrisome.complete <- read_csv("/ceph/project/tendonhca/shared/chromium/analysis/20230922_quadriceps/Hs_Matrisome_Masterlist_Naba et al_2012.xlsx - Hs_Matrisome_Masterlist.csv")
+matri.genes <- matrisome.complete$`Gene Symbol`[2:1029]
+core.matri <- matrisome.complete$`Gene Symbol`[2:276]
+assoc.matri <-matrisome.complete$`Gene Symbol`[276:1029]
+collagens <- matrisome.complete$`Gene Symbol`[197:240]
+proteoglycans <- matrisome.complete$`Gene Symbol`[241:276]
+glycoproteinsECM <- matrisome.complete$`Gene Symbol`[2:196]
+```
+
+
+## Heatmap of matrisome genes across microanatomy
+
+Pseudobulk by microanatomy
+
+```{r}
+#Aggregation of counts to sample level per microanatomy type
+cts.ma <- AggregateExpression(so.fibroblast, 
+                    group.by = c("microanatomical_site"),
+                    assays = 'soupX',
+                    slot = "counts",
+                    return.seurat = FALSE)
+
+```
+
+
+```{r}
+matrisome_heatmap <- function(matrix, genes, name, font_row = 16, fig_width = 10, fig_height = 16){
+    # select matrisome genes
+    positions <- which(rownames(matrix$soupX) %in% genes)
+    cts.mtx <- matrix$soupX[positions,]
+    
+    # remove genes that are not expressed
+    cts.mtx <- cts.mtx[rowSums(cts.mtx) > 10,]
+    
+    # save data
+    write.table(cts.mtx, paste0(directory, "/", name, ".txt"), sep = "\t", quote = FALSE)
+    
+    # plot and save heatmap
+    pheatmap(cts.mtx, 
+             color = viridis(10),
+             cluster_cols = FALSE,
+             scale = "row",
+            fontsize_col = 16, 
+            fontsize_row = font_row,
+           angle_col = 0,
+           labels_col = c("Enthesis", "MB", "MTJ", "Muscle"),
+           filename = paste0(directory, "/", name, "_heatmap.png"),
+           width = fig_width, 
+           height = fig_height
+             )
+}
+
+matrisome_heatmap(cts.ma, core.matri, "MA_Core_matrisome", font_row = 10, fig_height = 20)
+matrisome_heatmap(cts.ma, collagens, "MA_Collagens")
+matrisome_heatmap(cts.ma, proteoglycans, "MA_proteoglycans")
+matrisome_heatmap(cts.ma, glycoproteinsECM, "MA_glycoproteinsECM", font_row = 10, fig_height = 20)
+```
+
+
+### Which cell types are expressing these collagens? 
+Can I do a heatmap that has cell subset and microanatomy?
+
+```{r}
+#Aggregation of counts to sample level per microanatomy and fb subset type
+
+cts.ma.cell <- AggregateExpression(so.fibroblast, 
+                    group.by = c("cell_annotation_pseudobulk", "microanatomical_site"),
+                    assays = 'soupX',
+                    slot = "counts",
+                    return.seurat = FALSE)
+cts$soupX[1:10, 1:10]
+```
+
+```{r}
+matrisome_heatmap_2 <- function(matrix, genes, name, font_row = 16, fig_width = 12, fig_height = 16){
+    # select matrisome genes
+    positions <- which(rownames(matrix$soupX) %in% genes)
+    cts.mtx <- matrix$soupX[positions,]
+    
+    # remove genes that are not expressed
+    cts.mtx <- cts.mtx[rowSums(cts.mtx) > 10,]
+    
+    # save data
+    write.table(cts.mtx, paste0(directory, "/", name, ".txt"), sep = "\t", quote = FALSE)
+    
+    # get the metadata
+    metadata <- data.frame("Identities" = colnames(cts.mtx))
+    metadata$microanatomical_site <- str_split_fixed(metadata$Identities, "_", n = 2)[,2]
+    metadata$celltype <- str_split_fixed(metadata$Identities, "_", n = 2)[,1]
+    metadata <- metadata %>% column_to_rownames("Identities")
+    
+    
+    
+    # plot and save heatmap
+    pheatmap(cts.mtx, 
+         color = viridis(10),
+         cluster_cols = TRUE,
+         scale = "row",
+         fontsize_col = 16, 
+         fontsize_row = font_row,
+         annotation_col = metadata, 
+         annotation_colors = ann_colours,
+         filename = paste0(directory, "/", name, "_heatmap.png"),
+         width = fig_width, 
+         height = fig_height
+         )
+}
+
+matrisome_heatmap_2(cts.ma.cell, core.matri, "MA.Cell_Core_matrisome", font_row = 8, fig_height = 24)
+matrisome_heatmap_2(cts.ma.cell, collagens, "MA.Cell_Collagens")
+matrisome_heatmap_2(cts.ma.cell, proteoglycans, "MA.Cell_proteoglycans")
+matrisome_heatmap_2(cts.ma.cell, glycoproteinsECM, "MA.Cell_glycoproteinsECM", font_row = 8, fig_height = 20)
+
+```
+
+
+## Validate with Vln plots
+
+### Collagens
+
+```{r, fig.width=15, fig.height=5}
+# muscle-specific collagens
+muscle_collagens <- c("COL15A1", "COL4A1", "COL4A2", "COL5A3")
+
+# Vln plot across microanatomy
+VlnPlot(so.fibroblast, assay = "soupX", group.by = "microanatomical_site",
+        features = muscle_collagens, cols = ma.cols, ncol = 4, pt.size = 0)
+
+# which cells are expressing these?
+VlnPlot(so.fibroblast, assay = "soupX", group.by = "cell_annotation_pseudobulk",
+        features = muscle_collagens, cols = fibroblast.colours, ncol = 4, pt.size = 0)
+```
+
+```{r, fig.width=8, fig.height=5}
+# MTJ-specific collagens
+MTJ_collagens <- c("COL19A1", "COL22A1")
+
+# Vln plot across microanatomy
+VlnPlot(so.fibroblast, assay = "soupX", group.by = "microanatomical_site",
+        features = MTJ_collagens, cols = ma.cols, ncol = 2, pt.size = 0, log = TRUE)
+
+# which cells are expressing these?
+VlnPlot(so.fibroblast, assay = "soupX", group.by = "cell_annotation_pseudobulk",
+        features = MTJ_collagens, cols = fibroblast.colours, ncol = 2, pt.size = 0, log = TRUE)
+```
+
+```{r, fig.width=15, fig.height=15}
+# MB-specific collagens
+MB_collagens <- c("COL1A2", "COL6A1", "COL6A2", "COL12A1", "COL4A6", "COL25A1", "COL6A5", "COL4A5", "COL4A3")
+
+# Vln plot across microanatomy
+VlnPlot(so.fibroblast, assay = "soupX", group.by = "microanatomical_site",
+        features = MB_collagens, cols = ma.cols, ncol = 3, pt.size = 0)
+
+# which cells are expressing these?
+VlnPlot(so.fibroblast, assay = "soupX", group.by = "cell_annotation_pseudobulk",
+        features = MB_collagens, cols = fibroblast.colours, ncol = 3, pt.size = 0)
+```
+
+```{r, fig.width=15, fig.height=4}
+# Enth-specific collagens
+Enth_collagens <- c("COL9A1", "COL2A1", "COL9A2", "ACAN", "COL9A3")
+
+# Vln plot across microanatomy
+VlnPlot(so.fibroblast, assay = "soupX", group.by = "microanatomical_site",
+        features = Enth_collagens, cols = ma.cols, ncol =5, pt.size = 0, log = TRUE)
+
+# which cells are expressing these?
+VlnPlot(so.fibroblast, assay = "soupX", group.by = "cell_annotation_pseudobulk",
+        features = Enth_collagens, cols = fibroblast.colours, ncol = 5, pt.size = 0, log = TRUE)
+```
+
+### ECM glycoproteins
+
+```{r, fig.width=15, fig.height=5}
+# muscle-specific glycoproteins
+muscle_glycoproteins <- c("LAMC1", "EFEMP1", "HMCN2", "SMOC2", "BMPER")
+
+# Vln plot across microanatomy
+VlnPlot(so.fibroblast, assay = "soupX", group.by = "microanatomical_site",
+        features = muscle_glycoproteins, cols = ma.cols, ncol = 5, pt.size = 0)
+
+# which cells are expressing these?
+VlnPlot(so.fibroblast, assay = "soupX", group.by = "cell_annotation_pseudobulk",
+        features = muscle_glycoproteins, cols = fibroblast.colours, ncol = 5, pt.size = 0)
+```
+
+
+```{r, fig.width=15, fig.height=5}
+# MTJ-specific glycoproteins
+MTJ_glycoproteins <- c("SRPX", "ADIPOQ", "AMELX", "POSTN", "FBLN5", "VWA1")
+
+# Vln plot across microanatomy
+VlnPlot(so.fibroblast, assay = "soupX", group.by = "microanatomical_site",
+        features = MTJ_glycoproteins, cols = ma.cols, ncol = 6, pt.size = 0)
+
+# which cells are expressing these?
+VlnPlot(so.fibroblast, assay = "soupX", group.by = "cell_annotation_pseudobulk",
+        features = MTJ_glycoproteins, cols = fibroblast.colours, ncol = 6, pt.size = 0)
+```
+
+
+```{r, fig.width=8, fig.height=4}
+# MB-specific glycoproteins
+MB_glycoproteins_1 <- c("OIT3", "CILP", "TNFAIP6", "SPON2", "SRPX2", "NTN5", 
+                      "BGLAP", "THBS2", "CRELD2", "VWA5B1", "EYS", "NTN4", "EGFLAM", "TINAGL1", "LAMA5", 
+                      "MGP")
+MB_glycoproteins_2 <- c("TSKU", "FGL2", "MMRN2", "ECM1", "LAMB4", "LAMA2", "FBN1", "COCH", 
+                        "FNDC1", "VTN", "FRAS1", "FBLN1", "THBS1", "LAMB2", "AGRN", "MATN4" )
+
+MB_glycoproteins_3 <- c("VWA2", "CRIM1", "PAPLN", "LTBP2", "MFGE8", "EMILIN2", "TNXB", "LTBP4", 
+                        "CILP2", "RSPO4", "LTBP3", "THBS3", "LGI4", "ZPLD1", "COMP", "MFAP3")
+
+MB_glycoproteins_4 <- c("PCOLC32", "ECM2", "SPARCL1", "LTBP1", "MFFAP1", "MATN1", "PXDN", "VWA3A", 
+                        "VWA5A", "COL10A1", "MATN2", "POMZP3", "FNDC8")
+MB_glycoproteins <- c("CILP", "MGP")
+
+# Vln plot across microanatomy
+VlnPlot(so.fibroblast, assay = "soupX", group.by = "microanatomical_site",
+        features = MB_glycoproteins, cols = ma.cols, ncol = 2, pt.size = 0)
+
+# which cells are expressing these?
+VlnPlot(so.fibroblast, assay = "soupX", group.by = "cell_annotation_pseudobulk",
+        features = MB_glycoproteins, cols = fibroblast.colours, ncol = 2, pt.size = 0)
+
+
+```
+
+
+```{r, fig.width=15, fig.height=15}
+# Enth-specific glycoproteins
+Enth_glycoproteins <- c("TNN", "DSPP", "TNC", "MATN3", "FN1", "AMELY", "EMILIN3",  "GLDN", "EDIL3", "VWDE")
+
+# Vln plot across microanatomy
+VlnPlot(so.fibroblast, assay = "soupX", group.by = "microanatomical_site",
+        features = Enth_glycoproteins, cols = ma.cols, ncol = 4, pt.size = 0)
+
+# which cells are expressing these?
+VlnPlot(so.fibroblast, assay = "soupX", group.by = "cell_annotation_pseudobulk",
+        features = Enth_glycoproteins, cols = fibroblast.colours, ncol = 4, pt.size = 0)
+```
+
+### Proteoglycans
+
+There are no muscle-specific proteoglycans
+
+```{r, fig.width=5, fig.height=5}
+# MTJ-specific proteoglycans
+MTJ_proteoglycans <- c("PODN")
+
+# Vln plot across microanatomy
+VlnPlot(so.fibroblast, assay = "soupX", group.by = "microanatomical_site",
+        features = MTJ_proteoglycans, cols = ma.cols, ncol = 1, pt.size = 0)
+
+# which cells are expressing these?
+VlnPlot(so.fibroblast, assay = "soupX", group.by = "cell_annotation_pseudobulk",
+        features = MTJ_proteoglycans, cols = fibroblast.colours, ncol = 1, pt.size = 0)
+```
+
+```{r, fig.width=15, fig.height=25}
+# MB-specific proteoglycans
+non_MB_proteoglycans <- c("SPOCK1", "HAPLN1", "EPYC", "PODN")
+positions <- which(proteoglycans %in% non_MB_proteoglycans)
+MB_proteoglycans <- proteoglycans[-positions]
+
+# Vln plot across microanatomy
+VlnPlot(so.fibroblast, assay = "soupX", group.by = "microanatomical_site",
+        features = MB_proteoglycans, cols = ma.cols, pt.size = 0)
+
+# which cells are expressing these?
+VlnPlot(so.fibroblast, assay = "soupX", group.by = "cell_annotation_pseudobulk",
+        features = MB_proteoglycans, cols = fibroblast.colours, pt.size = 0)
+```
+
+Interesting MB proteoglycans
+```{r, fig.width=5, fig.height=5}
+# MB-specific proteoglycans
+MB_proteoglycans <- "PRG4"
+
+# Vln plot across microanatomy
+VlnPlot(so.fibroblast, assay = "soupX", group.by = "microanatomical_site",
+        features = MB_proteoglycans, cols = ma.cols, pt.size = 0)
+
+# which cells are expressing these?
+VlnPlot(so.fibroblast, assay = "soupX", group.by = "cell_annotation_pseudobulk",
+        features = MB_proteoglycans, cols = fibroblast.colours, pt.size = 0)
+```
+
+```{r, fig.width=12, fig.height=5}
+# Enth-specific proteoglycans
+Enth_proteoglycans <- c("SPOCK1", "HAPLN1", "EPYC")
+
+# Vln plot across microanatomy
+VlnPlot(so.fibroblast, assay = "soupX", group.by = "microanatomical_site",
+        features = Enth_proteoglycans, cols = ma.cols, pt.size = 0, ncol = 3)
+
+# which cells are expressing these?
+VlnPlot(so.fibroblast, assay = "soupX", group.by = "cell_annotation_pseudobulk",
+        features = Enth_proteoglycans, cols = fibroblast.colours, pt.size = 0, ncol = 3)
+```
+
+For reference, fibroblast popultations across microanatomy
+
+```{r, fig.width=20, fig.height=4}
+library(SCpubr)
+display.brewer.pal(8, "RdGy")
+display.brewer.pal(10, "RdGy")
+fibroblast.colours <- brewer.pal(10, "RdGy")
+names(fibroblast.colours) <- c("PRG4hi fibroblasts",
+                       "NEGR1hi VCANhi fibroblasts", 
+                       "Chondrocytes",
+                       "COMPhi THBS4hi fibroblasts",
+                       "NEGR1hi ITGA6hi fibroblasts",
+                       "unused",
+                       "unused",
+                       "COMPhi MMP3hi fibroblasts",
+                       "NEGR1hi COL15A1hi fibroblasts",
+                       "unused")
+
+do_DimPlot(so.fibroblast, reduction = "umap", group.by = "fine_annotation_fibroblasts", 
+           split.by = "microanatomical_site", 
+           colors.use = fibroblast.colours, 
+           plot_cell_borders = TRUE, 
+           pt.size = 0.5, 
+           legend.position = "right", 
+           ncol = 5, 
+           ) 
+```
+
+
+
+
+Coloured volcano plots - not used  
+
+```{r, fig.width = 16, fig.height=8, eval = FALSE}
+
+make_labels <- function(genelist){
+    # give every point the correct colour
+    keyvals.colour <- ifelse(
+        genelist %in% collagens, "#E25822",
+          ifelse(genelist %in% proteoglycans, "#E68FAC",
+                 ifelse(genelist %in% glycoproteinsECM, "#F3C300",
+                        ifelse(genelist %in% assoc.matri, "#499999",
+            "azure3"))))
+    
+    # add the names for the colours
+    names(keyvals.colour)[keyvals.colour == 'azure3'] <- 'Non-matrisome'
+    names(keyvals.colour)[keyvals.colour == '#E25822'] <- 'Collagens'
+    names(keyvals.colour)[keyvals.colour == '#E68FAC'] <- 'Proteoglycans'
+    names(keyvals.colour)[keyvals.colour == '#F3C300'] <- 'Glycoproteins'
+    names(keyvals.colour)[keyvals.colour == '#499999'] <- 'Associated matrisome'
+    
+    # make the points for the matrisome genes bigger
+     keyvals.size <- ifelse(
+        genelist %in% collagens, 6,
+          ifelse(genelist %in% proteoglycans, 6,
+                 ifelse(genelist %in% glycoproteinsECM, 6,
+                        ifelse(genelist %in% assoc.matri, 6,
+            2))))
+    keyvals <- list("colour" = keyvals.colour, "size" = keyvals.size)
+    return(keyvals)
+
+}
+
+plot_volcano_matrisome <- function(results_obj, celltype, ref_site){
+    DEseq2_results <- results_obj[[celltype]]
+    
+    if (ref_site == "Enth"){
+        # get the DE genes
+        DEgenes <- rownames(DEseq2_results$res_MBvsEnth_lfcshrink)
+        
+        keyvals <- make_labels(DEgenes)
+         
+        genes_to_label <- DEgenes[which(names(keyvals$colour) %in% c("Collagens", "Proteoglycans", 
+                                                                     "Glycoproteins", "Associated matrisome"))]
+        p1 <- EnhancedVolcano(DEseq2_results$res_MBvsEnth_lfcshrink, 
+                            lab = DEgenes, 
+                            x = 'log2FoldChange', 
+                            y = 'padj',
+                        selectLab = genes_to_label,
+                            title = paste0(celltype, ": MB vs Enth"),
+                            pCutoff = 0.05, 
+                            FCcutoff = 1.0,
+                            #xlim = c(-15, 15),
+                            #ylim = c(0, -log10(10e-16)),
+                            pointSize = keyvals$size, 
+                        colCustom = keyvals$colour,
+                            labSize = 5, 
+                            max.overlaps = 10,
+                            colAlpha = 1,
+                            legendPosition = "right", 
+                            subtitle = NULL, 
+                            )+ theme(plot.title = element_text(size=12))+
+                    theme(legend.text=element_text(size=10))
+    
+        DEgenes <- rownames(DEseq2_results$res_MTJvsEnth_lfcshrink)
+        
+        keyvals <- make_labels(DEgenes)
+         
+        genes_to_label <- DEgenes[which(names(keyvals$colour) %in% c("Collagens", "Proteoglycans", 
+                                                                     "Glycoproteins", "Associated matrisome"))]
+        p2 <- EnhancedVolcano(DEseq2_results$res_MTJvsEnth_lfcshrink, 
+                            lab = DEgenes, 
+                            x = 'log2FoldChange', 
+                            y = 'padj',
+                        selectLab = genes_to_label,
+                            title = paste0(celltype, ": MTJ vs Enth"),
+                            pCutoff = 0.05, 
+                            FCcutoff = 1.0,
+                            #xlim = c(-15, 15),
+                            #ylim = c(0, -log10(10e-16)),
+                            pointSize = keyvals$size, 
+                        colCustom = keyvals$colour,
+                            labSize = 5, 
+                            max.overlaps = 10,
+                            colAlpha = 1,
+                            legendPosition = "right", 
+                            subtitle = NULL, 
+                            )+ theme(plot.title = element_text(size=12))+
+                    theme(legend.text=element_text(size=10))
+
+    } else if (ref_site == "MB"){
+        
+        # get the DE genes
+        DEgenes <- rownames(DEseq2_results$res_EnthvsMB_lfcshrink)
+        
+        keyvals <- make_labels(DEgenes)
+         
+        genes_to_label <- DEgenes[which(names(keyvals$colour) %in% c("Collagens", "Proteoglycans", 
+                                                                     "Glycoproteins", "Associated matrisome"))]
+        p1 <- EnhancedVolcano(DEseq2_results$res_EnthvsMB_lfcshrink, 
+                            lab = DEgenes, 
+                            x = 'log2FoldChange', 
+                            y = 'padj',
+                        selectLab = genes_to_label,
+                            title = paste0(celltype, ": Enth vs MB"),
+                            pCutoff = 0.05, 
+                            FCcutoff = 1.0,
+                            #xlim = c(-15, 15),
+                            #ylim = c(0, -log10(10e-16)),
+                            pointSize = keyvals$size, 
+                        colCustom = keyvals$colour,
+                            labSize = 5, 
+                            max.overlaps = 10,
+                            colAlpha = 1,
+                            legendPosition = "right", 
+                            subtitle = NULL, 
+                            )+ theme(plot.title = element_text(size=12))+
+                    theme(legend.text=element_text(size=10))
+    
+        DEgenes <- rownames(DEseq2_results$res_MTJvsMB_lfcshrink)
+        
+        keyvals <- make_labels(DEgenes)
+         
+        genes_to_label <- DEgenes[which(names(keyvals$colour) %in% c("Collagens", "Proteoglycans", 
+                                                                     "Glycoproteins", "Associated matrisome"))]
+        p2 <- EnhancedVolcano(DEseq2_results$res_MTJvsMB_lfcshrink, 
+                            lab = DEgenes, 
+                            x = 'log2FoldChange', 
+                            y = 'padj',
+                        selectLab = genes_to_label,
+                            title = paste0(celltype, ": MTJ vs MB"),
+                            pCutoff = 0.05, 
+                            FCcutoff = 1.0,
+                            #xlim = c(-15, 15),
+                            #ylim = c(0, -log10(10e-16)),
+                            pointSize = keyvals$size, 
+                        colCustom = keyvals$colour,
+                            labSize = 5, 
+                            max.overlaps = 10,
+                            colAlpha = 1,
+                            legendPosition = "right", 
+                            subtitle = NULL, 
+                            )+ theme(plot.title = element_text(size=12))+
+                    theme(legend.text=element_text(size=10))
+        }
+        
+    p <- plot_grid(p1, p2)
+    return(p)
+    ggsave(paste0(directory, "/Volcano_plots/", celltype, "_Volcano_matrisome.png"))
+
+}
+
+plot_volcano_matrisome(DEseq2_results_cells_Enth, "COMP.MMP3.fb", "Enth")
+#plot_volcano_matrisome(DEseq2_results_cells_Enth, "NEGR1.COL15A1.fb", "MB")
+```
+Show which packages were used
+```{r}
+sessionInfo()
+```
+
