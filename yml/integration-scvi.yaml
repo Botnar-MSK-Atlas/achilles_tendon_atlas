@@ -1,4 +1,4 @@
-datadir: '20240829_14-04_concat_norm.dir'
+datadir: 'data/integrated_objects/20250123_13-52_convert-objects.dir'
 
 neighbours:
   n_pcs: 30
