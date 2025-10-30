@@ -67,7 +67,8 @@ The following scripts were used to analyse Xenium spatial transcriptomics data (
 | 9 | Immune_annotation.Rmd | Annotation of immune cells by label transfer |
 | 10 | Muscle_annotation.Rmd | Annotation of muscle cells by label transfer |
 | 11 | Stromal_annotation.Rmd | Annotation of stromal cells by label transfer | 
-| 12 | Achilles_paper_figures_Xenium.R | Create figures for the manuscript |
+| 12 | Xenium_visualisation.Rmd | Harmonisation of annotations and visualisation | 
+| 13 | Achilles_paper_figures_Xenium.R | Create figures for the manuscript |
 
 
 ### Convert objects between formats 
