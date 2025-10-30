@@ -50,6 +50,7 @@ The following scripts were used to analyse single nucleus RNA-seq data and spati
 | 5 | Fibroblasts_pathway_analysis.Rmd | Pathway analysis on fibroblast subset | 
 | 6 | Liana-achilles-fine_annotation.Rmd | Calculate cell-cell interactions on fine annotation and circle plots | 
 | 7 | Liana.R |Calculate cell-cell interaction scores on more databases | 
+| 8 | Adule Ach SCENIC.ipynb | SCENIC analysis of fibroblast subset |
 
 ### Xenium spatial transcriptomics analysis  
 The following scripts were used to analyse Xenium spatial transcriptomics data (in the Xenium directory)  
