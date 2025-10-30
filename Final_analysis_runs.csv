@@ -1,0 +1,52 @@
+﻿Dataset,Workflow,Working directory,Analysis directory,conda env,Important notes,Final run
+Achilles combined,QC-Filter,/project/tendonhca/shared/chromium/analysis/20231006_achilles,20231011_14-39_QC-Filter.dir,qc-filter-env,Made nUMI threshold more stringent on individual samples,Y
+Achilles combined,Ambient-doublet,/project/tendonhca/shared/chromium/analysis/20231006_achilles,20231106_15-31_Ambient-doublet.dir,ambient-doublet-env,"Filter ambient 0.5, not doublets",Y
+Achilles combined,SoupX Auto,/project/tendonhca/shared/chromium/analysis/20231006_achilles,20250122_11-48_SoupX_Auto.dir,soupx-env,"SoupX auto, adds soup fraction to object",Y
+Achilles combined,SoupX Manual,/project/tendonhca/shared/chromium/analysis/20231006_achilles,20250122_11-49_SoupX_Manual.dir,soupx-env,"SoupX auto, adds soup fraction to object",Y
+Achilles combined,Doublets,/project/tendonhca/shared/chromium/analysis/20231006_achilles,20250122_12-42_Doublet.dir,ambient-doublet-env,Calc and remove doublets,Y
+Achilles combined,Harmony integration,/project/tendonhca/shared/chromium/analysis/20231006_achilles,20250122_14-50_Integration.dir,integration-env,"Merge and filter soupX, then integrate with harmony",Y
+Achilles combined,Convert objects,/project/tendonhca/shared/chromium/analysis/20231006_achilles,20250123_13-52_convert-objects.dir,convert-objects-env,Convert to h5ad and save the variable genes,Y
+Achilles combined,Optimise scVI,media/apc1/ccohen/chromium/analysis/20240711_Achilles,20250123_13-57_ray_autotune.dir,scvi_env,Run the ray autotune,Y
+Achilles combined,ScVI Integration,media/apc1/ccohen/chromium/analysis/20240711_Achilles,20250123_17-36_integration-scvi.dir,scvi_env,Integrate with scVI,Y
+Achilles combined,SCVI visualisation,/project/tendonhca/shared/chromium/analysis/20231006_achilles,20250123_18-14_Integration-scvi-visualisation.dir,integration-env,Visualise the outputs of scVI,Y
+Achilles combined,Annotation,/project/tendonhca/shared/chromium/analysis/20231006_achilles,20250124_16-09_Annotation.dir,integration-env,Annotation on louvain clusters scVI soupX filter,Y
+Achilles combined,Annotation update,/project/tendonhca/shared/chromium/analysis/20231006_achilles,20250127_16-05_Annotation-update.dir,integration-env,Annotation update on louvain clusters scVI soupX filter - use this one,Y
+Achilles combined,Convert objects,/project/tendonhca/shared/chromium/analysis/20231006_achilles,20250128_11-41_convert-objects.dir,convert-objects-env,Convert the annotated object with scVI louvain soupX filter,Y
+Achilles combined,scVI subset,media/apc1/ccohen/chromium/analysis/20240711_Achilles,20250128_11-49_scVI_on_fibroblast_subset.dir,scvi_env,Subset fibroblasts and reintegrate with ScVI,Y
+Achilles combined,scVI subset,media/apc1/ccohen/chromium/analysis/20240711_Achilles,20250128_12-21_scVI_on_immune_subset.dir,scvi_env,Subset immune and reintegrate with ScVI,Y
+Achilles combined,Subset and recluster,/project/tendonhca/shared/chromium/analysis/20231006_achilles,20250128_12-47_Subset_Fibroblast.dir,integration-env,Visualise the outputs of scVI subsetting and cluster,Y
+Achilles combined,Subset and recluster,/project/tendonhca/shared/chromium/analysis/20231006_achilles,20250128_13-38_Subset_Immune.dir,integration-env,Visualise the outputs of scVI subsetting and cluster,Y
+Achilles combined,Fine annotation ,/project/tendonhca/shared/chromium/analysis/20231006_achilles,20250131_12-34_Fine_annotation_fibroblasts_0.2.dir,annotation-env,Exploratory fine annotation of fibroblasts res 0.2,Y
+Achilles combined,Fine annotation ,/project/tendonhca/shared/chromium/analysis/20231006_achilles,20250205_13-31_Fine_annotation_immune_1.6.dir,annotation-env,Fine annotation of immune cells res 1.6 after stringent soupx,Y
+Achilles combined,Subset and recluster,/project/tendonhca/shared/chromium/analysis/20231006_achilles,20250205_13-50_Subset_Stromal.dir,integration-env,Subset and recluster stromal again at res 0.7-1.2,Y
+Achilles combined,Fine annotation ,/project/tendonhca/shared/chromium/analysis/20231006_achilles,20250206_13-26_Fine_annotation_stromal_0.9.dir,annotation-env,Fine annotation of stromal cells res 0.9 after stringent soupx,Y
+Achilles combined,Subset and recluster,/project/tendonhca/shared/chromium/analysis/20231006_achilles,20250206_13-49_Subset_Muscle.dir,integration-env,Subset and recluster muscle again with harmony integration,Y
+Achilles combined,Fine annotation ,/project/tendonhca/shared/chromium/analysis/20231006_achilles,20250207_13-28_Fine_annotation_muscle_0.1.dir,annotation-env,Fine annotation of muscle after stringent soupx,Y
+Achilles combined,Fine annotation ,/project/tendonhca/shared/chromium/analysis/20231006_achilles,20250210_12-13_Fine_annotation.dir,integration-env,Bring together all the fine annotations into one object. ,Y
+Xenium,Xenium panel design,/project/tendonhca/shared/chromium/analysis/20231006_achilles,20250213_11-41_Xenium_panel_designer.dir,Interactive run,Process objects for upload to Xenium panel designer,Y
+Xenium,Xenium custom panel,/project/tendonhca/shared/chromium/analysis/20231006_achilles,20250213_15-22_Xenium_custom_panel.dir,Interactive run,Assess suitability of custom panel,Y
+Achilles combined,MiloR,/project/tendonhca/shared/chromium/analysis/20231006_achilles,20250226_10-04_MiloR_Cell_Proportions.dir,milo-env,MiloR on Achilles with broad annotation,Y
+Achilles combined,MiloR,/project/tendonhca/shared/chromium/analysis/20231006_achilles,20250226_11-09_MiloR_Cell_Proportions.dir,milo-env,MiloR on fibroblast subset,Y
+Achilles combined,MiloR,/project/tendonhca/shared/chromium/analysis/20231006_achilles,20250226_12-02_MiloR_Cell_Proportions.dir,milo-env,MiloR on immune subset,Y
+Achilles combined,MiloR,/project/tendonhca/shared/chromium/analysis/20231006_achilles,20250226_12-47_MiloR_Cell_Proportions.dir,milo-env,MiloR on stromal subset,Y
+Achilles combined,MiloR,/project/tendonhca/shared/chromium/analysis/20231006_achilles,20250226_15-10_MiloR_Cell_Proportions.dir,milo-env,MiloR on muscle subset,Y
+Achilles combined,Fine annotation,/project/tendonhca/shared/chromium/analysis/20231006_achilles,20250228_12-50_Fine_annotation.dir,integration-env,Fine annotation including calculating top markers for each cell type,Y
+Achilles combined,Pseudobulk-DEseq2,/project/tendonhca/shared/chromium/analysis/20231006_achilles,20250304_17-29_Pseudobulk.dir,pseudobulk-Deseq2-env,Pseudobulk & Deseq2 with LRT test,Y
+Achilles combined,Pathway analysis,/project/tendonhca/shared/chromium/analysis/20231006_achilles,20250305_10-46_Pathway_Analysis.dir,pathway-env,Pathway analysis on broad cell types across microanatomies,Y
+Achilles combined,Pathway analysis,/project/tendonhca/shared/chromium/analysis/20231006_achilles,20250305_13-28_Pathway_analysis_fibroblasts.dir,pathway-env,Pathway analysis on fibroblast subsets,Y
+Achilles combined,Liana,/project/tendonhca/shared/chromium/analysis/20231006_achilles,20250311_14-50_Liana-fine_annotation.dir,liana-env,liana on fine annotation,Y
+Achilles Xenium,QC & filtering,/project/wolf1241/xenium,20250625_11-55_Xenium_Achilles_Enthesis.dir,knit,QC & filter enthesis,Y
+Achilles Xenium,QC & filtering,/project/wolf1241/xenium,20250625_12-17_Xenium_Achilles_MB.dir,knit,QC & filter MB,Y
+Achilles Xenium,QC & filtering,/project/wolf1241/xenium,20250625_12-30_Xenium_Achilles_MTJ.dir,knit,QC & filter MTJ,Y
+Achilles Xenium,QC & filtering,/project/wolf1241/xenium,20250625_14-15_Xenium_Achilles_Muscle.dir,knit,QC & filter Muscle,Y
+Achilles Xenium,Integration,/project/wolf1241/xenium,20250630_11-20_Integration.dir,knit,Integration with harmony,Y
+Achilles Xenium,Fibroblast annotation,/project/wolf1241/xenium,20250702_12-14_Fibroblast_annotaion.dir,knit,Subset and fine annotation of fibroblasts,Y
+Achilles Xenium,Immune fine annotation,/project/wolf1241/xenium,20250702_13-21_Immune_annotation.dir,knit,Subset and fine annotation of immune cells,Y
+Achilles Xenium,QC metrics,/project/wolf1241/xenium,20250722_13-14_Xenium_QC_metrics.dir,knit,Visualise QC metrics from the machine,Y
+Achilles Xenium,Stromal fine annotation,/project/wolf1241/xenium,20250723_11-23_Stromal_annotation_.dir,knit,Subset and fine annotation of non-fibroblast stromal cells,Y
+Achilles Xenium,Muscle fine annotation,/project/wolf1241/xenium,20250723_11-47_Muscle_annotation_.dir,knit,Subset and fine annotation of muscle cells,Y
+Achilles Xenium,Visualisation,/project/wolf1241/xenium,20250723_12-26_Visualisation.dir,knit,tidy up the annotations,Y
+Achilles combined,Liana,/project/tendonhca/shared/chromium/analysis/20231006_achilles,20250903_10-53_Liana.dir,liana-env,Liana focussing on individual interactions,Y
+Achilles combined,Liana plotting,/project/tendonhca/shared/chromium/analysis/20231006_achilles,20250904_11-36_Liana-plotting.dir,liana-env,Plotting liana results,Y
+Achilles combined,scVI subset,media/apc1/ccohen/chromium/analysis/20240711_Achilles,20250128_12-30_scVI_on_muscle_subset.dir,scvi_env,Subset muscle and reintegrated wih ScVI,Y
+Achilles combined,scVI subset,media/apc1/ccohen/chromium/analysis/20240711_Achilles,20250128_13-00_scVI_on_stromal_subset.dir,scvi_env,Subset stromal and reintegrate with ScVI,Y
