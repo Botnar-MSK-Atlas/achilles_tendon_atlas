@@ -460,4 +460,3 @@ saveRDS(so.achilles, paste0(directory, "/RDS_objects.dir/Achilles_snRNAseq_updat
 ```{r}
 sessionInfo()
 ```
-
