@@ -1,0 +1,28 @@
+##########################
+#
+# configuration file for ambient-doublet workflow
+#
+##########################
+
+# Specify the format of figures 
+# Anything compatibile with ggsave e.g. png, pdf
+file_type: png
+
+# Which SoupX output to use
+soupX_auto_files: "20250122_11-48"
+soupX_manual_files: "20250122_11-49"
+
+# Which assay to use for dim reduction & clustering
+# Can be "RNA", "decontXcounts", "soupX"
+default_assay: "RNA"
+
+# Specify clustering resolution, default = 0.1
+resolution: 0.3
+
+# Specify which clustering to use for scDblfinder 
+# choose seurat_clusters or no_clusters
+scdblfinder_clusters: seurat_clusters
+
+# Specify whether doublets should be removed: 
+doublet_filter: TRUE
+

@@ -1,0 +1,40 @@
+##########################
+#
+# configuration file for Integration.Rmd
+#
+##########################
+
+# Specify output file type
+# can be "png", "pdf", or others compatible with ggsave. 
+file_type: "png"
+
+# Specify normalisation method
+# Choose "SCTransform", "SCTransformv2", "LogNormalise"
+
+normalisation_method: LogNormalise
+
+# Specify whether to use RNA, decontXcounts, or soupX assay for normalisation
+normalisation_assay: "soupX"
+
+# harmony integration data
+harmony_integration_date: "20250122_14-50_Integration.dir"
+
+# scVI integration data
+scVI_integration_date: "20250123_17-36_integration-scvi.dir"
+
+# Specify new resolution to visualise integrated data
+integrated_resolution: 0.1
+
+# Metadata column used for integration confounder
+group_by_vars: "patient.seqbatch"
+
+# Number of dimensions for Find Neighbours & UMAP
+n_dims: 30
+
+# Specify which assay was used to calculate doublets
+doublets_assay: "RNA"
+
+# Specify clustering resolution used in soupX step
+resolution: 0.3
+
+

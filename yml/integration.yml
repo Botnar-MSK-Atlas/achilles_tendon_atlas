@@ -1,0 +1,63 @@
+##########################
+#
+# configuration file for Integration.Rmd
+#
+##########################
+
+# Specify output file type
+# can be "png", "pdf", or others compatible with ggsave. 
+file_type: "png"
+
+# Specify whether to filter ambient RNA (decontX) and if so what threshold
+ambient_filter: TRUE
+ambient_threshold: 0.3
+
+# Specify whether to filter ambient RNA (soupX) and if so what threshold
+soupX_filter: TRUE
+soupX_threshold: 0.4
+
+# Specify whether to filter highly ambient genes and if so what threshold
+remove_ambient_genes: TRUE
+ambient_genes_threshold: 2
+
+
+# Specify whether doublets were filtered
+doublet_filter: TRUE
+
+# Specify normalisation method
+# Choose "SCTransform", "SCTransformv2", "LogNormalise"
+
+normalisation_method: LogNormalise
+
+# Specify whether to use RNA, decontXcounts, or soupX assay for normalisation
+normalisation_assay: "soupX"
+
+# How many variable features? Default 2000
+nfeatures: 5000
+
+# Specify doublet analysis data
+
+doublet_date: "20250122_12-42"
+
+# Specify which assay was used to calculate doublets
+doublets_assay: "RNA"
+
+# Specify clustering resolution used in soupX step
+resolution: 0.3
+
+# Specify whether to remove muscle samples
+remove_muscle: FALSE
+
+# Specify new resolution to visualise integrated data
+integrated_resolution: 0.1
+
+# Number of dimensions to use for integration & clustering
+n_dims: 40
+
+# Metadata colum to use as harmony integration confounder
+group_by_vars: "patient.seqbatch"
+
+# Remove samples that failed QC
+samples_to_remove: 
+
+

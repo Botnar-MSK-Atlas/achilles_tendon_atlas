@@ -1,0 +1,27 @@
+##########################
+#
+# configuration file for Integration.Rmd
+#
+##########################
+
+# Specify output file type
+# can be "png", "pdf", or others compatible with ggsave. 
+file_type: "png"
+
+
+# Specify normalisation method
+# Choose "SCTransform", "SCTransformv2", "LogNormalise"
+
+normalisation_method: LogNormalise
+
+# Specify whether to use RNA, decontXcounts, or soupX assay for normalisation
+normalisation_assay: "soupX"
+
+# Specify integration method
+integration_method: "scVI"
+
+# integration date
+integration_date: "20250123_18-14"
+
+# integration resolution
+integration_resolution: 0.1

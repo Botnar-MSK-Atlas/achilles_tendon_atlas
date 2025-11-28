@@ -1,0 +1,44 @@
+##########################
+#
+# configuration file for Fibroblast_subset_recluster.Rmd
+#
+##########################
+
+# Cell type to subset
+cell_type: "Muscle"
+
+# How many variable features? Default 2000
+nfeatures: 2000
+
+# Specify input data
+seurat_object: "20250127_16-05_Annotation_update.dir/RDS_objects.dir/Achilles_integrated_annotated.rds"
+
+# Number of dimensions to use for clustering (for harmony)
+n_dims: 40
+
+# Specify whether to use RNA, decontXcounts, or soupX assay for normalisation
+normalisation_assay: "soupX"
+
+# integration method
+integration_method: "harmony"
+
+# from where to import scVI embeddings from integration of fibroblast subset
+import_embeddings: ""
+
+# clustering method
+cluster_method: "louvain"
+
+# subset resolution (from the whole object) or annotation
+subset_resolution: "broad_annotation"
+
+# subset clusters 
+subset_clusters: ["Skeletal muscle cells", "Satellite cells"]
+
+# which cluster resolutions to calculate
+# to use in seq(start, end, by)
+cluster_start: 0.1
+cluster_end: 0.6
+cluster_by: 0.1
+
+# display resolution (after subsetting)
+display_resolution: 0.2

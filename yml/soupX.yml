@@ -1,0 +1,32 @@
+##########################
+#
+# configuration file for soupX workflow
+#
+##########################
+
+# Specify the format of figures 
+# Anything compatibile with ggsave e.g. png, pdf
+file_type: png
+
+# Which QC-Filter output to use
+qc_filter: "20231011_14-39"
+
+# Which ambient-doublet output to use
+ambient_doublet: "20231106_15-31"
+
+# Specify clustering resolution, default = 0.1
+resolution: 0.3
+
+# Were decontX high counts filtered out (T/F)
+decontX_filter: TRUE
+
+# Were doublets filtered out (T/F)
+doublet_filter: FALSE
+
+# Settings for soupX autoEstCont command
+# soupQuantile default = 0.9
+# tfidfMin default = 1
+# maximumContamination default = 6
+soupquantile: 0.9
+tfidfMin: 1
+maximumContamination: 3

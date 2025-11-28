@@ -1,0 +1,20 @@
+##########################
+#
+# configuration file for DEseq2 LRT workflow
+#
+##########################
+
+# whether to exclude the muscle samples
+subset_muscle: TRUE
+
+# resolution 
+resolution: 0.1
+
+# Specify the format of figures 
+# Anything compatibile with ggsave e.g. png, pdf
+file_type: png
+
+
+
+
+

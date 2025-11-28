@@ -1,0 +1,41 @@
+##########################
+#
+# configuration file for Annotation-achilles.Rmd
+#
+##########################
+
+# Specify output file type
+# can be "png", "pdf", or others compatible with ggsave. 
+file_type: "png"
+
+# Specify normalisation method
+# Choose "SCTransform", "SCTransformv2", "LogNormalise"
+
+normalisation_method: "LogNormalise"
+
+# integration method e.g. harmony, scVI
+integration_method: "scVI"
+
+# Specify integration analysis data
+# For scVI use the visualisation date
+# If using leiden clustering this follows Cluster_leiden.dir
+
+integration_date: "20250123_18-14"
+
+# Specify clustering resolution
+
+resolution: 0.1
+
+# Specify normalisation assay as RNA, decontXcounts, or soupX
+
+normalisation_assay: "soupX"
+
+# Parameters for FindAllMarkers
+markers_assay: "soupX"
+only_pos: TRUE
+min_pct: 0.25
+logfc_threshold: 0.25
+
+# specify the clustering method (louvain or leiden) 
+cluster_method: "louvain"
+

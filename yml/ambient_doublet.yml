@@ -1,0 +1,37 @@
+##########################
+#
+# configuration file for ambient-doublet workflow
+#
+##########################
+
+# Specify the format of figures 
+# Anything compatibile with ggsave e.g. png, pdf
+file_type: png
+
+# Which QC-Filter output to use
+qc_filter: "20231011_14-39"
+
+# Specify clustering resolution, default = 0.1
+resolution: 0.3
+
+# Specify which clustering to use for decontX 
+# choose seurat_clusters or decontX_clusters
+decontX_clusters: seurat_clusters
+
+# Specify which clustering to use for scDblfinder 
+# choose seurat_clusters or no_clusters
+scdblfinder_clusters: seurat_clusters
+
+# Specify whether to include the find markers step 
+# Default is false, the expectation is to use markers from biological knowledge here
+find_markers: FALSE
+
+# Specify whether an ambient RNA threshold should be used
+ambient_filter: TRUE
+
+# Threshold for ambient RNA contamination: 
+ambient_threshold: 0.5
+
+# Specify whether doublets should be removed: 
+doublet_filter: FALSE
+

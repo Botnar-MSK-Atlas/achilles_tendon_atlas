@@ -1,0 +1,24 @@
+##########################
+#
+# configuration file for Achilles_subset_annotations.Rmd
+#
+##########################
+
+# Cell type to subset
+cell_type: "Fibroblast"
+
+# Specify input data
+seurat_object: "20250128_12-47_Subset_Fibroblast.dir/RDS_objects.dir/Achilles_Fibroblast_subset.rds"
+
+# Specify whether to use RNA, decontXcounts, or soupX assay for normalisation
+normalisation_assay: "soupX"
+
+# integration method
+integration_method: "scVI"
+
+# clustering method
+cluster_method: "louvain"
+
+# subset resolution (from the whole object) or annotation
+subset_resolution: 0.2
+

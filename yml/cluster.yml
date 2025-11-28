@@ -1,0 +1,24 @@
+#####################################################
+#                                                   # 
+# configuration file for Cluster-achilles.Rmd  #
+#                                                   #
+#####################################################
+
+# File format
+# Choose "png", "pdf", "svg"
+
+file_format: png
+
+# Which Ambient-doublet output to use
+qc_filter: "20231011_15-11"
+
+# Specify whether an ambient/doublet filters were used
+ambient_filter: TRUE
+doublet_filter: TRUE
+
+# Number of dimensions to use
+n_dims: 30
+
+# Clustering resolution 
+resolution: 0.3
+

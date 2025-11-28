@@ -1,0 +1,14 @@
+##########################
+#
+# configuration file for Microanatomy-achilles.Rmd
+#
+##########################
+
+# Specify output file type
+# can be "png", "pdf", or others compatible with ggsave. 
+file_type: "png"
+
+# Specify annotation analysis date
+
+annotation_date: 20230920_10-06
+

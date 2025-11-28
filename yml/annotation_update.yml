@@ -1,0 +1,23 @@
+##########################
+#
+# configuration file for Annotation-update-achilles.Rmd
+#
+##########################
+
+# Specify output file type
+# can be "png", "pdf", or others compatible with ggsave. 
+file_type: "png"
+
+# Specify normalisation method
+# Choose "SCTransform", "SCTransformv2", "LogNormalise"
+
+normalisation_method: "LogNormalise"
+
+# Specify normalisation assay as RNA, decontXcounts or soupX 
+normalisation_assay: "soupX"
+
+# specify the integration method used
+integration_method: "scVI"
+
+# specify the clustering method used
+cluster_method: "louvain"

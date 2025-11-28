@@ -1,0 +1,31 @@
+##########################
+#
+# configuration file for miloR workflow
+#
+##########################
+
+# which Seurat object to use
+so_location: "20250207_13-28_Fine_annotation_muscle_0.1.dir/RDS_objects.dir/Achilles_muscle_subset.rds"
+
+# whether to exclude the muscle/enthesis samples
+subset_muscle: FALSE
+subset_enth: TRUE
+
+# dimensionality reduction to use (pca or X_SCVI)
+dim_reduction: "LOGNORM.PCA"
+
+# experimental design
+# use microanatomy_integer or microanatomical_site
+design_formula: ~patient+microanatomy_integer
+
+# which column of metadata to use for cell labeling eg. cell_annotation_update
+cell_labels: "fine_annotation_muscle"
+
+# Specify the format of figures 
+# Anything compatibile with ggsave e.g. png, pdf
+file_type: png
+
+
+
+
+

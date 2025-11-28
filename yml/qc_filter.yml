@@ -1,0 +1,25 @@
+##########################
+#
+# configuration file for qc-filter workflow
+#
+##########################
+
+# Slurm configuration
+memory: 40G
+
+# Specify the mirror for bioMart
+mirror: useast
+
+#Manual filtering thresholds 
+sum_filter: 300
+mito_filter: 5
+detected_filter: 300
+
+# Specify the format of figures 
+# Anything compatibile with ggsave e.g. png, pdf
+file_type: png
+
+# Speficy whether to use MAD filtering
+mad_filtering: FALSE
+
+
