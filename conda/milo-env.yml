@@ -1,0 +1,19 @@
+name: milo-env
+
+channels:
+ - conda-forge
+ - bioconda
+ - defaults
+ - r
+
+dependencies:
+ - r-base
+ - r-tidyverse
+ - r-cowplot
+ - r-viridis
+ - r-seurat
+ - bioconductor-singlecellexperiment
+ - bioconductor-scater
+ - bioconductor-scran
+ - bioconductor-milor
+

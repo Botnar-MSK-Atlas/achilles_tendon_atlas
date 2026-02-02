@@ -1,0 +1,20 @@
+name: qc-filter-env
+
+channels:
+ - conda-forge
+ - bioconda
+ - defaults
+ - r
+
+dependencies:
+ - r-base
+ - r-tidyverse
+ - r-cowplot
+ - r-viridis
+ - r-seurat
+ - bioconductor-busparse
+ - bioconductor-singlecellexperiment
+ - bioconductor-biomart
+ - bioconductor-scater
+ - bioconductor-celda
+ - bioconductor-dropletutils

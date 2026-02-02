@@ -1,0 +1,14 @@
+name: convert-objects-env
+
+channels:
+ - conda-forge
+ - bioconda
+ - defaults
+ - r
+ - python
+
+dependencies:
+ - r-base
+ - bioconductor-singlecellexperiment
+ - anndata
+

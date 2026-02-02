@@ -1,0 +1,20 @@
+name: annotation-env
+
+channels:
+ - conda-forge
+ - bioconda
+ - defaults
+ - r
+
+dependencies:
+ - r-base=4.4.1
+ - r-tidyverse
+ - r-cowplot
+ - r-viridis
+# - r-seurat=4.4.0
+# - r-seuratobject=4.1.4
+ - r-readxl
+ - r-ggsci
+ - r-scales
+# - bioconductor-singlecellexperiment
+

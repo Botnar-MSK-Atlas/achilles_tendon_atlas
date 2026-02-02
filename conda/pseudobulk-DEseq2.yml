@@ -1,0 +1,19 @@
+name: pseudobulk-DEseq2-env
+
+channels:
+ - conda-forge
+ - bioconda
+ - defaults
+ - r
+
+dependencies:
+ - r-base
+ - r-tidyverse
+ - r-cowplot
+ - r-viridis
+ - r-seurat
+ - r-pheatmap
+ - bioconductor-DEseq2
+ - bioconductor-degreport
+ - bioconductor-enhancedvolcano
+

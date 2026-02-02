@@ -1,0 +1,14 @@
+name: liana-env
+
+channels:
+ - conda-forge
+ - bioconda
+ - defaults
+ - r
+
+dependencies:
+ - r-base
+ - r-tidyverse
+ - r-seurat=4.4.0
+ - r-seuratobject=4.1.4
+ - r-circlize

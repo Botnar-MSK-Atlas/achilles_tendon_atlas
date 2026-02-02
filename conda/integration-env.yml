@@ -1,0 +1,23 @@
+name: integration-env
+
+channels:
+ - conda-forge
+ - bioconda
+ - defaults
+ - r
+
+dependencies:
+ - r-base
+ - r-tidyverse
+ - r-cowplot
+ - r-viridis
+ - r-seurat
+ - r-clustree
+ - r-harmony
+ - r-sctransform
+ - r-lisi
+ - r-devtools
+ - r-rcpp=1.0.10
+ - bioconductor-biocneighbors
+ - bioconductor-scry
+ - bioconductor-glmgampoi

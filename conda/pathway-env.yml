@@ -1,0 +1,20 @@
+name: pathway-env
+
+channels:
+ - conda-forge
+ - bioconda
+ - defaults
+ - r
+
+dependencies:
+ - r-base
+ - r-tidyverse
+ - r-cowplot
+ - r-viridis
+ - r-seurat
+ - r-seuratobject
+ - r-textshaping
+ - r-msigdbr
+ - bioconductor-clusterprofiler
+ - bioconductor-deseq2
+ - bioconductor-biocgenerics
